@@ -1,91 +1,27 @@
-# Mermaid visualization preference
+# Mermaid 可视化偏好
 
-The global default is off. Changing it applies only to newly created Fintwind
-sessions, not to existing sessions (even an empty session created earlier).
+全局默认关闭。修改只对新建的 Fintwind 会话生效，已有会话（即使是此前创建的
+空会话）不受影响。
 
-New sessions pick the latest prompt version (`v3`). Previously issued versions
-stay byte-identical forever: a `v1` session keeps the `v1` instruction, across
-forks, restarts and releases. `v2` adds one line that tells the model to
-validate every diagram it writes with the `fintwind_mermaid_check` tool and
-relaxes the syntax preference. `v3` drops the fixed flowchart/sequence style
-preset and the short-label rule, so the model chooses whichever diagram type
-expresses the subject best; the renderer limits stay because the native
-renderer cannot draw HTML labels, images, links, custom CSS or directives.
+新建会话采用最新提示词版本（`v3`）。已发放版本永久保持字节一致：`v1` 会话在
+fork、重启与发版后仍保留 `v1` 指令。`v2` 增加一行，要求模型用
+`fintwind_mermaid_check` 工具校验所写的每个图表，并放宽语法偏好。`v3` 去掉固定
+的流程图/时序图风格预设与短标签规则，由模型选择最合适的图表类型；渲染限制
+不变，原生渲染器不支持 HTML 标签、图片、链接、自定义 CSS 与指令。
 
-## Mermaid check tool
+## Mermaid 校验工具
 
-Sessions carrying a Mermaid prompt version (any version) also receive the
-`fintwind_mermaid_check` tool. It is registered by the same context plugin
-when the daemon exposed the check capability to the private OpenCode process;
-sessions without a Mermaid prompt version never carry it in their tool
-snapshot. The tool validates one source against the identical compiler the
-app renders with (`crates/fintwind-diagram`), so "the tool says valid" and
-"the fence draws" are the same fact. See `docs/diagrams.md` for the wire.
+携带 Mermaid 提示词版本（任一版本）的会话同时获得 `fintwind_mermaid_check`
+工具。daemon 向私有 OpenCode 进程暴露校验能力时，由同一上下文插件注册；没有
+该能力的会话工具快照中没有它。该工具用的校验器与应用渲染用的是同一编译器
+（`crates/fintwind-diagram`），「校验通过」与「代码围栏能画出来」是同一事实。
+校验协议见 `diagrams.md`。
 
-## Failure cases, before implementation
+## 版本约定
 
-- Reading the live setting on each model request changes an existing prefix.
-- Copying the setting at first submission instead of session creation affects
-  an already-created empty session after a toggle.
-- A missing field in old saved sessions accidentally enables the preference.
-- Reopening a session, restarting its driver, or compacting loses its choice.
-- Changing the prompt text for an existing version invalidates the prefix.
-- Forking applies the new global default instead of the parent's frozen choice.
-- A metadata lookup error silently drops instructions for one request.
-- A hook duplicates the instruction on tool continuations or mutates history,
-  tools, title generation or compaction prompts.
-- Saving the global switch restarts a running driver or reloads tools.
+新建会话快照最新版本（`v3`）或无偏好，以创建元数据进入 OpenCode 会话。常驻
+上下文插件只向主模型请求追加对应常量指令，不读取全局默认值；无版本则不改动
+发出请求。切换开关不改变已有请求（供应商缓存命中还取决于模型、供应商与其他
+上下文变化，这里不做无条件保证）。
 
-## Contract
-
-New sessions snapshot the latest version (`v3`) or no preference. The OpenCode
-session receives that version as creation metadata. The always-loaded context
-plugin appends the corresponding constant instruction to primary model requests
-only; it never reads the global default. No version means no changes to the
-outgoing request. Existing prompt versions must stay byte-identical in future
-releases, so `v1` and `v2` sessions keep their bytes even though new sessions
-pick `v3`.
-
-Provider cache hits also depend on the model/provider and other context changes;
-this feature promises not to change existing requests because of its switch,
-not an unconditional vendor cache-hit guarantee.
-
-## Verification
-
-```sh
-cargo check --locked --offline --workspace
-cargo run --locked --offline --package fintwind-core --example mermaid_prompt_blackbox -- target/mermaid-prompt-blackbox
-cargo run --locked --offline --package fintwind-core --example mermaid_check_e2e -- C:/Users/Public/Temp/opencode/mermaid-check-report.json
-python scripts/mermaid-prompt-e2e.py --opencode E:/bun/bin/opencode.exe --deadline 180
-```
-
-The Rust scenario writes a report and isolated SQLite database under a new
-`target/mermaid-prompt-blackbox/<uuid>/` directory. Its 13 checks cover default
-off, creation-time selection, changes during a running turn, future defaults,
-legacy data, fork inheritance, list projection, SQLite reload and hydration.
-It does not launch the UI or exercise keyboard interaction.
-
-The provider scenario uses a private OpenCode database, a whitelisted
-environment, a loopback scripted model and an owned Windows Job Object. It
-never connects to the installed app's daemon or a real model. Its report
-records request-prefix hashes, not a claim of vendor-side cache hits.
-
-Verified with OpenCode `2.1.1`: 30 provider checks passed (multi-turn off, v1,
-v2 and v3 instruction bytes, unchanged old-session system bytes, unchanged tool
-schema/history prefix, exactly one instruction on tool continuations, fork,
-unknown-version rejection and process restart). An earlier run on `2.0.32`
-covered v1 and v2. Direct metadata-lookup failure injection and forced
-compaction remain untested.
-
-Artifacts for the `2.1.1` run:
-
-- `target/mermaid-prompt-blackbox/9caf7c55-675c-49d4-971e-e2ef523c7714/report.json`
-- `target/mermaid-prompt-e2e/1412b2f4-8d0e-4bd5-9b10-b79334c228ad/report.json`
-
-The preference-file fixture only verifies that the plugin ignores a changing
-external default. Actual client-side preference snapshotting is covered by the
-Rust scenario, not by that fixture. No native UI acceptance or real-provider
-cache measurements have been performed.
-
-Keep every issued prompt unchanged after release. To revise the instructions,
-introduce a new version and retain all previously issued versions.
+修订指令请发新版本，保留所有已发放版本。

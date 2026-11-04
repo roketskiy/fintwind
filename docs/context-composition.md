@@ -1,43 +1,27 @@
-# Context composition
+# 上下文构成说明
 
-The context inspector shows provider-reported occupancy separately from the
-estimated composition of the latest assembled primary request. The treemap
-compares the estimates with each other. Its area does not represent the model's
-capacity, and the estimates are never scaled to match provider usage. Available
-capacity stays beside the measured occupancy above the chart.
+上下文检查器把供应商上报的占用量，与最近一次组装的主请求预估构成分别展示。
+树图比较的是各项预估之间的比例，其面积不代表模型容量，预估也不会按供应商
+用量缩放。可用容量显示在图表上方实测占用量旁边。
 
-| Category | Captured content |
+| 类别 | 覆盖内容 |
 | --- | --- |
-| System and rules | Request system parts, system messages, skill and synthetic instructions |
-| Tool definitions | Advertised tool names, descriptions and input schemas |
-| Conversation | User and assistant text |
-| Reasoning | Visible reasoning text |
-| Tool calls | Tool names and input arguments |
-| Files | Text attachments and results of `read` or `read_file` |
-| Other tool results | Remaining tool results, including command output and structured errors |
-| Compaction summary | Current replacement messages identified by completed compaction IDs, plus canonical compaction parts |
+| 系统与规则 | 请求的系统部分、系统消息、技能与合成指令 |
+| 工具定义 | 已声明的工具名、描述与输入结构 |
+| 对话 | 用户与助手文本 |
+| 推理 | 可见推理文本 |
+| 工具调用 | 工具名与输入参数 |
+| 文件 | 文本附件与 `read` 或 `read_file` 的结果 |
+| 其他工具结果 | 其余工具结果，包括命令输出与结构化错误 |
+| 压缩摘要 | 已完成压缩标识对应的当前替换消息，以及规范压缩片段 |
 
-The OpenCode context hook supplies the assembled request. `session.context`
-supplies message provenance; it does not contribute additional text to the
-estimates. This keeps compaction summaries separate even when OpenCode lowers
-them into ordinary user text. Files read indirectly through shell commands stay
-in other tool results.
+组装后的请求由 OpenCode 上下文钩子提供。`session.context` 提供消息来源，
+不向预估增加额外文本；即使 OpenCode 把压缩摘要降级为普通用户文本，压缩摘要
+仍保持独立。通过 shell 命令间接读取的文件计入其他工具结果。
 
-Text estimates use one token per four ASCII characters, rounded up per block,
-plus one token per non-ASCII character. They exclude transport framing, media
-and opaque provider state. Encrypted reasoning and native compaction state are
-marked unmeasured; their encoded length is never treated as a token count.
-Visible text accompanied by opaque state is shown as a partial estimate.
+文本预估按每 4 个 ASCII 字符计 1 token（每块向上取整），每个非 ASCII 字符计
+1 token；不含传输封装、媒体与不透明供应商状态。加密推理与原生压缩状态记为
+不可测量，其编码长度不视为 token 数。伴随不透明状态的可见文本记为部分预估。
 
-Version 2 snapshots split tool definitions, calls, results and reasoning. Older
-persisted snapshots remain readable, but the detailed chart waits for a new
-request instead of interpreting old combined totals as new categories.
-
-## Verification
-
-Run `python scripts/context-opencode-e2e.py`. It creates an isolated OpenCode
-database and environment, random loopback ports, a local scripted provider and
-an owned Windows Job Object. It checks category separation, official compaction
-projection, opaque reasoning, session isolation and snapshot persistence after
-restart. It never uses an installed Fintwind instance or a user's OpenCode
-database. Artifacts are written under `target/context-opencode-e2e/`.
+版本 2 快照拆分工具定义、调用、结果与推理。旧持久化快照仍可读，但详细图表
+等待新请求，不把旧合并口径当作新分类解读。

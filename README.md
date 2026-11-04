@@ -55,7 +55,7 @@ connection automatically. See [agent-created scheduled tasks](docs/scheduled-tas
 Optional image generation requires OpenCode 2.2.1 or newer and a compatible
 connected image model. Native Goal integration targets OpenCode 2.2.1;
 older versions without native Goal cannot use it. See [Goal](docs/goals.md)
-and [image model configuration](docs/image-generation.md) for scope.
+and image model configuration for scope.
 
 ### 2. Install fintwind
 

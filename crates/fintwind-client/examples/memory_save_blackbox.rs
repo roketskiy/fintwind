@@ -1,6 +1,6 @@
 //! Exercises the real desktop store and WebSocket client against a controlled
 //! slow/failing peer. No provider, child process, user directory or GUI is used.
-//! See docs/memory-save-failure-matrix.md for the failure cases.
+//! See docs/dev-notes/memory-save-failure-matrix.md for the failure cases.
 
 use anyhow::{Context, ensure};
 use fintwind_client::{

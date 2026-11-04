@@ -48,7 +48,7 @@ the original feature bullet instead of adding separate entries for them.
 
 ### 兼容性
 
-继续使用 OpenCode 2（`@opencode/cli`）作为后端，不适用于 OpenCode 1.x。图像生成需要 OpenCode 2.2.1 或更新版本，具体可用性取决于已连接的提供商及模型；官方 Goal 适配依据 OpenCode 2.2.1，旧版本没有官方 Goal 时不能使用；定时任务 MCP 需要 OpenCode 2.1.4 或更新版本，使用实验性 MCP 接口。未验证完整的模型或版本兼容区间，功能范围见 [Goal 说明](docs/goals.md)、[图像模型配置](docs/image-generation.md)与 [定时任务 MCP 说明](docs/scheduled-tasks-mcp.md)。
+继续使用 OpenCode 2（`@opencode/cli`）作为后端，不适用于 OpenCode 1.x。图像生成需要 OpenCode 2.2.1 或更新版本，具体可用性取决于已连接的提供商及模型；官方 Goal 适配依据 OpenCode 2.2.1，旧版本没有官方 Goal 时不能使用；定时任务 MCP 需要 OpenCode 2.1.4 或更新版本，使用实验性 MCP 接口。未验证完整的模型或版本兼容区间，功能范围见 [Goal 说明](docs/goals.md)、图像模型配置与 [定时任务 MCP 说明](docs/scheduled-tasks-mcp.md)。
 
 ## [0.2.20]
 
@@ -58,7 +58,7 @@ the original feature bullet instead of adding separate entries for them.
 
 ### 兼容性
 
-继续使用 OpenCode 2（`@opencode/cli`）作为后端，不适用于 OpenCode 1.x。图像生成需要 OpenCode 2.2.1 或更新版本，具体可用性取决于已连接的提供商及模型；官方 Goal 适配依据 OpenCode 2.2.1，旧版本没有官方 Goal 时不能使用；定时任务 MCP 需要 OpenCode 2.1.4 或更新版本，使用实验性 MCP 接口。未验证完整的模型或版本兼容区间，功能范围见 [Goal 说明](docs/goals.md)、[图像模型配置](docs/image-generation.md)与 [定时任务 MCP 说明](docs/scheduled-tasks-mcp.md)。
+继续使用 OpenCode 2（`@opencode/cli`）作为后端，不适用于 OpenCode 1.x。图像生成需要 OpenCode 2.2.1 或更新版本，具体可用性取决于已连接的提供商及模型；官方 Goal 适配依据 OpenCode 2.2.1，旧版本没有官方 Goal 时不能使用；定时任务 MCP 需要 OpenCode 2.1.4 或更新版本，使用实验性 MCP 接口。未验证完整的模型或版本兼容区间，功能范围见 [Goal 说明](docs/goals.md)、图像模型配置与 [定时任务 MCP 说明](docs/scheduled-tasks-mcp.md)。
 
 ## [0.2.19]
 
@@ -79,7 +79,7 @@ the original feature bullet instead of adding separate entries for them.
 
 ### 兼容性
 
-继续使用 OpenCode 2（`@opencode/cli`）作为后端，不适用于 OpenCode 1.x。图像生成需要 OpenCode 2.2.1 或更新版本，具体可用性取决于已连接的提供商及模型；官方 Goal 适配依据 OpenCode 2.2.1，旧版本没有官方 Goal 时不能使用；定时任务 MCP 需要 OpenCode 2.1.4 或更新版本，使用实验性 MCP 接口。未验证完整的模型或版本兼容区间，功能范围见 [Goal 说明](docs/goals.md)、[图像模型配置](docs/image-generation.md)与 [定时任务 MCP 说明](docs/scheduled-tasks-mcp.md)。
+继续使用 OpenCode 2（`@opencode/cli`）作为后端，不适用于 OpenCode 1.x。图像生成需要 OpenCode 2.2.1 或更新版本，具体可用性取决于已连接的提供商及模型；官方 Goal 适配依据 OpenCode 2.2.1，旧版本没有官方 Goal 时不能使用；定时任务 MCP 需要 OpenCode 2.1.4 或更新版本，使用实验性 MCP 接口。未验证完整的模型或版本兼容区间，功能范围见 [Goal 说明](docs/goals.md)、图像模型配置与 [定时任务 MCP 说明](docs/scheduled-tasks-mcp.md)。
 
 ## [0.2.18]
 
@@ -106,7 +106,7 @@ the original feature bullet instead of adding separate entries for them.
 
 ### 兼容性
 
-继续使用 OpenCode 2（`@opencode/cli`）作为后端，不适用于 OpenCode 1.x。图像生成需要 OpenCode 2.2.1 或更新版本，具体可用性取决于已连接的提供商及模型；官方 Goal 适配依据 OpenCode 2.2.1，旧版本没有官方 Goal 时不能使用。定时任务 MCP 需要 OpenCode 2.1.4 或更新版本，使用实验性 MCP 接口。未验证完整的模型或版本兼容区间，功能范围见 [Goal 说明](docs/goals.md)、[图像模型配置](docs/image-generation.md)、[提供商凭据说明](docs/custom-provider-credentials.md)与 [定时任务 MCP 说明](docs/scheduled-tasks-mcp.md)。
+继续使用 OpenCode 2（`@opencode/cli`）作为后端，不适用于 OpenCode 1.x。图像生成需要 OpenCode 2.2.1 或更新版本，具体可用性取决于已连接的提供商及模型；官方 Goal 适配依据 OpenCode 2.2.1，旧版本没有官方 Goal 时不能使用。定时任务 MCP 需要 OpenCode 2.1.4 或更新版本，使用实验性 MCP 接口。未验证完整的模型或版本兼容区间，功能范围见 [Goal 说明](docs/goals.md)、图像模型配置、[提供商凭据说明](docs/custom-provider-credentials.md)与 [定时任务 MCP 说明](docs/scheduled-tasks-mcp.md)。
 
 ## [0.2.17]
 

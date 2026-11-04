@@ -2,7 +2,7 @@
 // Upstream Alma relay files (index/shared/apns) stay MIT licensed by yetone;
 // this module is Fintwind-specific policy on top. No extra npm dependencies.
 //
-// Protocol (docs/remote-multiuser.md):
+// Protocol (docs/dev-notes/remote-multiuser.md):
 //   POST /v1/admission/challenge {publicKey} -> {nonce, expiresAt}
 //   client signs "fintwind.relay.admission.v1\nhttps://fintwind-mobile.roketskiy.top\nNONCE\nPUBLIC_KEY"
 //   POST /v1/admission/token {publicKey, nonce, signature} -> {token, expiresAt, installationId}

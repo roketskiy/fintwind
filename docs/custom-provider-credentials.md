@@ -1,46 +1,12 @@
-# Custom provider credentials
+# 自定义供应商凭据说明
 
-Custom provider IDs and model configuration remain unchanged. Literal API keys
-are stored through OpenCode's credential API. Configuration references such as
-`{env:NAME}` and `{file:path}` remain configuration references.
+自定义供应商 ID 与模型配置保持不变。字面 API 密钥经 OpenCode 凭据接口存储；
+`{env:NAME}`、`{file:path}` 之类的配置引用仍是引用，不会被展开写入。
 
-## Failure cases to verify
+## 行为
 
-- An unavailable server or failed credential write must not remove the old key.
-- A credential must be read back successfully before removing its inline key.
-- A failed config write must leave the on-disk provider usable and allow retry.
-- Repeated saves must not create duplicate accounts or change provider IDs.
-- Migration must not replace another account or remove unknown model options.
-- Editing or deleting a provider during an asynchronous save must not restore
-  an older UI snapshot; subsequent saves must run in order.
-- Removing a provider definition must not delete shared OpenCode credentials.
-- Model discovery and probes must use the selected credential without storing
-  it in the UI roster or configuration.
-
-Validation is limited to compilation and one isolated black-box run. No user
-configuration, production credentials, or existing processes are test targets.
-
-## Implementation
-
-- The existing provider/model editor and compatible configuration fields remain.
-- Keys are migrated on loading the provider settings, when OpenCode is available.
-- Credential creation is verified by reading it back before updating configuration.
-- Key replacement creates and verifies a new account before removing superseded
-  accounts in Fintwind's own credential namespace. Other accounts are preserved.
-- API-key account choices come from OpenCode's sanitized integration connections.
-- Explicit logout removes stored accounts; deleting a provider definition does not.
-- A replacement key is a separate input draft until Save is pressed.
-- Probes resolve the currently selected credential only for the background request.
-  They do not retain it in the UI roster or configuration.
-
-## Focused check
-
-```sh
-cargo build --locked -p fintwind-daemon -p fintwind-client --bin fintwind-daemon --example custom_provider_credentials_blackbox
-python scripts/provider-credentials-check.py target/debug/examples/custom_provider_credentials_blackbox.exe target/debug/fintwind-daemon.exe <absolute-opencode.exe>
-```
-
-The runner uses an environment whitelist, explicit daemon/OpenCode data paths,
-random loopback ports, and owned Windows Job Objects. The total runtime is
-bounded at 150 seconds. It writes a secret-free `result.json` under
-`target/provider-credentials-check/<run-id>/`.
+- 密钥在加载供应商设置且 OpenCode 可用时迁移；写入前先读回确认，失败不删除旧密钥。
+- 替换密钥先创建并验证新账户，再移除被替代账户；其他账户保留。删除供应商定义
+  不删除共享的 OpenCode 凭据；显式登出才移除已存账户。
+- 重复保存不产生重复账户、不改变供应商 ID；保存失败保留磁盘上的可用供应商并允许重试。
+- 探测只为本次后台请求解析当前所选凭据，不写入界面名单或配置文件。

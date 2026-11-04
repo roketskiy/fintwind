@@ -50,7 +50,7 @@
 //!
 //! # Failure modes this host is built to surface
 //!
-//! Taken from `docs/browser-tools.md`, in the order they bite:
+//! Taken from `docs/dev-notes/browser-tools.md`, in the order they bite:
 //!
 //! - two tool connections seeing different pages, because list or invoke
 //!   filtered by session;

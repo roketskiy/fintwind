@@ -1,300 +1,156 @@
-# Cargo cache diagnostics
+# Cargo 缓存诊断
 
-## Scope
+## 范围
 
-The Tests workflow records Cargo fingerprint decisions for debug tests and the
-stable release compile check, and streams real progress while they run. The
-shared setup action uses content-checked timestamps for the complete audited
-workspace build-input set. It does not edit Cargo fingerprints or disable
-freshness checks. CI alone sets workspace dev/test opt-level to zero; the
-manifest's dependency overrides retain optimized GPUI. Local development and
-shipping release profiles are unchanged.
+Tests 工作流记录 debug 测试与稳定版编译检查的 Cargo 指纹决策，并在运行时输出
+真实进度。共享 setup 动作对完整的已审计工作区构建输入集使用内容校验时间戳；
+不修改 Cargo 指纹，不关闭新鲜度检查。只有 CI 把工作区 dev/test 优化等级设为 0，
+清单中的依赖覆盖仍保留优化后的 GPUI。本地开发与发版 profile 不变。
 
-`scripts/cargo-cache-diagnostics.ps1` executes the existing Cargo commands and
-preserves their exit codes. The workflow uploads diagnostics on success and
-failure, retaining them for seven days:
+`scripts/cargo-cache-diagnostics.ps1` 执行既有 Cargo 命令并保留退出码。工作流在
+成功与失败时都上传诊断，保留 7 天：
 
 - `cargo-cache-diagnostics-test`
 - `cargo-cache-diagnostics-release-check`
 
-The initial instrumentation was verified in
-[run 41163358066](https://github.com/roketskiy/fintwind/actions/runs/41163358066).
-The GPUI-only implementation was verified warm in
-[run 41176189468](https://github.com/roketskiy/fintwind/actions/runs/41176189468):
-both profiles reused GPUI, while local packages and missing example outputs
-still rebuilt. The v3 whole-workspace implementation needs its own cold/warm
-remote acceptance; local verification is not a CI speed measurement.
+## 产物内容
 
-## Artifact contents
-
-| File | Contents |
+| 文件 | 内容 |
 | --- | --- |
-| `cargo.stderr.log` | Full Cargo progress, compiler diagnostics, and fingerprint trace |
-| `cargo.stdout.log` | Test output |
-| `fingerprint-summary.log` | Dirty/stale reasons, fingerprint errors, completion, and compiler errors |
-| `diagnostics.json` | Cargo/rustc versions, command, profile, selected compiler environment, timing, exit code, and pre-build timestamps |
-| `phases.json` | Compile/test timing, timeout, exit code and progress seen before child exit |
-| `source-inputs-prepare.json` | Content and build-context hashes, file/byte counts |
-| `source-inputs-restore.json` | Restored file/directory counts and changed inputs |
-| `source-inputs-capture.json` | Pre-Cargo snapshot status and scan time |
-| `source-inputs-verify.json` | Whether the post-build inputs still match the pre-build snapshot and cache key |
+| `cargo.stderr.log` | 完整 Cargo 进度、编译器诊断与指纹追踪 |
+| `cargo.stdout.log` | 测试输出 |
+| `fingerprint-summary.log` | 脏/过期原因、指纹错误、完成情况与编译错误 |
+| `diagnostics.json` | Cargo/rustc 版本、命令、profile、所选编译器环境、计时、退出码与构建前时间戳 |
+| `phases.json` | 编译/测试计时、超时、退出码与子进程退出前看到的进度 |
+| `source-inputs-prepare.json` | 内容与构建上下文哈希、文件/字节数 |
+| `source-inputs-restore.json` | 恢复的文件/目录数与变更输入 |
+| `source-inputs-capture.json` | 构建前快照状态与扫描时间 |
+| `source-inputs-verify.json` | 构建后输入是否仍与构建前快照及缓存键一致 |
 
-The metadata includes hashes and timestamps of selected project and vendored
-GPUI inputs, plus restored GPUI fingerprint timestamps. It does not dump the
-full process environment. Fingerprint-only filters cover Cargo's old and new
-module names without enabling HTTP or registry-authentication tracing.
+元数据含所选项目与 vendored GPUI 输入的哈希与时间戳，以及恢复的 GPUI 指纹
+时间戳；不转储完整进程环境。指纹过滤覆盖 Cargo 新旧模块名，不开启 HTTP 或
+仓库认证追踪。
 
-Compiler progress, warnings/errors and test output appear live as files grow.
-The raw fingerprint trace stays in the artifact rather than flooding the live
-console. A heartbeat reports the current phase and elapsed seconds every 30
-seconds. Both streams are drained in bounded chunks; long lines and UTF-8
-boundaries are supported. Stream order is preserved within each stream, not
-invented across stdout and stderr. A short final summary includes compile and
-post-compile time. `GITHUB_STEP_SUMMARY` receives a concise timing table.
+编译进度、警告/错误与测试输出随文件增长实时可见；原始指纹追踪留在产物中，
+不刷屏。每 30 秒心跳上报当前阶段与已用秒数；两路流按有界块读取，保留各自流内
+顺序；收尾给出编译与编译后耗时摘要，`GITHUB_STEP_SUMMARY` 收到简明时间表。
 
-The PowerShell entry point delegates to `cargo-cache-live.py`, which launches
-the redirection-only `cargo-cache-command.ps1` inside a newly owned Windows
-Job Object. The default deadline is 3000 seconds (`-TimeoutSeconds` overrides
-it, up to 5400). Expiry returns 124 and closes only that job, including its
-descendants. No PID scan, port scan or name-based termination is used. Runner
-job timeouts remain the outer bound. For local execution, use an isolated
-data directory and a controlled environment as the black-box runners do.
+PowerShell 入口委托 `cargo-cache-live.py`，在新建的独占 Windows Job Object 中
+启动仅做重定向的 `cargo-cache-command.ps1`。默认期限 3000 秒（`-TimeoutSeconds`
+可改，上限 5400）；超时返回 124，只关闭该作业及其后代，不扫描 PID、端口或
+进程名。Runner 作业超时仍是外层上限。本地执行请用隔离数据目录与受控环境。
 
-## How to identify the first invalidation
+## 首次失效定位
 
-1. Confirm the job restored a compiler cache in the setup action's log. A cold
-   cache naturally reports missing fingerprints and is not evidence of a bug.
-2. Read `fingerprint-summary.log` for the first direct GPUI invalidation.
-3. Follow `StaleDepFingerprint` back to its dependency. This is normally a
-   downstream consequence, not the original cause.
-4. For `ChangedFile`, compare the source's `stale_mtime` with the cached
-   fingerprint's `reference_mtime`. Use the full trace to identify the file.
-5. Check other reasons, including changed environment/profile, build-script
-   inputs, and missing outputs, before changing any cache policy.
+1. 先在 setup 动作日志确认作业恢复了编译缓存；冷缓存天然缺指纹，不是缺陷证据。
+2. 读 `fingerprint-summary.log` 找第一次直接 GPUI 失效。
+3. 沿 `StaleDepFingerprint` 回到其依赖；这通常是下游后果，不是原始原因。
+4. 对 `ChangedFile`，比较源码 `stale_mtime` 与缓存指纹 `reference_mtime`，用完整
+   追踪定位文件。
+5. 改缓存策略前，先排查环境/profile、构建脚本输入、缺失产物等其他原因。
 
-Do not treat a cache download hit as proof that Cargo reused every artifact.
-Do not suppress Cargo freshness checks or backdate all checkout files: either
-can hide genuine source changes.
+缓存下载命中不等于 Cargo 复用了全部产物；不要关闭新鲜度检查，不要回拨整个检出
+目录的时间戳，两者都会掩盖真实源码变更。
 
-## Isolated local reproduction
+## 本地复现
 
-Prerequisites: Windows, Python 3, PowerShell 7, and an installed MSVC Rust
-toolchain. Obtain the toolchain directory with `rustc --print sysroot`, then
-pass that path explicitly:
+需要 Windows、Python 3、PowerShell 7 与已安装的 MSVC Rust 工具链。用
+`rustc --print sysroot` 取得工具链目录并显式传入：
 
 ```powershell
 python scripts/cargo-cache-diagnostics-blackbox.py --sysroot '<rustc sysroot>' --output 'C:/Users/Public/Temp/opencode/cargo-cache-diagnosis/result.json'
 ```
 
-Allow up to five minutes for each offline suite. Each compiler
-invocation has a 90-second deadline and runs in an exclusively owned Windows
-Job Object, including its descendants. The runner uses a UUID-owned fixture,
-private Cargo home and target directory, and an environment whitelist. It
-does not build Fintwind, start providers, use the project's target directory,
-or download dependencies. Logs and the JSON report remain available for review.
+每套离线检查允许 5 分钟；每次编译调用期限 90 秒，跑在独占 Windows Job Object
+中。运行器使用 UUID 隔离夹、私有 Cargo 家目录与 target 目录、环境白名单；
+不构建 Fintwind，不启动供应商，不用项目 target 目录，不下载依赖。日志与 JSON
+报告可复查。
 
-The fixture contains a minimal path dependency named `gpui-pre`; it is not the
-real GPUI implementation. The checks cover:
+夹具是名为 `gpui-pre` 的最小路径依赖，不是真实 GPUI 实现。检查覆盖：冷构建与
+同目录新鲜构建、仅恢复 `deps`/`build`/`.fingerprint` 后改时间戳不改字节、恢复原
+时间戳对照、真实源码编辑必须重建、编译器错误保留原始非零退出码、冷/热稳定版
+编译检查、双 vendored 根快照捕获与恢复、各类必须重建与必须不重建的变更、缺失/
+畸形/画像不匹配/越界快照与指向包外的 junction。
 
-- Cold build, then a fresh build in the same checkout.
-- Restoring only `deps`, `build`, and `.fingerprint`, as CI does, after changing
-  source timestamps without changing source bytes.
-- Restoring original timestamps as a control, only inside the disposable
-  fixture after confirming the dependency's content hash is unchanged.
-- A genuine source edit that must rebuild.
-- A compiler error whose original nonzero exit code must survive the wrapper.
-- Cold and warm stable release compile-check commands.
-- Actual snapshot capture/restoration for both pinned vendor roots, including
-  a default-scanning Windows build script and a watched resource directory.
-- Source, build-script, resource, file-addition/deletion, and environment changes
-  that must still rebuild; application-only changes that must not rebuild GPUI.
-- Missing, malformed, profile-mismatched, and traversal-bearing snapshots, plus
-  a junction pointing outside the package, without touching outside timestamps.
-
-The independent Windows `Offline cache and logging verification` job runs this
-fixture and `cargo-cache-workspace-blackbox.py` in parallel with the real Rust
-job, with five-minute step deadlines. It uploads
-`cargo-cache-verification-reports` even on failure. Its fixture data, Cargo
-home, target and owned process trees are isolated from the real compilation.
-The original fixture deliberately retains the legacy three-directory cache
-layout to reproduce the original defect; the new fixture restores the complete
-v3 layout, including examples.
+独立 Windows `Offline cache and logging verification` 作业并行运行该夹具与
+`cargo-cache-workspace-blackbox.py`，步骤期限 5 分钟，失败也上传
+`cargo-cache-verification-reports`。其夹具数据、Cargo 家目录、target 与独占进程树
+与真实编译隔离。
 
 ```powershell
 python scripts/cargo-cache-workspace-blackbox.py --sysroot '<rustc sysroot>' --output 'C:/Users/Public/Temp/opencode/cargo-workspace-check/result.json'
 python scripts/cargo-cache-retention-blackbox.py --output 'C:/Users/Public/Temp/opencode/cargo-retention-check/result.json'
 ```
 
-The workspace suite checks all-local/examples freshness, docs-only identity,
-edited bytes with deliberately old mtimes, locale/SQL/resource/embedded
-changelog changes, file additions/deletions/renames, post-build edits, declared
-environment inputs, corrupt/traversal/context/profile/timestamp snapshots,
-junctions, original compiler errors, live progress, output pressure and owned
-timeouts. The retention suite calls a fake `gh` executable in a private fixture;
-it never authenticates to or deletes from the user's GitHub account.
+工作区套件检查全本地/examples 新鲜度、纯文档提交同一性、改字节留旧 mtime、
+locale/SQL/资源/嵌入式 changelog 变更、文件增删改名、构建后编辑、已声明环境
+输入、损坏/越界/上下文/profile/时间戳快照、junction、原始编译错误、实时进度、
+输出压力与独占超时。保留套件用假 `gh` 可执行文件在私有夹具中调用，绝不登录或
+删除用户 GitHub 账户。
 
-CI uses `cargo-cache-msvc.py` to activate the native MSVC environment through
-Visual Studio's `vswhere`/`VsDevCmd.bat`, without a Node action dependency. It
-selects matching x64/x64 or arm64/arm64 host/target, captures only SDK/compiler
-metadata and verifies the linker and library paths before exporting to
-`GITHUB_ENV`. The developer command runs in its own bounded Windows job. The
-workspace black-box suite checks both architecture argument/export paths with
-fake developer commands; these are NOT an actual ARM64 compilation test.
+CI 用 `cargo-cache-msvc.py` 经 Visual Studio `vswhere`/`VsDevCmd.bat` 激活原生
+MSVC 环境，不依赖 Node 动作。按 x64/x64 或 arm64/arm64 选择宿主/目标一致组合，
+只捕获 SDK/编译器元数据，校验链接器与库路径后导出到 `GITHUB_ENV`。x64 离线夹具
+加 `--require-msvc-env`；运行器只保留 allowlist 的 SDK/工具链变量（`PATH`、
+`LIB`、`INCLUDE`、`LIBPATH` 与安装元数据），用户数据与 Cargo 家目录保持私有。
+预检确认 `link.exe` 来自 `VCToolsInstallDir` 且库路径已配置，否则在编译前失败，
+避免误调 Git 自带的 GNU `link.exe`。
 
-The x64 offline fixture then passes `--require-msvc-env`. The runner preserves only allowlisted
-SDK/toolchain variables (`PATH`, `LIB`, `INCLUDE`, `LIBPATH`, and installation
-metadata); user data and Cargo home remain private. The preflight checks that
-`link.exe` comes from `VCToolsInstallDir` and that library paths are configured,
-and records that information in the JSON report. Otherwise it fails before
-compiling. This prevents accidentally invoking Git's unrelated GNU `link.exe`,
-which reports `link: extra operand` for MSVC arguments.
+## V3 全工作区输入协议
 
-For the same strict preflight locally, start an x64 Visual Studio Developer
-Command Prompt and add `--require-msvc-env` to the command above. A normal
-local invocation without that flag can still use rustc's automatic MSVC
-discovery, but does not establish that the CI developer environment is ready.
+`cargo-cache-workspace.py` 无扩展名过滤扫描完整目录树：`src`、`crates`、
+`vendor`、`assets`、`resources`、`locales`、`db`、`tests`、`examples`、`.cargo`；
+同时哈希根清单/lockfile/构建脚本、Rust 工具链文件，以及 `src/app/help.rs`
+嵌入的 **CHANGELOG.md**。根文档与 `docs/` 排除在外；在这些已审计根之外新增
+编译器输入，必须先纳入再依赖其缓存同一性。
 
-## Confirmed cause
+每个文件按路径、SHA-256、大小与模式比较；只有完全未变的才恢复其缓存 mtime。
+目录仅在其整个子树一致时恢复 mtime，目录监视器仍能看到增删改名。已变更输入
+即使编辑器刻意保留旧 mtime 也赋新 mtime。不跟随链接与重解析点；畸形或上下文
+不匹配的快照跳过；不支持的目录树禁用保存。时间戳应用中的 I/O 失败直接失败，
+不掩盖部分恢复。这是给不可变 CI 检出用的，不是给正在被编辑的 live 工作区用的。
 
-The controlled reproduction confirms that unchanged path-dependency source
-bytes with newer modification times can produce:
+协议为 `prepare -> restore artifacts -> restore stamps -> capture ->
+compile/test -> verify -> save`。快照位于
+`target/<profile>/.fingerprint/fintwind-workspace-inputs.json`。校验比较完整输入
+列表/字节/模式/mtime、原始输入哈希与兼容哈希；构建期间的源码编辑会阻止保存。
 
-```text
-stale: changed ".../vendor/gpui-pre/gpui-pre-0.3.8/build.rs"
-dirty: FsStatusOutdated(StaleItem(ChangedFile { ... }))
-```
+键为 `cargo-build-v3-<OS>-<arch>-<kind>-<context-hash>-<input-hash>`。上下文含
+rustc 同一性、绝对工作区/target/Cargo 家目录、所选 profile/编译器/SDK 环境与
+CI 缓存自动化。兼容前缀允许源码变更时复用，重建判定仍由 Cargo 决定。不同架构、
+测试/发版模式与不兼容上下文不共享前缀。源码提交 SHA 不是同一性：纯文档提交可
+复用精确键，但 Tests 仍会运行，发版门禁仍要求精确发版提交的 Tests 成功。
 
-The application then becomes dirty through `StaleDepFingerprint`. With the
-same cached artifacts and the original timestamps restored, the fixture stays
-fresh. Genuine source changes still rebuild.
+编译器缓存含 `deps`、`build`、`.fingerprint` 与 **examples**，不含增量状态、
+安装器、归档与顶层应用二进制。依赖下载缓存另含 registry 源码与 Git 检出，避免
+在 Cargo 指纹阶段前重复解压/检出。依赖缓存不加入凭据或 Cargo 配置文件。
 
-Run 41163358066 confirmed the same mechanism in both real Windows jobs. The
-compiler caches were restored from commit `de089a8`, while checkout gave both
-GPUI `build.rs` files newer modification times. The trace reported
-`ChangedFile` / `FsStatusOutdated`, followed by dependent crate invalidations.
-Neither vendored GPUI package changed between `de089a8` and that run's commit
-`dd8d61f`. The debug Windows build script also reported
-`PrecalculatedComponentsChanged`: without rerun directives it fingerprints the
-package's file timestamps, so restoring only `build.rs` would be insufficient.
+只有成功且校验通过的 main 分支构建保存不可变编译器键；PR 与 tag 只恢复不保存。
+main 上的手动 Release 可播种发版构建缓存。采用 v3 是一次冷迁移，不要据此推断
+稳态性能。
 
-## Legacy GPUI-only timestamp restoration
+## 保留与免费额度
 
-The following describes the v2 diagnosis/control fixture, NOT the active
-whole-workspace CI policy described in the next section.
+GitHub 每仓库 10 GB 缓存（不含产物存储），运维软预算 7.5 GB，留出上传余量应对
+GitHub 自动驱逐。
 
-`scripts/cargo-cache-source-stamps.py` handles only:
+Tests 在 main 全绿（或手动 main Release 完成 Windows 构建与同提交检查）后，
+有读写权限的维护作业调用 `cargo-cache-retention.py --apply`。它分页走真实 `gh`
+API，每个架构/profile 保留最新两代 v3，同架构保留最新 v3 依赖下载缓存；退役
+v2 缓存只在同组已有 v3 缓存后删除。未知键与非 main 引用永不删除。另有活动工作流
+运行时推迟全部删除，清理中再次检查活跃度。新读者与检查竞态只导致缓存未命中，
+不触碰已下载/live 构建目录；GitHub 缓存 API 做不到对未来每个读者硬保证。
 
-- `vendor/gpui-pre/gpui-pre-0.3.8`
-- `vendor/gpui-pre/gpui-pre-windows-0.3.8`
+不带 `--apply` 时维护只读；API 失败不成空清单。维护作业是非阻塞家务：失败保留
+JSON 报告可见，不证伪产品检查。为凑 7.5 GB 不删除受保护的最新代；超预算报告
+意味着下次需要实测调整。超大受保护缓存与既有无关缓存仍可能触发 GitHub 自身
+10 GB 驱逐；初次迁移也可能在清理前驱逐旧缓存。
 
-After restoring compiler artifacts, the setup action compares each package's
-complete file/directory list, SHA-256 file hashes, sizes, and modes with the
-snapshot in the cache. It restores file and directory modification times only
-if the entire package matches. A changed package is left alone; Cargo still
-detects changes in source, resources, build scripts, dependencies, profiles,
-features, and declared environment inputs. The application, configuration,
-migrations, and other workspace sources are never backdated.
+## 验收（宣称提速前）
 
-The action then captures a new snapshot BEFORE compiling. It is stored at
-`target/<profile>/.fingerprint/fintwind-gpui-source-stamps.json`, alongside the
-compiler artifacts, and saved only by the existing successful-main-job cache
-step. Do not generate a snapshot from sources after compilation and pair it
-with older outputs. The helper is for private, immutable CI checkouts, not a
-live development directory being edited by another process.
-
-Missing or invalid snapshots, mismatched package trees, unsupported filesystem
-entries, and links/junctions cause restoration to be skipped. Snapshot paths
-and timestamps are validated before any source metadata is changed. The scan
-and timestamp restoration do not follow source links or reparse points. I/O
-failures while applying validated timestamps fail the job rather than silently
-continuing after a partial restore.
-
-The helper's code participates in compiler-cache keys. The first run after
-adoption therefore builds a new compiler cache; dependency-download caches
-remain reusable. A later unchanged run must report both packages as
-`restored`, and its Cargo trace must show no timestamp-driven GPUI rebuild.
-Real GPUI input capture was measured locally over 188 files at about 0.11
-seconds; this does not predict total CI build time.
-
-## V3 whole-workspace input protocol
-
-`cargo-cache-workspace.py` scans complete trees, without extension filters:
-`src`, `crates`, `vendor`, `assets`, `resources`, `locales`, `db`, `tests`,
-`examples`, and `.cargo`. It also hashes root manifests/lockfile/build script,
-Rust toolchain files, and **CHANGELOG.md**, which `src/app/help.rs` embeds.
-Root documentation and `docs/` are excluded; new compiler inputs outside these
-audited roots must be added before relying on their cache identity.
-
-Each file is compared by path, SHA-256 bytes, size and mode. Only unchanged
-files regain their own cached mtimes. A directory regains its mtime only if
-its whole subtree matches, so directory watchers see additions, removals and
-renames. Changed inputs receive a fresh mtime even when an editor deliberately
-preserved an old one. No links or reparse points are followed. A malformed or
-context-mismatched snapshot is skipped. Unsupported trees disable saving.
-I/O failures during timestamp application fail instead of hiding a partial
-restore. This is for immutable CI checkouts, not live editing worktrees.
-
-The protocol is `prepare -> restore artifacts -> restore stamps -> capture ->
-compile/test -> verify -> save`. The snapshot lives at
-`target/<profile>/.fingerprint/fintwind-workspace-inputs.json`. Verification
-compares the full input list/bytes/modes/mtimes, original input hash and
-compatibility hash. Source edits during the build therefore prevent saving.
-
-Keys are `cargo-build-v3-<OS>-<arch>-<kind>-<context-hash>-<input-hash>`.
-The context includes the rustc identity, absolute workspace/target/Cargo home,
-selected profile/compiler/SDK environment and CI cache automation. A compatible
-prefix allows reuse when source changes; Cargo still determines dependent
-rebuilds. Different architectures, test/release modes and incompatible contexts
-do not share a prefix. Source commit SHA is NOT the identity: docs-only commits
-can reuse an exact key, but Tests still runs and release gating still requires
-successful Tests for the exact release commit.
-
-Compiler caches contain `deps`, `build`, `.fingerprint`, and **examples**.
-They exclude incremental state, installers, archives and top-level app binaries.
-The dependency download cache also contains registry sources and Git checkouts,
-avoiding repeated extraction/checkout before Cargo's fingerprint stage. No
-credentials or Cargo config files are added to the dependency cache.
-
-Only successful, verified main-branch builds save immutable compiler keys.
-PRs and tags restore but do not save compiler snapshots. Manual Release runs
-on main can seed release-build caches. Adoption of v3 is one cold migration;
-do not infer steady-state performance from it.
-
-## Retention and free-storage budget
-
-GitHub includes 10 GB of cache per repository, separately from artifact storage.
-See [GitHub's cache limits](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching).
-No billing limit or runner class is changed here. The operational soft budget
-is 7.5 GB, leaving headroom for uploads before GitHub's automatic eviction.
-
-After all Tests jobs succeed on main (or a manual main Release finishes its
-Windows builds and same-commit checks), a read/write-permission maintenance job
-calls `cargo-cache-retention.py --apply`. It paginates through the real `gh`
-API, preserves the newest two v3 generations per architecture/profile and the
-newest v3 dependency-download cache per architecture. Retired v2 caches are
-removed only once a v3 cache exists for the matching group. Unknown cache keys
-and non-main refs are never deleted. Another active workflow run defers all
-deletion; activity is checked again during cleanup. A new reader may race a
-check, but cache misses are safe and no downloaded/live build directory is
-touched. No hard promise to protect every future reader is possible with the
-GitHub cache API.
-
-Without `--apply`, maintenance is read-only. API failures do not become empty
-inventories. The maintenance job is non-blocking housekeeping: failures remain
-visible with their JSON report, but do not falsify passing product checks.
-Protected latest generations are not deleted to force the 7.5 GB target; an
-over-budget report means the next measured adjustment is needed. Oversized
-protected caches and existing unrelated caches can still invoke GitHub's own
-10 GB eviction. Initial migration may also evict old caches before cleanup.
-
-## Acceptance before claiming a speedup
-
-Run cold once, then repeat the SAME commit with the same inputs and context.
-Confirm no local, GPUI or example compilation in the warm logs; tests must
-still execute. Then compare docs-only and one-crate changes, and verify real
-resource/locale/migration changes rebuild their consumers. Compare full job
-elapsed time INCLUDING restore/save and parallel verification, not only Cargo.
-Record ignored/externally authenticated E2E cases separately from executed
-tests. Cache hits are not proof of full E2E coverage. The 3-5 minute warm target
-is a goal to measure remotely, not an observed result or a promise for feature
-changes. CI opt-level=0 must be evaluated against total compile plus test time.
+冷跑一次，再用相同提交、相同输入与上下文重复一次。确认热日志中无本地、GPUI 或
+example 编译，测试仍执行。再比较纯文档提交与单 crate 变更，确认真实资源/locale/
+迁移变更重建其消费者。比较包含恢复/保存与并行校验的完整作业耗时，不只看 Cargo
+段。忽略/外部认证 E2E 用例单独记录，不计入已执行测试。缓存命中不等于 E2E 全覆盖。
+3-5 分钟热目标是待远程测量的目标，不是已观测结果，也不是对功能变更的承诺。
+CI opt-level=0 必须按编译加测试总时间评估。

@@ -717,6 +717,37 @@ fn opencode_location_directory(cwd: &Path) -> String {
     crate::opencode_session::resolve_request_directory(cwd)
 }
 
+/// Client-hosted MCP (`/api/experimental/client-mcp`) arrived in OpenCode
+/// 2.1.4. When a browser binding fails, state the installed CLI version if
+/// it predates that endpoint; otherwise the attach error stands on its own.
+/// Probed once per binary: driver start is already off the UI thread, and
+/// this only runs on the binding-failure path.
+fn browser_mcp_version_hint(binary: &Path) -> String {
+    static MINIMUM: &str = "2.1.4";
+    static PROBED: std::sync::OnceLock<std::sync::Mutex<HashMap<PathBuf, Option<String>>>> =
+        std::sync::OnceLock::new();
+    let installed: Option<String> = PROBED
+        .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+        .lock()
+        .ok()
+        .and_then(|mut versions| {
+            versions
+                .entry(binary.to_path_buf())
+                .or_insert_with(|| crate::model::probe_provider_version(binary))
+                .clone()
+        });
+    match installed {
+        Some(version)
+            if semver::Version::parse(&version).is_ok_and(|current| {
+                semver::Version::parse(MINIMUM).is_ok_and(|minimum| current < minimum)
+            }) =>
+        {
+            format!(" (installed OpenCode {version}; browser tools need {MINIMUM} or newer)")
+        }
+        _ => String::new(),
+    }
+}
+
 pub(crate) fn reconcile_saved_submission(
     port: u16,
     session: &str,
@@ -754,7 +785,7 @@ fn verify_resume_location(session: &Value, cwd: &Path, session_id: &str) -> anyh
 }
 
 pub struct OpenCodeDriver {
-    browser_binding: Option<crate::browser_tools::BrowserToolBinding>,
+    browser_binding: Option<crate::browser_mcp::Binding>,
     scheduled_binding: Option<crate::scheduled::mcp::Binding>,
     // `Drop` releases this lease before waking the worker, guaranteeing that
     // final process teardown runs on the worker rather than the UI thread.
@@ -792,7 +823,7 @@ impl OpenCodeDriver {
     pub(crate) fn start_with_tools(
         options: DriverStartOptions,
         events: DriverEventSender,
-        browser: Option<crate::browser_tools::BrowserToolRuntime>,
+        browser: Option<crate::browser_mcp::Runtime>,
         blobs: Option<Arc<crate::blob_store::BlobStore>>,
         scheduled: Option<crate::scheduled::tools::Runtime>,
     ) -> anyhow::Result<Self> {
@@ -819,12 +850,9 @@ impl OpenCodeDriver {
 
         // OpenCode hosts many sessions per process, and a second
         // `opencode serve` in the same workspace contends with the live one.
-        let server = match &browser {
-            Some(browser) => {
-                crate::opencode_pool::acquire_with_browser(&binary, &browser.registry)?
-            }
-            None => crate::opencode_pool::acquire(&binary, &cwd)?,
-        };
+        // The browser MCP host attaches per directory after the session
+        // exists, so the server itself needs no browser-specific startup.
+        let server = crate::opencode_pool::acquire(&binary, &cwd)?;
 
         // Reuse the native session when resuming so the conversation, and the
         // cursor already persisted for it, stay the same.
@@ -893,30 +921,27 @@ impl OpenCodeDriver {
                     .ok_or_else(|| anyhow!("OpenCode returned no session ID"))?
             }
         };
-        let browser_binding = if let Some(runtime) = &browser {
-            let activation = crate::browser_plugin::wait_until_active(&server, &location_directory);
-            if activation.is_ok()
-                && server.browser_tools.as_ref().is_some_and(|tools| {
-                    tools.belongs_to(&runtime.registry) && tools.is_activated()
-                })
-            {
-                Some(
-                    server
-                        .browser_tools
-                        .as_ref()
-                        .context("private OpenCode server has no browser tools")?
-                        .bind(session_id.clone(), runtime)?,
-                )
-            } else {
-                // Browser integration is optional, ordinary chat is not.
-                // No binding means every tool call fails closed. Do not make
-                // an unsupported or disabled plugin break provider recovery.
-                crate::opencode_diagnostics::record("browser-plugin-unavailable", server.port, 0);
-                None
+        let browser_binding = browser.and_then(|runtime| {
+            match crate::browser_mcp::Binding::attach(
+                &server,
+                &location_directory,
+                &session_id,
+                runtime,
+            ) {
+                Ok(binding) => Some(binding),
+                Err(error) => {
+                    // Browser integration is optional, ordinary chat is not.
+                    // No binding means every tool call fails closed. Do not make
+                    // an unsupported or disabled MCP host break provider recovery.
+                    // Name the installed CLI when it predates the client-hosted
+                    // MCP endpoint, so the log states the version requirement.
+                    let hint = browser_mcp_version_hint(&binary);
+                    eprintln!("Fintwind browser MCP unavailable{hint}: {error:#}");
+                    crate::opencode_diagnostics::record("browser-mcp-unavailable", server.port, 0);
+                    None
+                }
             }
-        } else {
-            None
-        };
+        });
 
         let scheduled_binding = scheduled.and_then(|runtime| {
             match crate::scheduled::mcp::Binding::attach(
@@ -5039,7 +5064,9 @@ fn request_permission(
     // pooled Full Access task must never suppress prompts in a Supervised task,
     // so Fintwind sends only one-shot provider replies and retains durable choices
     // in this driver's session-local state.
-    if permission_request.permission.starts_with("fintwind_browser_")
+    if permission_request
+        .permission
+        .starts_with("fintwind_browser_")
         || auto_approve.allows(&permission_request.permission)
         || permissions.lock().is_approved(&permission_request)
     {

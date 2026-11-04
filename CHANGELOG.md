@@ -18,6 +18,14 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+### 改进
+
+- 浏览器工具改走 OpenCode 2.1.4+ 实验性客户端托管 MCP（`fintwind_browser`，单工作区常驻连接），替代原私有插件私有通道：工具定义、开关与版本要求与定时任务 MCP 同形，截图以 MCP 原生图像内容直达模型；内置 `browser_*` 仍由最小屏蔽插件移除，未启用或旧版本 OpenCode 下普通对话不受影响。
+
+### 兼容性
+
+继续使用 OpenCode 2（`@opencode/cli`）作为后端，不适用于 OpenCode 1.x。浏览器 MCP 与定时任务 MCP 需要 OpenCode 2.1.4 或更新版本，使用实验性 MCP 接口。
+
 ## [0.3.0]
 
 ### 新功能

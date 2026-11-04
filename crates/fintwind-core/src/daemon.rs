@@ -34,7 +34,7 @@ use fintwind_protocol::submission::{SubmissionReceipt, SubmissionRecord, Submiss
 
 pub struct FintwindBackend {
     scheduled_tools: Arc<crate::scheduled::mcp::Registry>,
-    browser_tools: Arc<crate::browser_tools::BrowserTools>,
+    browser_mcp: Arc<crate::browser_mcp::Registry>,
     sessions: Arc<Mutex<HashMap<Uuid, (Uuid, DriverHandle)>>>,
     terminals: Mutex<HashMap<Uuid, (Uuid, crate::terminal::DaemonTerminal)>>,
     settings: DaemonSettingsStore,
@@ -114,15 +114,17 @@ impl FintwindBackend {
                 .unwrap_or_else(|| std::path::Path::new("."))
                 .join("attachments"),
         );
-        let browser_tools = Arc::new(crate::browser_tools::BrowserTools::default());
+        let browser_mcp = Arc::new(crate::browser_mcp::Registry::new(
+            settings.get().browser_tools_enabled(),
+        ));
         let scheduled_tools = Arc::new(crate::scheduled::mcp::Registry::new(
             settings.get().scheduled_tools_enabled(),
         ));
         let usage_index =
             crate::usage_index::UsageIndex::new(task_store.path().with_file_name("usage-index.db"));
         // Seed from the persisted setting so a daemon that comes up before
-        // the app connects already exposes the right state to plugins.
-        browser_tools.set_enabled(settings.get().browser_tools_enabled());
+        // the app connects already exposes the right state to the MCP host.
+        browser_mcp.set_enabled(settings.get().browser_tools_enabled());
         // Same for the proxy: fetches and later `opencode serve` children must
         // ride it even when no client ever pushes settings in this run.
         fintwind_protocol::http::set_active_proxy(
@@ -130,7 +132,7 @@ impl FintwindBackend {
         );
         Ok(Self {
             scheduled_tools,
-            browser_tools,
+            browser_mcp,
             sessions: Arc::new(Mutex::new(HashMap::new())),
             terminals: Mutex::new(HashMap::new()),
             settings,
@@ -966,12 +968,11 @@ impl FintwindBackend {
         existing.messages = transcript.messages.clone();
         existing.transcript_blocks = transcript.blocks.clone();
         existing.turns = transcript.turns.clone();
-        existing.status =
-            if fintwind_protocol::submission::is_session_working(existing) {
-                SessionStatus::Working
-            } else {
-                SessionStatus::Idle
-            };
+        existing.status = if fintwind_protocol::submission::is_session_working(existing) {
+            SessionStatus::Working
+        } else {
+            SessionStatus::Idle
+        };
         state.mark_session_dirty(local.id);
         self.task_store.save(&mut state)?;
         Ok(transcript)
@@ -1180,8 +1181,8 @@ fn scheduled_outcome(
 }
 
 impl Backend for FintwindBackend {
-    fn browser_tools(&self) -> Option<Arc<crate::browser_tools::BrowserTools>> {
-        Some(self.browser_tools.clone())
+    fn browser_mcp(&self) -> Option<Arc<crate::browser_mcp::Registry>> {
+        Some(self.browser_mcp.clone())
     }
 
     fn attach_system_channel(self: Arc<Self>, channel: SystemChannel) -> anyhow::Result<()> {
@@ -1529,9 +1530,9 @@ impl Backend for FintwindBackend {
                 };
                 self.settings.replace(settings)?;
                 crate::projectless::set_workspace_root(Some(root));
-                // Persisting alone keeps the plugin on its previous state;
+                // Persisting alone keeps the MCP host on its previous state;
                 // apply it so the change reaches models on the next request.
-                self.browser_tools
+                self.browser_mcp
                     .set_enabled(self.settings.get().browser_tools_enabled());
                 self.scheduled_tools
                     .set_enabled(self.settings.get().scheduled_tools_enabled());
@@ -2479,8 +2480,8 @@ impl Backend for FintwindBackend {
                 let handle = driver::start_local(
                     options,
                     event_sender,
-                    crate::browser_tools::BrowserToolRuntime {
-                        registry: self.browser_tools.clone(),
+                    crate::browser_mcp::Runtime {
+                        registry: self.browser_mcp.clone(),
                         session_id,
                         runtime_id,
                     },

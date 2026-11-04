@@ -242,7 +242,7 @@ pub struct SessionOptions {
 pub(crate) fn start_local(
     options: DriverStartOptions,
     events: DriverEventSender,
-    browser: crate::browser_tools::BrowserToolRuntime,
+    browser: crate::browser_mcp::Runtime,
     blobs: Arc<crate::blob_store::BlobStore>,
     scheduled: crate::scheduled::tools::Runtime,
 ) -> anyhow::Result<DriverHandle> {

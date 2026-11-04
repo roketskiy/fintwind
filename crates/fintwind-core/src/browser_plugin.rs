@@ -1,55 +1,15 @@
-//! Materialize the embedded plugin next to Fintwind's private serve data, not
-//! inside a user workspace. The one owned file contains no credentials.
+//! Materialize the suppression-only plugin next to Fintwind's private serve
+//! data, not inside a user workspace. The one owned file registers no tools
+//! and carries no credentials: it only removes OpenCode's built-in desktop
+//! browser tools and repeats the in-app browser instruction when the browser
+//! MCP is present.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, bail};
 use serde_json::{Value, json};
 
-const PLUGIN_SOURCE: &str = include_str!("../../../resources/opencode-browser-plugin.ts");
-pub(crate) const ADDRESS_ENV: &str = "FINTWIND_BROWSER_TOOL_ADDRESS";
-pub(crate) const TOKEN_ENV: &str = "FINTWIND_BROWSER_TOOL_TOKEN";
-
-/// The public plugin list is a state query, not a blocking activation call.
-/// Match this exact plugin in this location; an empty list is still loading.
-pub(crate) fn wait_until_active(
-    server: &crate::opencode_session::OpenCodeServer,
-    directory: &str,
-) -> anyhow::Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            bail!("private browser plugin activation timed out");
-        }
-        let response = server.request_for_directory_with_timeout(
-            directory,
-            "GET",
-            "/api/plugin",
-            None,
-            remaining,
-        )?;
-        let plugins = response
-            .get("data")
-            .and_then(Value::as_array)
-            .context("OpenCode returned an incompatible plugin state response")?;
-        if let Some(plugin) = plugins
-            .iter()
-            .find(|plugin| plugin.get("id").and_then(Value::as_str) == Some("fintwind.browser"))
-        {
-            match plugin.pointer("/state/status").and_then(Value::as_str) {
-                Some("active") => return Ok(()),
-                Some("failed") => bail!("private browser plugin setup failed"),
-                _ => {}
-            }
-        }
-        // Background driver startup only; no polling reaches the UI thread.
-        std::thread::sleep(
-            Duration::from_millis(60).min(deadline.saturating_duration_since(Instant::now())),
-        );
-    }
-}
+const PLUGIN_SOURCE: &str = include_str!("../../../resources/opencode-browser-suppress-plugin.ts");
 
 pub(crate) struct BrowserPlugin {
     directory: PathBuf,

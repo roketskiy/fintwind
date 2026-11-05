@@ -35,6 +35,10 @@ bun install -g --trust @opencode/cli
 The Bun `--trust` flag allows the package's required install script.
 These use the V2 package, `@opencode/cli`; see the
 [official installation guide](https://opencode.ai/v2/docs/) for other methods.
+After installing fintwind, you can also install or update OpenCode from
+**Settings → General → Runtime environment** with npm or Bun. In-app updates
+are limited to installations managed by the current npm or Bun; update portable
+and other installations yourself.
 
 Open a new PowerShell window and verify the installation:
 
@@ -48,9 +52,10 @@ or use your existing provider configuration. fintwind uses OpenCode's models,
 provider credentials, and MCP configuration. You do not need to start
 `opencode serve` yourself: fintwind starts its own private local server.
 
-The optional scheduled task MCP requires OpenCode 2.1.4 or newer. Enable it in
-**Settings → General → Features**; Fintwind manages the experimental MCP
-connection automatically. See [agent-created scheduled tasks](docs/scheduled-tasks-mcp.md).
+The optional browser and scheduled task MCPs require OpenCode 2.1.4 or newer.
+Enable them in **Settings → General → Features**; Fintwind manages the
+experimental MCP connections automatically. See
+[agent-created scheduled tasks](docs/scheduled-tasks-mcp.md).
 
 Optional image generation requires OpenCode 2.2.1 or newer and a compatible
 connected image model. Native Goal integration targets OpenCode 2.2.1;
@@ -98,9 +103,9 @@ detection, data locations, and WebView2 details.
 - **Session Todo.** Follow the agent's task list and completion progress in the
   session capsule, alongside pending added and removed line counts.
 - **Keep awake.** Optionally keep the display and system awake while Fintwind runs.
-- **Portable OpenCode.** Choose the OpenCode executable in general settings
-  without adding a portable installation to PATH. Restore automatic detection
-  at any time.
+- **OpenCode runtime.** Check the version and install or update an npm- or
+  Bun-managed OpenCode in general settings. You can also choose a portable
+  executable without adding it to PATH and restore automatic detection later.
 - **Old session cleanup.** Preview and delete sessions inactive for 30, 90, or
   180 days (90 by default). Cleanup covers sessions visible in Fintwind and
   linked to OpenCode, removing the corresponding records from both.
@@ -144,18 +149,24 @@ detection, data locations, and WebView2 details.
   dropping them onto the conversation; images and PDFs are sent inline to OpenCode.
 - **Terminal and browser.** Work in a built-in terminal or the optional
   WebView2 browser panel. Enable the browser tools in settings (off by
-  default) and agents in any session can operate all open browser tabs,
-  including manually opened tabs, without per-page approval or session isolation.
+  default; requires OpenCode 2.1.4+) and agents in any session can operate all
+  open browser tabs, including manually opened tabs, without per-page approval
+  or session isolation.
   Tools can open, observe, click, fill, scroll, navigate, and take screenshots;
   they support local file pages and password fields, and snapshots can include
   passwords and hidden form values. The session interface itself remains native GPUI.
 - **Appearance settings.** Choose Fintwind or one of 13 additional theme
-  families, select light/dark/system mode, and customize UI and code fonts and
-  text sizes. Animations honor the system's reduce-motion preference.
-- **Usage statistics.** Explore local OpenCode session history through an
-  activity heatmap, daily and hourly charts, and model/provider rankings,
-  including subagent usage. Opens with a single day selected, followed by
-  7-day, 30-day, and all-time ranges. Displayed costs are estimates, not billing records.
+  families, select light, dark, or automatic mode, and customize UI and code
+  fonts and text sizes. Automatic mode switches to light at 07:00 and dark at
+  19:00 local time; it does not follow the system appearance. Animations
+  honor the system's reduce-motion preference.
+- **Usage and subscriptions.** Explore OpenCode session history through an
+  activity heatmap, daily and hourly charts, and model, provider, and project
+  rankings, including subagent usage. History defaults to one day, with 7-day,
+  30-day, and all-time ranges also available. Switch to subscriptions to see available
+  quotas for connected, supported providers, including local Claude Code and
+  Codex subscriptions. The statistics page no longer displays cost estimates.
+  See [provider quotas](docs/provider-quota.md) for sources and limitations.
 - **Anonymous launch statistics.** Stable and beta builds report a randomly
   generated local installation ID to the project website on each launch to
   count daily active desktops. No sessions, project paths, or account data

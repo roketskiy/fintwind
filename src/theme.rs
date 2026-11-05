@@ -1,8 +1,7 @@
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use gpui::{
-    App, BoxShadow, Global, Hsla, Pixels, SharedString, Window, WindowAppearance, hsla, px, rgb,
-};
+use chrono::{Local, Timelike};
+use gpui::{App, BoxShadow, Global, Hsla, Pixels, SharedString, Window, hsla, px, rgb};
 use parking_lot::Mutex;
 
 mod palettes;
@@ -246,22 +245,11 @@ impl TranscriptWidthPreset {
     }
 }
 
-fn resolves_to_dark(preference: ThemePreference, system_appearance: WindowAppearance) -> bool {
+fn resolves_to_dark(preference: ThemePreference) -> bool {
     match preference {
-        ThemePreference::System => matches!(
-            system_appearance,
-            WindowAppearance::Dark | WindowAppearance::VibrantDark
-        ),
+        ThemePreference::Auto => !(7..19).contains(&Local::now().hour()),
         ThemePreference::Light => false,
         ThemePreference::Dark => true,
-    }
-}
-
-fn native_override(preference: ThemePreference) -> Option<bool> {
-    match preference {
-        ThemePreference::System => None,
-        ThemePreference::Light => Some(false),
-        ThemePreference::Dark => Some(true),
     }
 }
 
@@ -669,7 +657,7 @@ fn set_active_theme(theme: Theme, cx: &mut App) {
 /// scheme, fonts and text scale instead of the library defaults.
 ///
 /// One-way only: Fintwind's `Theme` stays the single source of truth. Called
-/// at startup and when the user or the system changes the appearance — never
+/// at startup and when the user or the schedule changes the appearance — never
 /// from render, because both write paths refresh every window.
 pub fn sync_gpui_kit_theme(cx: &mut App) {
     use gpui_kit::component::{Theme as KitTheme, ThemeMode};
@@ -815,8 +803,7 @@ pub fn sync_ely_theme(cx: &mut App) {
 
 /// Resolve and publish the startup palette, before any window exists.
 pub fn init(cx: &mut App) {
-    let system_appearance = cx.window_appearance();
-    let theme = if resolves_to_dark(ThemePreference::System, system_appearance) {
+    let theme = if resolves_to_dark(ThemePreference::Auto) {
         Theme::dark()
     } else {
         Theme::light()
@@ -832,11 +819,27 @@ pub fn apply_theme_preference(
     window: &mut Window,
     cx: &mut App,
 ) {
-    crate::platform::set_window_appearance(window, native_override(preference));
-    let is_dark = resolves_to_dark(preference, cx.window_appearance());
+    let is_dark = resolves_to_dark(preference);
+    crate::platform::set_window_appearance(window, Some(is_dark));
     set_active_theme(Theme::for_scheme(scheme, is_dark), cx);
     crate::platform::configure_sidebar_material(window, is_dark);
     sync_gpui_kit_theme(cx);
     sync_ely_theme(cx);
     window.refresh();
+}
+
+/// Reconcile the clock-driven appearance without repainting unchanged windows.
+pub fn refresh_automatic_theme(
+    preference: ThemePreference,
+    scheme: ThemeScheme,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    if preference != ThemePreference::Auto
+        || resolves_to_dark(preference) == Theme::current(cx).is_dark
+    {
+        return false;
+    }
+    apply_theme_preference(preference, scheme, window, cx);
+    true
 }

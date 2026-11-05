@@ -3210,15 +3210,29 @@ impl Fintwind {
             let context_tab_focus = cx.focus_handle();
             let context_tab_close_focus = cx.focus_handle();
 
-            cx.observe_window_appearance(window, |this: &mut Self, window, cx| {
-                if this.state.theme == ThemePreference::System {
-                    crate::theme::apply_theme_preference(
-                        this.state.theme,
-                        this.state.theme_scheme,
-                        window,
-                        cx,
-                    );
-                    cx.notify();
+            // Align to the next minute so 07:00 and 19:00 take effect at the
+            // boundary. Rechecking also handles clock and time-zone changes.
+            cx.spawn_in(window, async move |this, cx| {
+                loop {
+                    let elapsed_ms = Local::now().timestamp_millis().rem_euclid(60_000) as u64;
+                    cx.background_executor()
+                        .timer(Duration::from_millis(60_000 - elapsed_ms))
+                        .await;
+                    if this
+                        .update_in(cx, |this, window, cx| {
+                            if crate::theme::refresh_automatic_theme(
+                                this.state.theme,
+                                this.state.theme_scheme,
+                                window,
+                                cx,
+                            ) {
+                                cx.notify();
+                            }
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
                 }
             })
             .detach();
@@ -3230,6 +3244,14 @@ impl Fintwind {
 
             cx.observe_window_activation(window, |this: &mut Self, window, cx| {
                 if window.is_window_active() {
+                    if crate::theme::refresh_automatic_theme(
+                        this.state.theme,
+                        this.state.theme_scheme,
+                        window,
+                        cx,
+                    ) {
+                        cx.notify();
+                    }
                     this.reload_clean_right_panel_file_editors(cx);
                     // The working tree and branch may have moved while another
                     // app had focus — a checkout in a terminal, an edit in an

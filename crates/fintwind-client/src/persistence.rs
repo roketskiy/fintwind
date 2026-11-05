@@ -327,7 +327,7 @@ impl Default for AppSettings {
         Self {
             busy_send_mode: BusySendMode::Queue,
             favorite_models: Vec::new(),
-            theme: ThemePreference::System,
+            theme: ThemePreference::Auto,
             theme_scheme: ThemeScheme::Default,
             language: AppLanguage::default(),
             ui_text_scale: DEFAULT_UI_TEXT_SCALE,
@@ -496,7 +496,7 @@ impl PersistedState {
             last_context_window: None,
             remembered_model_traits: Vec::new(),
             favorite_models: Vec::new(),
-            theme: ThemePreference::System,
+            theme: ThemePreference::Auto,
             theme_scheme: ThemeScheme::Default,
             language: AppLanguage::default(),
             ui_text_scale: DEFAULT_UI_TEXT_SCALE,

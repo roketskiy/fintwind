@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum ThemePreference {
     #[default]
-    System,
+    // Keep the old persisted value readable by older versions of Fintwind.
+    #[serde(rename = "system")]
+    Auto,
     Light,
     Dark,
 }
@@ -15,7 +17,7 @@ pub enum ThemePreference {
 ///
 /// Appearance answers "light or dark?" while this answers "which palette?".
 /// Keeping the two preferences separate lets new palettes arrive without
-/// changing the system-theme behavior or overloading `ThemePreference`.
+/// changing the automatic appearance behavior or overloading `ThemePreference`.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThemeScheme {
@@ -76,11 +78,11 @@ impl ThemeScheme {
 }
 
 impl ThemePreference {
-    pub const ALL: [Self; 3] = [Self::System, Self::Light, Self::Dark];
+    pub const ALL: [Self; 3] = [Self::Auto, Self::Light, Self::Dark];
 
     pub fn label(self) -> String {
         match self {
-            Self::System => crate::i18n::translate("settings.theme_system"),
+            Self::Auto => crate::i18n::translate("settings.theme_auto"),
             Self::Light => crate::i18n::translate("settings.theme_light"),
             Self::Dark => crate::i18n::translate("settings.theme_dark"),
         }

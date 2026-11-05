@@ -18,13 +18,22 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.3.1]
+
+### 新功能
+
+- 通用设置的运行环境支持检查 OpenCode 版本，并通过 npm 或 Bun 安装、更新 OpenCode。应用内更新仅适用于当前 npm 或 Bun 管理的安装；便携版等其他安装方式仍需自行更新。更新不会重启正在运行的 OpenCode 进程（[d339f8cf](https://github.com/roketskiy/fintwind/commit/d339f8cfbfa4f2d8400ad7519609c1baeb7150e1)）。
+
 ### 改进
 
-- 浏览器工具改走 OpenCode 2.1.4+ 实验性客户端托管 MCP（`fintwind_browser`，单工作区常驻连接），替代原私有插件私有通道：工具定义、开关与版本要求与定时任务 MCP 同形，截图以 MCP 原生图像内容直达模型；内置 `browser_*` 仍由最小屏蔽插件移除，未启用或旧版本 OpenCode 下普通对话不受影响。
+- 用量页分为「用量统计」和「订阅额度」：统计页展示 Tokens、趋势和模型、提供商、项目排行，不再展示费用估算；额度页集中显示已连接且受支持的供应商，包括本机 Claude Code、Codex 订阅及 OpenCode Console Go。不同页面独立刷新，额度不受统计日期影响，凭据失效或查询失败时显示对应状态。支持范围和数据来源见 [供应商额度说明](docs/provider-quota.md)（[aa2458b7](https://github.com/roketskiy/fintwind/commit/aa2458b708901325b22612db648614ef722d256d)）。
+- 浏览器工具改用 OpenCode 实验性客户端托管 MCP，截图以 MCP 图像内容发送给模型；开关仍默认关闭。旧版 OpenCode 或未启用工具时，普通对话不受影响（[f490e5fd](https://github.com/roketskiy/fintwind/commit/f490e5fd1f70eb94d7d6c2230b05429763e5012e)）。
+- 桌面端与手机端的「跟随系统」改为「自动」：按各设备本地时间，7:00 起使用浅色，19:00 起使用深色，不再跟随系统外观。原有「跟随系统」设置会沿用为「自动」，也可手动选择浅色或深色（[8bee5cf2](https://github.com/roketskiy/fintwind/commit/8bee5cf2c6f79a4fe29b27945cf13d288332110e)）。
+- 统一卡片表面与顶部高光，调整定时任务条目和启停状态标签（[44f7c8be](https://github.com/roketskiy/fintwind/commit/44f7c8be78089557468b0a904733c2852a44c4e9)、[ee065bb2](https://github.com/roketskiy/fintwind/commit/ee065bb290e81aa6cb8a92a1bf58132a2d7e6c48)）。
 
 ### 兼容性
 
-继续使用 OpenCode 2（`@opencode/cli`）作为后端，不适用于 OpenCode 1.x。浏览器 MCP 与定时任务 MCP 需要 OpenCode 2.1.4 或更新版本，使用实验性 MCP 接口。
+继续使用 OpenCode 2（`@opencode/cli`）作为后端，不适用于 OpenCode 1.x。浏览器 MCP 与定时任务 MCP 需要 OpenCode 2.1.4 或更新版本，使用实验性 MCP 接口。图像生成需要 OpenCode 2.2.1 或更新版本及兼容的图像模型；官方 Goal 适配依据 OpenCode 2.2.1，旧版本没有官方 Goal 时不能使用。未验证完整的模型或版本兼容区间，详见 [Goal 说明](docs/goals.md)和[定时任务 MCP 说明](docs/scheduled-tasks-mcp.md)。
 
 ## [0.3.0]
 

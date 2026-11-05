@@ -1,5 +1,10 @@
 # OpenCode 可执行文件
 
+「设置 → 通用 → 运行环境」显示当前 OpenCode 版本并提供更新检查。未检测到
+OpenCode 时，可以通过已安装的 npm 或 Bun 安装；检测到新版本时，可以更新由当前
+npm 或 Bun 管理的 OpenCode。便携版及其他安装方式需自行更新。更新不会重启已在
+运行的 OpenCode 进程。
+
 在「设置 → 通用 → 运行环境 → OpenCode 可执行文件」中选择文件。
 便携版可选择 `opencode-cli.exe`，无需加入 PATH。选择后立即保存；
 「恢复自动检测」清除此配置，恢复原有的 OpenCode 查找规则。

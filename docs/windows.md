@@ -95,6 +95,9 @@ You can also choose an executable, including a portable `opencode-cli.exe`, in
 **Settings → General → Runtime environment**. The selected path applies to
 subsequent session starts and background operations. Running sessions keep
 their existing process. Restore automatic detection from the same setting.
+The same section can check the version and install OpenCode using npm or Bun.
+In-app updates apply only to installations managed by the current npm or Bun;
+portable and other installations must be updated separately.
 
 If the CLI is installed but not detected, make sure `opencode --version` works
 in a new PowerShell window, or select its executable in settings.
@@ -119,6 +122,8 @@ Ctrl+Shift+V copy and paste so Ctrl+C stays available to the shell.
 The right panel's Browser tab runs on WebView2, which is in-box on Windows 11
 and evergreen-installed on Windows 10. Navigation, devtools, downloads, and
 pop-up handling are native WebView2.
+Optional browser tools require OpenCode 2.1.4 or newer and use its experimental
+client-hosted MCP interface. They are disabled by default.
 
 fintwind hosts it in *visual* mode rather than as a child window: the page renders
 into a DirectComposition visual that GPUI hands out between its own content
@@ -139,9 +144,8 @@ Differences worth knowing:
   Keyboard and IME are unaffected — those still reach the page directly once
   it holds focus.
 
-Developer-only same-page Playwright validation is documented in
-[browser-automation.md](browser-automation.md). It uses a separate build and
-test profile; ordinary builds do not enable a CDP debugging endpoint.
+Developer-only same-page Playwright validation uses a separate build and test
+profile; ordinary builds do not enable a CDP debugging endpoint.
 
 ## Troubleshooting
 

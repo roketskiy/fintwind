@@ -99,7 +99,7 @@ settings.scheduled_tasks_keywords: スケジュール タスク 定時 定期 �
 daemon.reveal_token: トークンを表示
 daemon.hide_token: トークンを隠す
 settings.theme: テーマ
-settings.theme_description: システムに合わせるか、ライト・ダークモードを選択します
+settings.theme_description: 自動モードでは現地時刻の 07:00〜19:00 にライトを使用します
 settings.scheme: 配色テーマ
 settings.scheme_description: ライト・ダーク両方に適用する配色を選択します
 settings.scheme_default: Fintwind
@@ -137,7 +137,7 @@ settings.transcript_width_compact: コンパクト
 settings.transcript_width_default: デフォルト
 settings.transcript_width_wide: ワイド
 settings.transcript_width_extra_wide: 特大
-settings.theme_system: システム
+settings.theme_auto: 自動
 settings.theme_light: ライト
 settings.theme_dark: ダーク
 

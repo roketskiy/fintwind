@@ -109,7 +109,7 @@ settings.scheduled_tasks_keywords: 定时 计划 任务 调度 schedule cron 重
 daemon.reveal_token: 显示令牌
 daemon.hide_token: 隐藏令牌
 settings.theme: 主题
-settings.theme_description: 跟随系统外观，或选择浅色、深色模式
+settings.theme_description: 自动模式在本地时间 07:00 至 19:00 使用浅色
 settings.scheme: 配色方案
 settings.scheme_description: 为浅色和深色模式选择一套配色
 settings.scheme_default: Fintwind
@@ -147,7 +147,7 @@ settings.transcript_width_compact: 紧凑
 settings.transcript_width_default: 默认
 settings.transcript_width_wide: 宽
 settings.transcript_width_extra_wide: 超宽
-settings.theme_system: 跟随系统
+settings.theme_auto: 自动
 settings.theme_light: 浅色
 settings.theme_dark: 深色
 input.do_anything: 做什么都可以…

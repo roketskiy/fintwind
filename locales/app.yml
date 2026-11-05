@@ -265,7 +265,7 @@ daemon.hide_token:
 settings.theme:
   en: Theme
 settings.theme_description:
-  en: Follow your system appearance or choose light or dark
+  en: Automatic mode uses light from 07:00 to 19:00 local time
 settings.scheme:
   en: Color theme
 settings.scheme_description:
@@ -340,8 +340,8 @@ settings.transcript_width_wide:
   en: Wide
 settings.transcript_width_extra_wide:
   en: Extra wide
-settings.theme_system:
-  en: System
+settings.theme_auto:
+  en: Automatic
 settings.theme_light:
   en: Light
 settings.theme_dark:

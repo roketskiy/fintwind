@@ -185,7 +185,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             favorite_models: Vec::new(),
-            theme: ThemePreference::System,
+            theme: ThemePreference::Auto,
             language: AppLanguage::default(),
         }
     }
@@ -301,7 +301,7 @@ impl PersistedState {
             last_context_window: None,
             remembered_model_traits: Vec::new(),
             favorite_models: Vec::new(),
-            theme: ThemePreference::System,
+            theme: ThemePreference::Auto,
             language: AppLanguage::default(),
             sidebar_visible: true,
             right_panel_visible: false,

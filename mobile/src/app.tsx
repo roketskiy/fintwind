@@ -15,6 +15,7 @@ import {
 import { GlideMenu, PixelLoader } from "@/components/beautiful/primitives";
 import { GoalCard } from "@/components/goal-card";
 import { PhoneSettings } from "@/components/phone-settings";
+import { usePhoneTheme } from "@/lib/theme";
 import { TaskAlerts } from "@/components/task-alerts";
 import { errorMessage } from "@/lib/error-message";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -260,6 +261,7 @@ export function App() {
 }
 
 export function RemoteView({ app, previewOptions }: { app: ReturnType<typeof useRemote>; previewOptions?: ComposerOptions }) {
+  const { theme, setTheme } = usePhoneTheme();
   const [search, setSearch] = useState("");
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const backRef = useRef<HTMLButtonElement>(null);
@@ -318,7 +320,7 @@ export function RemoteView({ app, previewOptions }: { app: ReturnType<typeof use
             onSelect={app.selectWorkspace}
           />
           <div className="header-actions">
-          <PhoneSettings onForget={async () => { await app.forget(); setDrafts({}); }} />
+          <PhoneSettings theme={theme} setTheme={setTheme} onForget={async () => { await app.forget(); setDrafts({}); }} />
           <Button
             variant="ghost"
             size="icon"
@@ -485,7 +487,7 @@ export function RemoteView({ app, previewOptions }: { app: ReturnType<typeof use
           ) : (
             <ConnectionBadge connection={app.connection} />
           )}
-          <PhoneSettings onForget={async () => { await app.forget(); setDrafts({}); }} />
+          <PhoneSettings theme={theme} setTheme={setTheme} onForget={async () => { await app.forget(); setDrafts({}); }} />
         </header>
         {!connected && (
           <div className="connection-strip" role="status">

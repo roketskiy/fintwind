@@ -9,6 +9,38 @@ use crate::git::{
 };
 use crate::model::Checkpoint;
 
+/// Stable failure kinds for [`WorkspaceOperation::BrowseDirectories`].
+///
+/// They travel as the prefix of the daemon's error message
+/// (`"<kind>: <detail>"`), because `RpcError` carries only a message.
+/// `detail` names the daemon-side path and carries no credentials.
+pub mod directory_browse {
+    /// The resolved directory does not exist.
+    pub const NOT_FOUND: &str = "directory_not_found";
+    /// The directory cannot be read with the daemon's permissions.
+    pub const NOT_READABLE: &str = "directory_not_readable";
+    /// The resolved path exists but is not a directory.
+    pub const NOT_DIRECTORY: &str = "not_a_directory";
+    /// A relative path arrived without an already-verified base directory.
+    pub const RELATIVE_WITHOUT_BASE: &str = "relative_without_base";
+    /// The daemon user's home directory is unavailable.
+    pub const HOME_UNAVAILABLE: &str = "home_unavailable";
+
+    const ALL: &[&str] = &[
+        NOT_FOUND,
+        NOT_READABLE,
+        NOT_DIRECTORY,
+        RELATIVE_WITHOUT_BASE,
+        HOME_UNAVAILABLE,
+    ];
+
+    /// Extract the failure kind from a daemon error message, if it carries one.
+    pub fn kind_of(message: &str) -> Option<&str> {
+        let (kind, _) = message.split_once(": ")?;
+        ALL.iter().copied().find(|known| *known == kind)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ReviewDiffSource {
@@ -66,6 +98,34 @@ pub enum WorkspaceOperation {
     },
     BrowseDirectory {
         path: Option<PathBuf>,
+    },
+    /// Read-only directory picker for the SSH "add project" flow.
+    ///
+    /// The daemon resolves `path` on its own host and returns only
+    /// directories (including enterable symlinked directories), never files.
+    /// `None` selects the daemon user's home directory. An absolute `path`
+    /// is used verbatim; a leading `~` segment expands to the daemon HOME;
+    /// a relative `path` resolves against the already-verified absolute
+    /// `base` directory and is rejected without one; a non-absolute base is
+    /// rejected rather than resolved against the daemon's working directory. Raw bytes travel as path data;
+    /// no shell is involved, so spaces, non-UTF8-host names and other
+    /// special characters are never interpreted. Filtering text and request
+    /// generations stay on the caller: the daemon treats every relative
+    /// `path` as navigation, never as a filter. Callers must scope the
+    /// connection before sending this; the daemon itself performs no
+    /// authorization and creates, renames, or writes nothing.
+    /// Failures travel as transport errors whose message starts with one of
+    /// [`directory_browse`] kinds (`"<kind>: <detail>"`), because `RpcError`
+    /// carries only a message.
+    BrowseDirectories {
+        path: Option<PathBuf>,
+        /// Already-verified absolute current directory. Required when `path` is
+        /// relative; ignored otherwise.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        base: Option<PathBuf>,
+        /// Include dot-directories such as `.config`. Defaults to hidden.
+        #[serde(default)]
+        include_hidden: bool,
     },
     ReadTextFile {
         root: PathBuf,

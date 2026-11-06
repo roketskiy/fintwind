@@ -144,6 +144,11 @@ pub fn execute(operation: WorkspaceOperation) -> anyhow::Result<WorkspaceResult>
         } => WorkspaceResult::WorkingTree {
             entries: list_tree(&root, &expanded_paths.into_iter().collect()),
         },
+        WorkspaceOperation::BrowseDirectories {
+            path,
+            base,
+            include_hidden,
+        } => browse_directories(path.as_deref(), base.as_deref(), include_hidden)?,
         WorkspaceOperation::BrowseDirectory { path } => {
             let home = dirs::home_dir().ok_or_else(|| anyhow!("home directory is unavailable"))?;
             let path = fs::canonicalize(path.as_deref().unwrap_or(&home)).with_context(|| {
@@ -589,6 +594,144 @@ fn list_directory(directory: &Path) -> anyhow::Result<Vec<WorkingTreeEntry>> {
         .collect::<Vec<_>>();
     entries.sort_by_key(|entry| (!entry.is_dir, entry.name.to_lowercase()));
     Ok(entries)
+}
+
+/// SSH "add project" directory picker backend.
+///
+/// Read-only: only `canonicalize`, `metadata` and `read_dir` run here.
+/// Nothing is created, renamed, written, or deleted, and no shell ever sees
+/// the path, so names carrying spaces, non-UTF8-host spellings, or shell
+/// metacharacters travel as data. Symlinked directories whose target is
+/// enterable are listed; files, broken links, and entries whose type cannot
+/// be proven are not. Callers must scope the connection first; this only
+/// resolves paths on the daemon host.
+fn browse_directories(
+    path: Option<&Path>,
+    base: Option<&Path>,
+    include_hidden: bool,
+) -> anyhow::Result<WorkspaceResult> {
+    use fintwind_protocol::workspace::directory_browse as kinds;
+
+    let home = dirs::home_dir()
+        .ok_or_else(|| anyhow!("{}: home directory is unavailable", kinds::HOME_UNAVAILABLE))?;
+
+    let joined: PathBuf;
+    let requested: &Path = match path {
+        None => &home,
+        Some(raw) => {
+            if raw.components().next() == Some(Component::Normal(std::ffi::OsStr::new("~"))) {
+                joined = home.join(raw.strip_prefix("~").unwrap_or(Path::new("")));
+                &joined
+            } else if raw.is_absolute() {
+                raw
+            } else {
+                let base = base.ok_or_else(|| {
+                    anyhow!(
+                        "{}: relative path {} has no verified base directory",
+                        kinds::RELATIVE_WITHOUT_BASE,
+                        raw.display()
+                    )
+                })?;
+                joined = canonicalize_browse_base(base)?.join(raw);
+                &joined
+            }
+        }
+    };
+    let resolved = canonicalize_browse_dir(requested)?;
+    let mut entries = fs::read_dir(&resolved)
+        .map_err(|error| browse_fs_error(&resolved, error))?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !include_hidden && name.starts_with('.') {
+                return None;
+            }
+            // `metadata` follows symlinks, so only enterable directories
+            // survive: files, broken links, and unreadable entries are out.
+            if !fs::metadata(entry.path())
+                .map(|metadata| metadata.is_dir())
+                .unwrap_or(false)
+            {
+                return None;
+            }
+            Some(WorkingTreeEntry {
+                relative_path: name.clone(),
+                absolute_path: entry.path(),
+                name,
+                is_dir: true,
+                expanded: false,
+                depth: 0,
+            })
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.name.to_lowercase());
+    let filesystem_root = resolved
+        .ancestors()
+        .last()
+        .map(Path::to_owned)
+        .unwrap_or_else(|| resolved.clone());
+    Ok(WorkspaceResult::Directory {
+        parent: resolved.parent().map(Path::to_owned),
+        entries,
+        path: resolved,
+        home,
+        filesystem_root,
+    })
+}
+
+/// Verify the caller-supplied base directory for relative navigation.
+///
+/// The base arrives from a previously verified listing, so it must already
+/// be absolute; a relative base is rejected instead of being resolved
+/// against the daemon's process directory. Failures keep the existing
+/// [`fintwind_protocol::workspace::directory_browse`] kind prefixes; only
+/// the detail names the base, so callers can tell a stale base from a bad
+/// navigation target.
+fn canonicalize_browse_base(base: &Path) -> anyhow::Result<PathBuf> {
+    use fintwind_protocol::workspace::directory_browse as kinds;
+    if !base.is_absolute() {
+        bail!(
+            "{}: base directory {} is not absolute",
+            kinds::RELATIVE_WITHOUT_BASE,
+            base.display()
+        );
+    }
+    canonicalize_browse_dir(base).map_err(|error| match kinds::kind_of(&error.to_string()) {
+        Some(kind) => anyhow!("{kind}: base directory {}", base.display()),
+        None => error.context(format!("base directory {}", base.display())),
+    })
+}
+
+/// Canonicalize a browse target and prove it is a directory, mapping
+/// filesystem failures to [`fintwind_protocol::workspace::directory_browse`]
+/// kinds so the picker can tell missing, unreadable, and non-directory
+/// targets apart.
+fn canonicalize_browse_dir(path: &Path) -> anyhow::Result<PathBuf> {
+    let resolved = fs::canonicalize(path).map_err(|error| browse_fs_error(path, error))?;
+    let is_dir = fs::metadata(&resolved)
+        .map_err(|error| browse_fs_error(&resolved, error))?
+        .is_dir();
+    if !is_dir {
+        bail!(
+            "{}: {}",
+            fintwind_protocol::workspace::directory_browse::NOT_DIRECTORY,
+            resolved.display()
+        );
+    }
+    Ok(resolved)
+}
+
+fn browse_fs_error(path: &Path, error: std::io::Error) -> anyhow::Error {
+    use fintwind_protocol::workspace::directory_browse as kinds;
+    match error.kind() {
+        std::io::ErrorKind::NotFound => {
+            anyhow!("{}: {}", kinds::NOT_FOUND, path.display())
+        }
+        std::io::ErrorKind::PermissionDenied => {
+            anyhow!("{}: {}", kinds::NOT_READABLE, path.display())
+        }
+        _ => anyhow::Error::new(error).context(format!("could not open {}", path.display())),
+    }
 }
 
 #[derive(Clone, Debug)]

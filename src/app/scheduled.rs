@@ -130,6 +130,10 @@ struct Editor {
     schedule: ScheduleKind,
     time: String,
     weekdays: u8,
+    /// The stored IANA zone of the task being edited (`None` for a new
+    /// task or a pre-timezone task). Editing an existing task reuses it
+    /// unchanged; only a new task captures the current local zone.
+    timezone: Option<String>,
     once_date: String,
     interval_minutes: String,
     target: TargetKind,
@@ -141,11 +145,17 @@ struct Editor {
 
 impl Editor {
     fn for_task(task: &ScheduledTask) -> Self {
-        let (schedule, time, weekdays, once_date, interval_minutes) = match task.schedule {
-            Recurrence::AtTime { at, weekdays } => (
+        let (schedule, time, weekdays, timezone, once_date, interval_minutes) = match &task.schedule
+        {
+            Recurrence::AtTime {
+                at,
+                weekdays,
+                timezone,
+            } => (
                 ScheduleKind::AtTime,
-                format_clock(at),
+                format_clock(*at),
                 weekdays.bits(),
+                timezone.clone(),
                 String::new(),
                 "60".to_owned(),
             ),
@@ -153,15 +163,17 @@ impl Editor {
                 ScheduleKind::Every,
                 "09:00".to_owned(),
                 Weekdays::every_day().bits(),
+                None,
                 String::new(),
                 (interval_secs / 60).max(1).to_string(),
             ),
             Recurrence::Once { at } => {
-                let (date, clock) = format_once_parts(at);
+                let (date, clock) = format_once_parts(*at);
                 (
                     ScheduleKind::Once,
                     clock,
                     Weekdays::every_day().bits(),
+                    None,
                     date,
                     "60".to_owned(),
                 )
@@ -200,6 +212,7 @@ impl Editor {
             schedule,
             time,
             weekdays,
+            timezone,
             once_date,
             interval_minutes,
             target,
@@ -228,7 +241,19 @@ impl Editor {
                     parse_clock(&self.time).ok_or_else(|| tr!("scheduled_tasks.error_time"))?;
                 let weekdays = Weekdays::new(self.weekdays)
                     .map_err(|_| tr!("scheduled_tasks.error_weekdays"))?;
-                Recurrence::AtTime { at, weekdays }
+                // An existing task keeps its stored zone (possibly `None`)
+                // even when only its title, toggle or wall-clock time is
+                // edited; there is no zone-change confirmation UI yet.
+                // Only a new task captures the current local zone.
+                if self.task_id.is_some() {
+                    Recurrence::AtTime {
+                        at,
+                        weekdays,
+                        timezone: self.timezone.clone(),
+                    }
+                } else {
+                    Recurrence::at_time_local(at, weekdays)
+                }
             }
             ScheduleKind::Every => {
                 let minutes: u32 = self
@@ -430,12 +455,12 @@ fn weekday_labels(weekdays: Weekdays) -> String {
         .join(" ")
 }
 
-fn schedule_summary(schedule: Recurrence) -> String {
+fn schedule_summary(schedule: &Recurrence) -> String {
     match schedule {
-        Recurrence::AtTime { at, weekdays } => tr!(
+        Recurrence::AtTime { at, weekdays, .. } => tr!(
             "scheduled_tasks.at_time_summary",
-            days = weekday_labels(weekdays),
-            time = format_clock(at)
+            days = weekday_labels(*weekdays),
+            time = format_clock(*at)
         ),
         Recurrence::Every { interval_secs } => {
             if interval_secs % 3600 == 0 {
@@ -448,7 +473,7 @@ fn schedule_summary(schedule: Recurrence) -> String {
             }
         }
         Recurrence::Once { at } => {
-            tr!("scheduled_tasks.once_summary", time = format_once(at))
+            tr!("scheduled_tasks.once_summary", time = format_once(*at))
         }
     }
 }
@@ -1062,7 +1087,7 @@ impl ScheduledTasksView {
             title: task.title.clone(),
             prompt: task.prompt.clone(),
             enabled,
-            schedule: task.schedule,
+            schedule: task.schedule.clone(),
             target: task.target.clone(),
         };
         self.send(

@@ -80,7 +80,7 @@ impl<'de> Deserialize<'de> for Weekdays {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -88,7 +88,16 @@ impl<'de> Deserialize<'de> for Weekdays {
 )]
 pub enum Recurrence {
     Every { interval_secs: u32 },
-    AtTime { at: ClockTime, weekdays: Weekdays },
+    AtTime {
+        at: ClockTime,
+        weekdays: Weekdays,
+        /// IANA wall-clock zone captured when the task was created (for
+        /// example `Asia/Shanghai`). `None` is a pre-timezone task and keeps
+        /// the daemon's previous `Local` interpretation; it is never silently
+        /// rewritten to the current zone.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timezone: Option<String>,
+    },
     Once { at: u64 },
 }
 
@@ -102,12 +111,25 @@ impl<'de> Deserialize<'de> for Recurrence {
         )]
         enum Wire {
             Every { interval_secs: u32 },
-            AtTime { at: ClockTime, weekdays: Weekdays },
+            AtTime {
+                at: ClockTime,
+                weekdays: Weekdays,
+                #[serde(default)]
+                timezone: Option<String>,
+            },
             Once { at: u64 },
         }
         let recurrence = match Wire::deserialize(deserializer)? {
             Wire::Every { interval_secs } => Self::Every { interval_secs },
-            Wire::AtTime { at, weekdays } => Self::AtTime { at, weekdays },
+            Wire::AtTime {
+                at,
+                weekdays,
+                timezone,
+            } => Self::AtTime {
+                at,
+                weekdays,
+                timezone,
+            },
             Wire::Once { at } => Self::Once { at },
         };
         recurrence.validate().map_err(D::Error::custom)?;
@@ -118,6 +140,18 @@ impl<'de> Deserialize<'de> for Recurrence {
 impl Recurrence {
     pub fn is_once(&self) -> bool {
         matches!(self, Self::Once { .. })
+    }
+
+    /// Builds a wall-clock schedule that remembers the machine's current IANA
+    /// zone. Creation paths use this so a new task keeps its zone even if the
+    /// machine later moves regions; when the zone cannot be determined the
+    /// schedule stays zone-less and computes against `Local` as before.
+    pub fn at_time_local(at: ClockTime, weekdays: Weekdays) -> Self {
+        Self::AtTime {
+            at,
+            weekdays,
+            timezone: local_iana_timezone_name(),
+        }
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -133,6 +167,16 @@ impl Recurrence {
             if i64::try_from(*at).is_err() {
                 return Err("One-time run time is out of range".into());
             }
+        }
+        if let Self::AtTime {
+            timezone: Some(name),
+            ..
+        } = self
+            && name.parse::<chrono_tz::Tz>().is_err()
+        {
+            return Err(format!(
+                "Unknown time zone '{name}'; expected an IANA name such as Asia/Shanghai"
+            ));
         }
         Ok(())
     }
@@ -150,33 +194,70 @@ impl Recurrence {
             }
             return Err("One-time run is in the past".into());
         }
-        let Self::AtTime { at, weekdays } = self else {
+        let Self::AtTime {
+            at,
+            weekdays,
+            timezone,
+        } = self
+        else {
             unreachable!()
         };
-        let timestamp = i64::try_from(after).map_err(|_| "Timestamp is out of range")?;
-        let mut date = Local
-            .timestamp_opt(timestamp, 0)
-            .earliest()
-            .ok_or("Timestamp has no local representation")?
-            .date_naive();
-        for _ in 0..15 {
-            if weekdays.contains(date.weekday())
-                && let Some(next) = occurrence_on(date, *at)
-                && next > after
-            {
-                return Ok(next);
+        match timezone {
+            // Pre-timezone tasks keep the previous behavior: the wall clock
+            // is read in the daemon's current local zone.
+            None => next_due_at_time(Local, *at, *weekdays, after),
+            // A stored zone is authoritative. An unknown name is an explicit
+            // error; it never falls back to the local zone.
+            Some(name) => {
+                let zone: chrono_tz::Tz = name.parse().map_err(|_| {
+                    format!(
+                        "Unknown time zone '{name}'; expected an IANA name such as Asia/Shanghai"
+                    )
+                })?;
+                next_due_at_time(zone, *at, *weekdays, after)
             }
-            date = date.succ_opt().ok_or("Calendar date exceeds its range")?;
         }
-        Err("No valid scheduled day was found".into())
     }
 }
 
-fn occurrence_on(date: NaiveDate, at: ClockTime) -> Option<u64> {
+/// This machine's IANA zone name (for example `Asia/Shanghai`), or `None`
+/// when the platform does not report a usable one. `chrono-tz` only accepts
+/// real IANA names, so anything else is dropped rather than persisted.
+pub fn local_iana_timezone_name() -> Option<String> {
+    let name = iana_time_zone::get_timezone().ok()?;
+    name.parse::<chrono_tz::Tz>().ok()?;
+    Some(name)
+}
+
+fn next_due_at_time<Zone: TimeZone>(
+    zone: Zone,
+    at: ClockTime,
+    weekdays: Weekdays,
+    after: u64,
+) -> Result<u64, String> {
+    let timestamp = i64::try_from(after).map_err(|_| "Timestamp is out of range")?;
+    let mut date = zone
+        .timestamp_opt(timestamp, 0)
+        .earliest()
+        .ok_or("Timestamp has no representation in its time zone")?
+        .date_naive();
+    for _ in 0..15 {
+        if weekdays.contains(date.weekday())
+            && let Some(next) = occurrence_on_in(&zone, date, at)
+            && next > after
+        {
+            return Ok(next);
+        }
+        date = date.succ_opt().ok_or("Calendar date exceeds its range")?;
+    }
+    Err("No valid scheduled day was found".into())
+}
+
+fn occurrence_on_in<Zone: TimeZone>(zone: &Zone, date: NaiveDate, at: ClockTime) -> Option<u64> {
     for minute in at.minutes()..1440 {
         let local = date.and_hms_opt(u32::from(minute / 60), u32::from(minute % 60), 0)?;
         // A repeated hour has one occurrence. A missing minute advances on the same day.
-        if let Some(instant) = Local.from_local_datetime(&local).earliest()
+        if let Some(instant) = zone.from_local_datetime(&local).earliest()
             && let Ok(seconds) = u64::try_from(instant.timestamp())
         {
             return Some(seconds);

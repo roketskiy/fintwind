@@ -96,6 +96,7 @@ impl ScheduledTasksView {
                 schedule: ScheduleKind::AtTime,
                 time: "09:00".into(),
                 weekdays: 0,
+                timezone: None,
                 once_date: Local::now().format("%Y-%m-%d").to_string(),
                 interval_minutes: "60".into(),
                 target: TargetKind::NewSession,

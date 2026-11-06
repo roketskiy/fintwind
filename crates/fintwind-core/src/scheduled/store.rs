@@ -32,7 +32,7 @@ impl StoredTask {
             title: self.title.clone(),
             prompt: self.prompt.clone(),
             enabled,
-            schedule: self.schedule,
+            schedule: self.schedule.clone(),
             target: self.target.clone(),
         }
     }
@@ -96,6 +96,18 @@ impl ScheduledStore {
         match edit {
             ScheduledTaskEdit::Create { draft } => {
                 draft.validate().map_err(anyhow::Error::msg)?;
+                let mut draft = draft;
+                // A creation without a zone (for example from a client that
+                // predates time-zone capture) still records the daemon host's
+                // current IANA zone, so every new row carries its zone.
+                if let Recurrence::AtTime {
+                    at,
+                    weekdays,
+                    timezone: None,
+                } = &draft.schedule
+                {
+                    draft.schedule = Recurrence::at_time_local(*at, *weekdays);
+                }
                 let next_due_at = next_due(&draft, now)?;
                 let stored = StoredTask {
                     title: draft.title.clone(),
@@ -138,6 +150,22 @@ impl ScheduledStore {
                 };
                 if revision != expected_revision {
                     bail!("This scheduled task was changed by another client");
+                }
+                let mut draft = draft;
+                // An update from a client that predates time-zone capture must
+                // not wipe a stored zone (for example a plain enable/disable
+                // toggle from an old desktop only resends a zone-less draft).
+                if let Recurrence::AtTime {
+                    timezone: draft_zone,
+                    ..
+                } = &mut draft.schedule
+                    && draft_zone.is_none()
+                    && let Recurrence::AtTime {
+                        timezone: Some(stored_zone),
+                        ..
+                    } = &stored.schedule
+                {
+                    *draft_zone = Some(stored_zone.clone());
                 }
                 let next_due_at = if !draft.enabled {
                     None
@@ -237,7 +265,7 @@ impl ScheduledStore {
             }
             let mut stored: StoredTask = serde_json::from_str(&data)?;
             let due_at = seconds(due_at)?;
-            if missed(now, due_at, stored.schedule) {
+            if missed(now, due_at, &stored.schedule) {
                 stored.last = Some(DispatchRecord {
                     due_at,
                     at: now,
@@ -536,7 +564,7 @@ fn decode_task(
         title: stored.title,
         prompt: stored.prompt,
         enabled: enabled != 0,
-        schedule: stored.schedule,
+        schedule: stored.schedule.clone(),
         target: stored.target,
         next_due_at: next_due_at.map(seconds).transpose()?,
         created_at: stored.created_at,
@@ -647,7 +675,7 @@ fn next_due(draft: &ScheduledTaskDraft, now: u64) -> Result<Option<u64>> {
     }
 }
 
-fn missed(now: u64, due_at: u64, schedule: Recurrence) -> bool {
+fn missed(now: u64, due_at: u64, schedule: &Recurrence) -> bool {
     matches!(
         schedule,
         Recurrence::AtTime { .. } | Recurrence::Once { .. }

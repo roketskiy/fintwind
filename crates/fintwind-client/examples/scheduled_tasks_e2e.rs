@@ -1035,7 +1035,11 @@ fn protocol_checks(checks: &mut Checks) -> anyhow::Result<()> {
     }
     let at = ClockTime::new(1, 30).map_err(anyhow::Error::msg)?;
     let weekdays = Weekdays::new(5).map_err(anyhow::Error::msg)?;
-    let at_time = Recurrence::AtTime { at, weekdays };
+    let at_time = Recurrence::AtTime {
+        at,
+        weekdays,
+        timezone: None,
+    };
     let wire = serde_json::to_string(&at_time)?;
     if wire != r#"{"kind":"atTime","at":90,"weekdays":5}"# {
         bail!("the fixed-time wire shape is {wire}");
@@ -1060,6 +1064,7 @@ fn protocol_checks(checks: &mut Checks) -> anyhow::Result<()> {
     let daily = Recurrence::AtTime {
         at: daily_at,
         weekdays: Weekdays::every_day(),
+        timezone: None,
     };
     let first = daily.next_due(anchor).map_err(anyhow::Error::msg)?;
     if first <= anchor || first % 60 != 0 || first - anchor > 15 * 86_400 {
@@ -1077,6 +1082,7 @@ fn protocol_checks(checks: &mut Checks) -> anyhow::Result<()> {
     let weekly = Recurrence::AtTime {
         at: weekly_at,
         weekdays: weekly_days,
+        timezone: None,
     };
     let first = weekly.next_due(anchor).map_err(anyhow::Error::msg)?;
     let next = weekly.next_due(first).map_err(anyhow::Error::msg)?;
@@ -1157,7 +1163,7 @@ fn edited_draft(
         title: task.title.clone(),
         prompt: task.prompt.clone(),
         enabled: task.enabled,
-        schedule: task.schedule,
+        schedule: task.schedule.clone(),
         target: task.target.clone(),
     };
     change(&mut draft);

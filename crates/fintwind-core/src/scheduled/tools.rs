@@ -102,10 +102,7 @@ impl CreateTask {
                     }
                     bits |= bit;
                 }
-                Recurrence::AtTime {
-                    at,
-                    weekdays: Weekdays::new(bits).map_err(anyhow::Error::msg)?,
-                }
+                Recurrence::at_time_local(at, Weekdays::new(bits).map_err(anyhow::Error::msg)?)
             }
             Schedule::Once { at } => Recurrence::Once {
                 at: parse_once_at(&at)?,

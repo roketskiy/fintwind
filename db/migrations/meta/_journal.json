@@ -71,6 +71,13 @@
       "when": 1792512572538,
       "tag": "0009_big_starbolt",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1794000004000,
+      "tag": "0012_steady_operation",
+      "breakpoints": true
     }
   ]
 }

@@ -510,6 +510,15 @@ pub fn execute(operation: WorkspaceOperation) -> anyhow::Result<WorkspaceResult>
             cancel_git_request(query_id)?;
             WorkspaceResult::Ack
         }
+        // Journaled project operations need the daemon's operation journal
+        // and owner identity, which this pure filesystem/Git entry point does
+        // not have. They run on the daemon request path through the project
+        // creation handler instead; reaching them here is a wiring error, not
+        // a caller-retryable state.
+        WorkspaceOperation::CreateEmptyProject { .. }
+        | WorkspaceOperation::GetProjectOperation { .. } => {
+            bail!("project operations run on the daemon request path with the operation journal")
+        }
     })
 }
 

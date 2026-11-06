@@ -59,6 +59,11 @@ pub struct FintwindBackend {
     pub(crate) scheduled_done: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
     pub(crate) scheduled_cursor: AtomicUsize,
     pub(crate) scheduled_owner: Uuid,
+    /// Per-process owner identity for journaled local project operations
+    /// (F05). Names this daemon instance as the row owner so the journal's
+    /// owner plus compare-and-swap gate keeps working; it proves nothing
+    /// about liveness and is never read from the wire.
+    operation_owner: Uuid,
     system_channel: Mutex<Option<SystemChannel>>,
     scheduler_lock: Mutex<Option<std::fs::File>>,
     self_weak: OnceLock<Weak<Self>>,
@@ -157,6 +162,7 @@ impl FintwindBackend {
             scheduled_done: Mutex::new(None),
             scheduled_cursor: AtomicUsize::new(0),
             scheduled_owner: Uuid::new_v4(),
+            operation_owner: Uuid::new_v4(),
             system_channel: Mutex::new(None),
             scheduler_lock: Mutex::new(None),
             self_weak: OnceLock::new(),
@@ -2198,18 +2204,17 @@ impl Backend for FintwindBackend {
                 provider_id,
                 force,
             } => {
-                let quota = if fintwind_protocol::provider_quota::is_local_quota_source(
-                    &provider_id,
-                ) {
-                    // Claude/Codex subscriptions live on this machine, not in
-                    // the workspace's OpenCode server: no remote IPC carries
-                    // them, whatever workspace is selected.
-                    self.provider_quotas.fetch_local(&provider_id, force)
-                } else {
-                    let server = crate::opencode_pool::acquire(&binary, &directory)?;
-                    self.provider_quotas
-                        .fetch_from_server(&server, &provider_id, force)
-                };
+                let quota =
+                    if fintwind_protocol::provider_quota::is_local_quota_source(&provider_id) {
+                        // Claude/Codex subscriptions live on this machine, not in
+                        // the workspace's OpenCode server: no remote IPC carries
+                        // them, whatever workspace is selected.
+                        self.provider_quotas.fetch_local(&provider_id, force)
+                    } else {
+                        let server = crate::opencode_pool::acquire(&binary, &directory)?;
+                        self.provider_quotas
+                            .fetch_from_server(&server, &provider_id, force)
+                    };
                 Ok(ResponsePayload::ProviderQuota { quota })
             }
             Command::StoreCustomProviderKey {
@@ -2365,6 +2370,34 @@ impl Backend for FintwindBackend {
                 result: WorkspaceResult::Checkpoint {
                     checkpoint: self.capture_turn_checkpoint(cwd, session_id, turn_count)?,
                 },
+            }),
+            Command::Workspace {
+                operation:
+                    WorkspaceOperation::CreateEmptyProject {
+                        operation_id,
+                        parent_dir,
+                        project_name,
+                    },
+            } => Ok(ResponsePayload::Workspace {
+                // Journaled local directory creation: runs on this request
+                // thread (never render), always as the local environment
+                // built inside the handler. No Git init, no remote work.
+                result: crate::project_create::handle_create_operation(
+                    &self.task_store,
+                    self.operation_owner,
+                    operation_id,
+                    &parent_dir,
+                    &project_name,
+                )?,
+            }),
+            Command::Workspace {
+                operation: WorkspaceOperation::GetProjectOperation { operation_id },
+            } => Ok(ResponsePayload::Workspace {
+                // Read-only status query: no write, cleanup, or retry.
+                result: crate::project_create::handle_get_operation(
+                    &self.task_store,
+                    operation_id,
+                )?,
             }),
             Command::Workspace { operation } => Ok(ResponsePayload::Workspace {
                 result: crate::workspace::execute(operation)?,

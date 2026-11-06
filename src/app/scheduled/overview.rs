@@ -162,7 +162,7 @@ impl ScheduledTasksView {
         let target = &self.task_targets[task_index];
         let mut metadata = format!(
             "{target} · {} · {}",
-            schedule_summary(task.schedule),
+            schedule_summary(&task.schedule),
             if enabled {
                 next_due_label(task)
             } else {

@@ -87,17 +87,22 @@ pub(super) fn verify(
     else {
         bail!("the MCP task ignored the explicit new-session target");
     };
+    let expected_at = ClockTime::new(9, 15).map_err(anyhow::Error::msg)?;
+    let expected_weekdays = Weekdays::new((1 << 1) | (1 << 5)).map_err(anyhow::Error::msg)?;
+    // A daemon-created fixed-time task captures its IANA zone; only the
+    // wall-clock values are pinned here because the zone depends on the host.
+    let schedule_ok = matches!(
+        &new_task.schedule,
+        Recurrence::AtTime { at, weekdays, timezone }
+        if *at == expected_at && *weekdays == expected_weekdays && timezone.is_some()
+    );
     if *project_id != project.id
         || launch.model != FIXTURE_MODEL
         || launch.runtime_mode != RuntimeMode::FullAccess
         || *workspace != SessionWorkspace::Local
         || new_task.next_due_at.is_some()
         || new_task.enabled
-        || new_task.schedule
-            != (Recurrence::AtTime {
-                at: ClockTime::new(9, 15).map_err(anyhow::Error::msg)?,
-                weekdays: Weekdays::new((1 << 1) | (1 << 5)).map_err(anyhow::Error::msg)?,
-            })
+        || !schedule_ok
     {
         bail!("the MCP new-session task lost confirmed settings: {new_task:?}");
     }

@@ -56,6 +56,7 @@ pub mod opencode_pool;
 pub mod opencode_session;
 mod operation_journal;
 pub mod persistence;
+mod project_create;
 pub mod projectless;
 pub mod provider_quota;
 pub mod local_quota;

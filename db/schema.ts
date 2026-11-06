@@ -196,3 +196,50 @@ export const scheduledOccurrences = sqliteTable(
       .where(sql`"manual" = 0`),
   ],
 );
+
+/**
+ * Durable intent journal for daemon-owned filesystem writes: directory
+ * creation (F05) and repository clone (F04).
+ *
+ * A caller registers its stable operation UUID, its explicit environment
+ * identity, and its owning instance *before* any write or subprocess starts,
+ * then moves the row through preparing -> running -> a terminal state with
+ * an owner-plus-revision compare-and-swap. Terminal states never leave;
+ * rows left unfinished by a crash or lost response stay unfinished and read
+ * back as needing reconciliation — never auto-retried, never auto-marked.
+ *
+ * The row carries routing facts only. It never stores Git credentials or
+ * tokens, repository URLs, command output, exception text, passwords, key
+ * paths, proxy commands, or process ids. Failures keep a fixed small
+ * category plus an integer exit code, both safe to persist and display.
+ */
+export const filesystemOperations = sqliteTable(
+  "filesystem_operations",
+  {
+    id: text("id").primaryKey(),
+    /** Owning environment; currently local-only, never defaulted. */
+    environmentId: text("environment_id").notNull(),
+    /** Registering instance; only this owner may transition the row. */
+    ownerId: text("owner_id").notNull(),
+    /** `mkdir` or `clone`. */
+    kind: text("kind").notNull(),
+    /** Canonical final path on the owning environment's host. */
+    targetPath: text("target_path").notNull(),
+    /** preparing | running | succeeded | failed | unknown | cancelled. */
+    state: text("state").notNull(),
+    /** Bumped on every transition; stale results lose the CAS. */
+    revision: integer("revision").notNull(),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+    /** Fixed small failure category; never free-form external text. */
+    failureKind: text("failure_kind"),
+    /** Process exit code carried with a failure, if any. */
+    exitCode: integer("exit_code"),
+  },
+  (table) => [
+    index("filesystem_operations_by_environment").on(
+      table.environmentId,
+      table.updatedAt,
+    ),
+  ],
+);

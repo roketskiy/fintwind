@@ -41,6 +41,82 @@ pub mod directory_browse {
     }
 }
 
+/// Stable rejection and failure kinds for the local empty-project journal
+/// RPC ([`WorkspaceOperation::CreateEmptyProject`] and
+/// [`WorkspaceOperation::GetProjectOperation`]).
+///
+/// They travel as the prefix of the daemon's error message
+/// (`"<kind>: <detail>"`), because `RpcError` carries only a message, or as
+/// the `failure_kind` of a settled failure, because that row is terminal.
+/// `detail` is fixed daemon text and never reflects caller input, daemon
+/// paths, raw OS errors, subprocess output, or credentials. The terminal
+/// failure tags mirror the journal's fixed categories byte-for-byte; the
+/// `local` in their meaning is that this daemon's own machine executed the
+/// write, never a remote environment.
+pub mod project_operation {
+    /// The project name is not a single valid path segment.
+    pub const INVALID_NAME: &str = "invalid_name";
+    /// The parent directory cannot be used (empty, unresolvable, or not
+    /// storable as text). Missing and unreadable parents carry the narrower
+    /// [`PARENT_MISSING`] and [`PARENT_NOT_WRITABLE`] kinds instead.
+    pub const INVALID_PARENT: &str = "invalid_parent";
+    /// Parent plus name do not form a storable target path.
+    pub const INVALID_TARGET: &str = "invalid_target";
+    /// The operation ID is already registered. Nothing was executed; the
+    /// caller must reconcile the old row and retry with a fresh ID, never by
+    /// reusing this one.
+    pub const DUPLICATE_OPERATION: &str = "duplicate_operation";
+    /// The journal is full or otherwise unavailable. Nothing was executed.
+    pub const JOURNAL_UNAVAILABLE: &str = "journal_unavailable";
+    /// No operation with this ID is registered locally. Missing rows and rows
+    /// under any other environment share this one answer, so a query reveals
+    /// nothing about other environments.
+    pub const NOT_REGISTERED: &str = "operation_not_registered";
+    /// The final path already exists. Recorded as a terminal failure; the
+    /// directory is left untouched, never overwritten or adopted as success.
+    pub const TARGET_EXISTS: &str = "target_exists";
+    /// The parent directory does not exist. Parents are never created.
+    pub const PARENT_MISSING: &str = "parent_missing";
+    /// The parent directory cannot be read.
+    pub const PARENT_NOT_WRITABLE: &str = "parent_not_writable";
+    /// A Git executable the operation needed is not available.
+    pub const GIT_NOT_AVAILABLE: &str = "git_not_available";
+    /// The operation needs an interaction the caller did not authorize.
+    pub const AUTH_REQUIRED: &str = "auth_required";
+    /// The network the operation needed is unreachable.
+    pub const NETWORK_UNREACHABLE: &str = "network_unreachable";
+    /// A remote step the operation needed failed.
+    pub const REMOTE_FAILED: &str = "remote_failed";
+    /// The write was interrupted before its effect could be proven.
+    pub const INTERRUPTED: &str = "interrupted";
+    /// The daemon cannot classify the failure more narrowly.
+    pub const INTERNAL: &str = "internal";
+
+    const ALL: &[&str] = &[
+        INVALID_NAME,
+        INVALID_PARENT,
+        INVALID_TARGET,
+        DUPLICATE_OPERATION,
+        JOURNAL_UNAVAILABLE,
+        NOT_REGISTERED,
+        TARGET_EXISTS,
+        PARENT_MISSING,
+        PARENT_NOT_WRITABLE,
+        GIT_NOT_AVAILABLE,
+        AUTH_REQUIRED,
+        NETWORK_UNREACHABLE,
+        REMOTE_FAILED,
+        INTERRUPTED,
+        INTERNAL,
+    ];
+
+    /// Extract the failure kind from a daemon error message, if it carries one.
+    pub fn kind_of(message: &str) -> Option<&str> {
+        let (kind, _) = message.split_once(": ")?;
+        ALL.iter().copied().find(|known| *known == kind)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ReviewDiffSource {
@@ -345,6 +421,46 @@ pub enum WorkspaceOperation {
     CancelGitQuery {
         query_id: Uuid,
     },
+    /// Journaled creation of one empty project directory on this daemon's own
+    /// machine (F05, local only).
+    ///
+    /// The caller mints a stable `operation_id` for its attempt; after the
+    /// caller reconciles a finished or unknown row, a retry mints a fresh ID
+    /// because the journal rejects ID reuse before any filesystem write.
+    /// `parent_dir` names an explicit already-existing parent on the daemon
+    /// host and `project_name` is one path segment with the same rules as the
+    /// local directory creator (no `.`/`..`, no separators or NUL, no
+    /// trailing space or dot; CJK, spaces, `@` and `#` pass through as path
+    /// data). There is deliberately no environment field: the daemon always
+    /// runs this as its local environment and never treats a caller string,
+    /// alias, or path as an environment. There is no `init_git` field on
+    /// purpose: Git initialization is a separate future journaled step, and
+    /// nothing here may look like it.
+    ///
+    /// The daemon answers with [`WorkspaceResult::ProjectOperation`]:
+    /// `succeeded` proves this call created the directory, `failed` is a
+    /// terminal failure whose directory (when present) is retained and must
+    /// be inspected rather than deleted or overwritten, and
+    /// `needsReconciliation`/`unknown` means the effect cannot be proven, so
+    /// the caller must query [`Self::GetProjectOperation`] and inspect the
+    /// filesystem instead of retrying the write or treating a pre-existing
+    /// directory as this call's success. Errors before any write carry a
+    /// [`project_operation`] kind and mean nothing was executed.
+    CreateEmptyProject {
+        operation_id: Uuid,
+        parent_dir: PathBuf,
+        project_name: String,
+    },
+    /// Read-only point-in-time reading of one journaled project operation on
+    /// this daemon's own machine.
+    ///
+    /// Always scoped to the daemon's local environment; an ID registered
+    /// nowhere locally reads back as [`project_operation::NOT_REGISTERED`]
+    /// without revealing anything about other environments. The query
+    /// performs no write, cleanup, or retry.
+    GetProjectOperation {
+        operation_id: Uuid,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -453,4 +569,39 @@ pub enum WorkspaceResult {
         #[serde(default)]
         truncated: bool,
     },
+    /// Point-in-time reading of one journaled local empty-project operation.
+    ///
+    /// `path` is the journaled canonical target: for `succeeded` the
+    /// directory this call created; for `failed` the directory that may
+    /// already exist or have been left behind, which the caller must inspect
+    /// (offering the existing-directory flow) rather than delete, overwrite,
+    /// or adopt as success; for `needsReconciliation` or `unknown` the last
+    /// journaled target to reconcile with [`WorkspaceOperation::GetProjectOperation`]
+    /// plus a filesystem inspection, never with a blind rewrite.
+    /// `failure_kind` carries a [`project_operation`] kind for `failed` rows
+    /// and is absent otherwise.
+    ProjectOperation {
+        operation_id: Uuid,
+        state: ProjectOperationState,
+        path: PathBuf,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure_kind: Option<String>,
+    },
+}
+
+/// Honest lifecycle position of one journaled local project operation.
+///
+/// The first four are settled journal states and never leave; `Unknown` is a
+/// terminal row whose effect could not be proven, not a missing row.
+/// `NeedsReconciliation` means the row is not settled and, without owner or
+/// lease proof, no liveness may be claimed: whoever can inspect the
+/// filesystem must reconcile before deciding anything.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProjectOperationState {
+    Succeeded,
+    Failed,
+    Cancelled,
+    Unknown,
+    NeedsReconciliation,
 }

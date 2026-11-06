@@ -33,7 +33,9 @@
 //!   initialize Git.
 //! - No remote environments. Only [`OperationEnvironment::local`] is
 //!   accepted; anything else is refused, never defaulted to local. There is
-//!   no network entry, no new RPC variant, and no "current machine" global.
+//!   no network entry and no "current machine" global, and the RPC entry
+//!   point below takes no environment field at all, so no caller string,
+//!   alias, or path can be mistaken for one.
 //! - No automatic recovery, retry, or cleanup. `Unknown` rows stay in the
 //!   journal as evidence; no delete path exists here. A dropped response, an
 //!   interrupted process, or a restart must reconcile via
@@ -45,10 +47,11 @@
 //!   filesystem, so only a daemon background or request thread may call it;
 //!   it must never run synchronously inside render.
 //!
-//! Current callers: none. The future daemon empty-project handler
-//! (background/request thread) will own the single call site; until it
-//! exists this module is compiled but uncalled, exactly like the journal
-//! layer it builds on.
+//! The daemon request path owns the single execution call site through
+//! [`handle_create_operation`] (background/request thread only, never
+//! render); [`handle_get_operation`] is the matching read-only status query.
+//! This batch is local empty-directory creation plus status queries only: Git
+//! initialization and remote projects stay future work.
 
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -58,9 +61,10 @@ use uuid::Uuid;
 
 use crate::operation_journal::{
     self, FailureKind, NewOperation, OperationEnvironment, OperationFailure, OperationKind,
-    OperationRecord, OperationState, OperationTransition,
+    OperationReadStatus, OperationRecord, OperationState, OperationTransition, read_status,
 };
 use crate::persistence::StateStore;
+use fintwind_protocol::workspace::{ProjectOperationState, WorkspaceResult};
 
 /// Honest outcome of one journaled directory creation.
 ///
@@ -453,4 +457,209 @@ fn verify_parent_dir(parent: &Path) -> anyhow::Result<PathBuf> {
         bail!("not_a_directory: the parent path is not a directory");
     }
     Ok(resolved)
+}
+
+/// Daemon request-path entry point for `WorkspaceOperation::CreateEmptyProject`.
+///
+/// Local-only: the environment is always [`OperationEnvironment::local`],
+/// built here rather than read from the wire, so no caller-supplied string,
+/// alias, or path can route this write. Only a daemon background or request
+/// thread may call this; it blocks on SQLite and the filesystem and must
+/// never run on a render thread. No Git initialization happens here.
+///
+/// Every pre-write failure (validation, duplicate ID, journal admission)
+/// becomes a fixed [`project_operation`](fintwind_protocol::workspace::project_operation)
+/// kind: nothing was executed, and the caller may reconcile the old row and
+/// retry with a fresh operation ID, never by reusing this one. Terminal and
+/// unknown outcomes arrive as [`WorkspaceResult::ProjectOperation`] states,
+/// never as errors, so the caller can tell proven success, proven failure,
+/// and unproven results apart.
+pub(crate) fn handle_create_operation(
+    store: &StateStore,
+    owner: Uuid,
+    operation_id: Uuid,
+    parent_dir: &Path,
+    project_name: &str,
+) -> anyhow::Result<WorkspaceResult> {
+    let environment = OperationEnvironment::local();
+    match create_empty_project(
+        store,
+        &environment,
+        owner,
+        operation_id,
+        parent_dir,
+        project_name,
+    ) {
+        Ok(ProjectCreateOutcome::Created(record)) => Ok(WorkspaceResult::ProjectOperation {
+            operation_id: record.id,
+            state: ProjectOperationState::Succeeded,
+            path: record.target_path,
+            failure_kind: None,
+        }),
+        Ok(ProjectCreateOutcome::Failed(record)) => {
+            let kind = record
+                .failure
+                .map(|failure| failure_kind_wire(failure.kind))
+                .unwrap_or(fintwind_protocol::workspace::project_operation::INTERNAL);
+            Ok(WorkspaceResult::ProjectOperation {
+                operation_id: record.id,
+                state: ProjectOperationState::Failed,
+                path: record.target_path,
+                failure_kind: Some(kind.to_string()),
+            })
+        }
+        Ok(ProjectCreateOutcome::Unknown { record, .. }) => Ok(status_result(&record)),
+        Err(error) => Err(pre_write_error(&error)),
+    }
+}
+
+/// Daemon request-path entry point for `WorkspaceOperation::GetProjectOperation`.
+///
+/// Read-only and always local: looks the ID up under
+/// [`OperationEnvironment::local`] and reports the journal's
+/// `NeedsReconciliation`/`Settled` reading (or the equivalent state) without
+/// revealing anything about other environments. A missing row and a row
+/// under another environment share one fixed answer. The query performs no
+/// write, cleanup, or retry; reconciling an unproven row is the caller's job
+/// together with a filesystem inspection.
+pub(crate) fn handle_get_operation(
+    store: &StateStore,
+    operation_id: Uuid,
+) -> anyhow::Result<WorkspaceResult> {
+    use fintwind_protocol::workspace::project_operation as kinds;
+    let environment = OperationEnvironment::local();
+    let record = get_project_operation(store, &environment, operation_id).map_err(|_| {
+        anyhow::anyhow!(
+            "{}: the operation journal is unavailable",
+            kinds::JOURNAL_UNAVAILABLE
+        )
+    })?;
+    let Some(record) = record else {
+        bail!("{}: the operation is not registered", kinds::NOT_REGISTERED);
+    };
+    Ok(status_result(&record))
+}
+
+/// Renders one journal row as its honest point-in-time status.
+///
+/// Terminal rows pass through; anything else reads back as needing
+/// reconciliation, exactly like the journal reports it. Failure evidence
+/// travels only as the journal's fixed categories; no external text, paths
+/// beyond the journaled target, or credentials are exposed.
+fn status_result(record: &OperationRecord) -> WorkspaceResult {
+    let state = match read_status(record) {
+        OperationReadStatus::Settled(OperationState::Succeeded) => ProjectOperationState::Succeeded,
+        OperationReadStatus::Settled(OperationState::Failed) => ProjectOperationState::Failed,
+        OperationReadStatus::Settled(OperationState::Cancelled) => ProjectOperationState::Cancelled,
+        OperationReadStatus::Settled(OperationState::Unknown) => ProjectOperationState::Unknown,
+        OperationReadStatus::Settled(OperationState::Preparing | OperationState::Running)
+        | OperationReadStatus::NeedsReconciliation { .. } => {
+            ProjectOperationState::NeedsReconciliation
+        }
+    };
+    let failure_kind = if state == ProjectOperationState::Failed {
+        Some(
+            record
+                .failure
+                .map(|failure| failure_kind_wire(failure.kind))
+                .unwrap_or(fintwind_protocol::workspace::project_operation::INTERNAL)
+                .to_string(),
+        )
+    } else {
+        None
+    };
+    WorkspaceResult::ProjectOperation {
+        operation_id: record.id,
+        state,
+        path: record.target_path.clone(),
+        failure_kind,
+    }
+}
+
+/// Maps one journal failure category to its identical wire kind.
+///
+/// The wire vocabulary mirrors the journal's fixed categories one-to-one, so
+/// a stored fact is never narrowed into a different meaning. Remote-sounding
+/// categories can only arrive on rows a future remote step wrote; this local
+/// operation never performs remote work and never invents it.
+fn failure_kind_wire(kind: FailureKind) -> &'static str {
+    use fintwind_protocol::workspace::project_operation as kinds;
+    match kind {
+        FailureKind::TargetExists => kinds::TARGET_EXISTS,
+        FailureKind::ParentMissing => kinds::PARENT_MISSING,
+        FailureKind::ParentNotWritable => kinds::PARENT_NOT_WRITABLE,
+        FailureKind::GitNotAvailable => kinds::GIT_NOT_AVAILABLE,
+        FailureKind::AuthRequired => kinds::AUTH_REQUIRED,
+        FailureKind::NetworkUnreachable => kinds::NETWORK_UNREACHABLE,
+        FailureKind::RemoteFailed => kinds::REMOTE_FAILED,
+        FailureKind::Interrupted => kinds::INTERRUPTED,
+        FailureKind::Internal => kinds::INTERNAL,
+    }
+}
+
+/// Maps a pre-write failure to a fixed wire kind with fixed detail.
+///
+/// Past this point nothing has been executed: registration (and therefore
+/// any filesystem write) happens only after these checks pass, so the
+/// caller may reconcile and retry with a fresh operation ID. Matching runs
+/// on the fixed outermost message head only; any chained raw OS text is
+/// discarded and never travels, and no caller input, path, or credential is
+/// reflected.
+fn pre_write_error(error: &anyhow::Error) -> anyhow::Error {
+    use fintwind_protocol::workspace::project_operation as kinds;
+    let message = error.to_string();
+    let (kind, detail) = if message.starts_with("the project name") {
+        (
+            kinds::INVALID_NAME,
+            "the project name is not a single valid path segment",
+        )
+    } else if message.starts_with("parent_missing:") {
+        (kinds::PARENT_MISSING, "the parent directory does not exist")
+    } else if message.starts_with("parent_not_writable:") {
+        (
+            kinds::PARENT_NOT_WRITABLE,
+            "the parent directory cannot be read",
+        )
+    } else if message.starts_with("not_a_directory:") {
+        (kinds::INVALID_PARENT, "the parent path is not a directory")
+    } else if message.starts_with("the parent directory is empty") {
+        (kinds::INVALID_PARENT, "the parent directory is empty")
+    } else if message.starts_with("could not resolve the parent directory") {
+        (kinds::INTERNAL, "the parent directory cannot be resolved")
+    } else if message.starts_with("could not inspect the parent directory") {
+        (kinds::INTERNAL, "the parent directory cannot be inspected")
+    } else if message.starts_with("the operation ID is already registered") {
+        (
+            kinds::DUPLICATE_OPERATION,
+            "the operation ID is already registered; reconcile the old row and retry with a fresh ID",
+        )
+    } else if message.starts_with("the operation journal is full") {
+        (kinds::JOURNAL_UNAVAILABLE, "the operation journal is full")
+    } else if message.starts_with("the target path is not valid Unicode")
+        || message.starts_with("the target path contains NUL")
+    {
+        // The name is `&str` and therefore always Unicode and NUL-free, so a
+        // derived target that is not storable text blames the parent.
+        (
+            kinds::INVALID_PARENT,
+            "the parent directory cannot be stored",
+        )
+    } else if message.starts_with("the target path is too long") {
+        (kinds::INVALID_TARGET, "the resulting path is too long")
+    } else if message.starts_with("the target path") || message.starts_with("the project target") {
+        (kinds::INTERNAL, "the project target is invalid")
+    } else if message.starts_with("only the local environment is supported") {
+        // Defense only: the RPC entry points always build the local
+        // environment themselves and never read one from the wire, so this
+        // is unreachable except through a direct call below this layer.
+        (kinds::INTERNAL, "only the local environment is supported")
+    } else {
+        // Storage errors and anything unrecognized: fixed text only, never
+        // SQLite internals or paths.
+        (
+            kinds::JOURNAL_UNAVAILABLE,
+            "the operation journal is unavailable",
+        )
+    };
+    anyhow::anyhow!("{kind}: {detail}")
 }

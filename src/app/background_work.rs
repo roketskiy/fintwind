@@ -6,7 +6,7 @@ use crate::ui::scrollbar::Scrollable;
 use gpui::FollowMode;
 
 const MAX_BACKGROUND_OUTPUT_BYTES: usize = 512 * 1024;
-const MAX_SETTLED_BACKGROUND_ITEMS: usize = 24;
+const MAX_SETTLED_BACKGROUND_ITEMS: usize = 200;
 const OUTPUT_CACHE_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 const BACKGROUND_SUMMARY_MENU_ID: &str = "background-work-summary";
 
@@ -393,9 +393,32 @@ impl BackgroundWorkRegistry {
                 );
             }
             BackgroundWorkTranscriptEvent::Snapshot { key, transcript } => {
-                let current = self.transcripts.entry(key).or_default();
-                if current.messages.is_empty() && current.transcript_blocks.is_empty() {
-                    *current = transcript;
+                // A snapshot is authoritative for a settled child: no more
+                // deltas will arrive, so a fuller server transcript replaces
+                // a stale partial restored from disk. Live children keep
+                // streaming deltas, which a mid-stream snapshot must not
+                // clobber. An empty snapshot never clears existing content.
+                let incoming_empty =
+                    transcript.messages.is_empty() && transcript.transcript_blocks.is_empty();
+                if incoming_empty {
+                    self.transcripts.entry(key).or_default();
+                } else {
+                    let settled = self
+                        .items
+                        .get(&key)
+                        .is_some_and(|item| !item.status.is_live());
+                    let current = self.transcripts.entry(key).or_default();
+                    if current.messages.is_empty() && current.transcript_blocks.is_empty() {
+                        *current = transcript;
+                    } else if settled {
+                        let current_size =
+                            current.messages.len() + current.transcript_blocks.len();
+                        let incoming_size =
+                            transcript.messages.len() + transcript.transcript_blocks.len();
+                        if incoming_size >= current_size {
+                            *current = transcript;
+                        }
+                    }
                 }
             }
             BackgroundWorkTranscriptEvent::Finished { key, success } => {
@@ -1464,6 +1487,9 @@ impl Fintwind {
         });
         if item.key.kind == BackgroundWorkKind::Subagent {
             let viewport = registry.and_then(|registry| registry.transcript_viewports.get(key));
+            let has_transcript = registry
+                .and_then(|registry| registry.transcripts.get(key))
+                .is_some();
             let list_state = viewport
                 .map(|viewport| viewport.list.clone())
                 .unwrap_or_else(|| ListState::new(0, ListAlignment::Top, px(160.0)));
@@ -1587,18 +1613,38 @@ impl Fintwind {
                                     }
                                 })
                                 .child(md::render::frame_reset(selection.clone()))
-                                .child(
-                                    list(list_state.clone(), move |index, window, cx| {
-                                        weak.update(cx, |this, cx| {
-                                            this.render_background_transcript_row(
-                                                &row_key, index, window, cx,
-                                            )
+                                .when(has_transcript, |surface| {
+                                    surface.child(
+                                        list(list_state.clone(), move |index, window, cx| {
+                                            weak.update(cx, |this, cx| {
+                                                this.render_background_transcript_row(
+                                                    &row_key, index, window, cx,
+                                                )
+                                            })
+                                            .unwrap_or_else(|_| div().into_any_element())
                                         })
-                                        .unwrap_or_else(|_| div().into_any_element())
-                                    })
-                                    .size_full()
-                                    .py(px(8.0)),
-                                )
+                                        .size_full()
+                                        .py(px(8.0)),
+                                    )
+                                })
+                                .when(!has_transcript, |surface| {
+                                    surface.child(
+                                        div()
+                                            .size_full()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .gap(px(8.0))
+                                            .text_size(ui_px(12.0))
+                                            .text_color(theme.text_secondary)
+                                            .child(motion::spin_slow(icon(
+                                                "icons/loader-circle.svg",
+                                                14.0,
+                                                theme.text_tertiary,
+                                            )))
+                                            .child(SharedString::from(tr!("capsule.loading"))),
+                                    )
+                                })
                                 .when(!self.update_card_visible(), |surface| {
                                     surface
                                         .child(background_work_selection_input(selection.clone()))

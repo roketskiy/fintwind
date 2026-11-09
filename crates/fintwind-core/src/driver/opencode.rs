@@ -2430,12 +2430,14 @@ impl DriverControl for OpenCodeDriver {
                     }
                     match super::native::fetch_transcript_on_port(port, &child_id) {
                         Ok(transcript) => {
+                            let empty =
+                                transcript.messages.is_empty() && transcript.blocks.is_empty();
                             let _ = events.send(DriverEvent::BackgroundWork(
                                 BackgroundWorkEvent::Transcript(
                                     BackgroundWorkTranscriptEvent::Snapshot {
                                         key: BackgroundWorkKey::new(
                                             BackgroundWorkKind::Subagent,
-                                            child_id,
+                                            child_id.clone(),
                                         ),
                                         transcript: crate::model::BackgroundWorkTranscript {
                                             messages: transcript.messages,
@@ -2445,6 +2447,13 @@ impl DriverControl for OpenCodeDriver {
                                     },
                                 ),
                             ));
+                            // An empty fetch is likely a race with the server
+                            // persisting the child's first messages. Retry on
+                            // the next refresh instead of marking it done and
+                            // leaving a settled child permanently empty.
+                            if empty {
+                                transcript_hydrations.lock().remove(&child_id);
+                            }
                         }
                         Err(_) => {
                             transcript_hydrations.lock().remove(&child_id);

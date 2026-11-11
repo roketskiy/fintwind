@@ -48,13 +48,23 @@ const (
 	formPickerWidth   = 280.0
 )
 
-// skillSourceOptions mirrors the Rust source filter: every source first,
-// then the two install roots. Counts need the scan and stay out.
-func skillSourceOptions() []settingsOption {
+// skillSourceOptions mirrors the GPUI source filter: every source first,
+// then the two install roots. Counts come from the loaded catalog so an
+// empty pick is never a surprise.
+func skillSourceOptions(counts map[string]int) []settingsOption {
+	option := func(value, label string) settingsOption {
+		text := label
+		if counts != nil {
+			if n := counts[value]; n > 0 {
+				text = label + " · " + fmt.Sprint(n)
+			}
+		}
+		return settingsOption{label: text, value: value, raw: value}
+	}
 	return []settingsOption{
-		{label: "All sources", value: "", raw: "package"},
-		{label: "Shared", value: "shared", raw: "package"},
-		{label: "OpenCode", value: "opencode", raw: "package"},
+		{label: tr("All skills"), value: "", raw: ""},
+		option("shared", tr("Shared")),
+		option("opencode", "OpenCode"),
 	}
 }
 
@@ -113,41 +123,157 @@ func (a *app) providersListPane(c *ui.Context) {
 
 func (a *app) skillsListPane(c *ui.Context) {
 	st := &a.settings.catalog
+	backend := &a.settings.backend
 	ui.Column(c).FillWidth().Padding(22, 10, 8, 10).Gap(7).Children(func() {
-		settingsSearchInput(c, "skills-search", tr("Search skills"), &st.skillQuery)
-		a.settingsChoice(c, "skills-source-filter", tr("Skill source"), st.skillSource, skillsFilterWidth, skillSourceOptions(), func(option settingsOption) {
+		settingsSearchInput(c, "skills-search", tr("Search skills…"), &st.skillQuery)
+		a.settingsChoice(c, "skills-source-filter", tr("Skill source"), st.skillSource, skillsFilterWidth, skillSourceOptions(skillsSourceCounts(backend.skills)), func(option settingsOption) {
 			st.skillSource = option.value
 		})
 	})
-	backend := &a.settings.backend
 	settingsOperationStatus(c, backend.skill, "")
-	visible := make([]settingsSkill, 0, len(backend.skills))
-	for _, skill := range backend.skills {
-		if !settingsMatches(st.skillQuery, skill.Name+" "+skill.Description+" "+skill.Project) {
-			continue
+	// Mirror render_skills_settings: an unloaded catalog is a scanning
+	// state, an empty catalog is an empty state, otherwise the grouped
+	// roster. Query and source filter compose over catalog order.
+	if !backend.skill.loaded {
+		mailStatusRow(c, tr("Scanning skill folders…"))
+	}
+	visible := skillsVisible(backend.skills, st.skillQuery, st.skillSource)
+	effective := skillsEffectiveSelection(visible, backend.skillSelected)
+	effectiveKey := ""
+	if effective != nil {
+		effectiveKey = effective.key()
+	}
+	type skillRow struct {
+		key, section string
+		first        bool
+		skill        settingsSkill
+	}
+	rows := make([]skillRow, 0, len(visible))
+	var current string
+	var sectionStart = -1
+	for _, skill := range visible {
+		label := skillProjectLabel(skill)
+		if sectionStart == -1 || label != current {
+			current = label
+			sectionStart = len(rows)
+			rows = append(rows, skillRow{key: "section-" + label, section: label, first: len(rows) == 0})
 		}
-		match := st.skillSource == ""
-		for _, install := range skill.Installs {
-			if strings.EqualFold(install.Source, st.skillSource) {
-				match = true
+		rows = append(rows, skillRow{key: skill.key(), skill: skill})
+	}
+	if len(rows) != 0 {
+		// Backfill each section header with its skill count, the way
+		// backfill_section_count does after its span is known.
+		for i := 0; i < len(rows); i++ {
+			if rows[i].section == "" {
+				continue
 			}
-		}
-		if match {
-			visible = append(visible, skill)
+			count := 0
+			for j := i + 1; j < len(rows) && rows[j].section == ""; j++ {
+				count++
+			}
+			rows[i].section = rows[i].section + " " + fmt.Sprint(count)
 		}
 	}
-	c.Key("settings-skill-list")
-	ui.List(c, &backend.skillList, len(visible)).FillWidth().Grow(1).MinHeight(0).ItemKey(func(i int) any { return visible[i].key() }).Rows(func(row ui.ListRow) {
-		skill := visible[row.Index]
-		c := row.Context
-		a.mailRow(c, skill.Name, backend.skillSelected == skill.key(), func() { backend.skillSelected = skill.key(); backend.skillTrashConfirm = false }, func() { mailTile(c, "package", backend.skillSelected == skill.key()) }, func() { mailEnabledBadge(c, skill.Enabled, choice(skill.Enabled, "Enabled", "Disabled")) })
-	})
+	switch {
+	case !backend.skill.loaded && len(visible) == 0:
+		// Scanning status above stands in for the roster.
+	case len(backend.skills) == 0 && backend.skill.loaded:
+		mailStatusRow(c, tr("No skills yet"))
+	case len(rows) == 0:
+		mailStatusRow(c, tr("No skills match your search"))
+	default:
+		c.Key("settings-skill-list")
+		ui.List(c, &backend.skillList, len(rows)).FillWidth().Grow(1).MinHeight(0).ItemKey(func(i int) any { return rows[i].key }).Rows(func(row ui.ListRow) {
+			item := rows[row.Index]
+			c := row.Context
+			ui.Column(c).FillWidth().Padding(0, 8).Children(func() {
+				if item.section != "" {
+					mailSectionLabel(c, item.section, item.first)
+					return
+				}
+				a.skillRosterRow(c, item.skill, effectiveKey == item.skill.key())
+			})
+		})
+	}
 	componentTextButton(c, "settings-skills-reload", tr("Reload"), false).Disabled(backend.skill.loading || backend.skill.writing).OnClick(a.loadSettingsSkills)
-	caption := "Not loaded"
-	if backend.skill.loaded {
-		caption = fmt.Sprintf("%d skills", len(backend.skills))
+	filtered := strings.TrimSpace(st.skillQuery) != "" || st.skillSource != ""
+	mailFooter(c, skillsFooterCaption(visible, backend, filtered), true)
+}
+
+// skillRosterRow is one roster entry: the 28 tile, the 12.5 medium name,
+// and the 11.0 tertiary description-or-sources line. A disabled skill dims
+// its name and carries a Disabled badge, so the state never reads as
+// color-only.
+func (a *app) skillRosterRow(c *ui.Context, skill settingsSkill, selected bool) {
+	backend := &a.settings.backend
+	row := ui.ButtonBase(c).Label(skill.Name).FillWidth().Padding(7, 9).
+		Radius(8).Gap(9).Justify(ui.Start).AlignItems(ui.Center)
+	if selected {
+		row.Background(palette.sidebarItem)
+	} else {
+		if row.Hovered() {
+			row.Background(palette.overlay)
+		}
+		if row.Pressed() {
+			row.Background(palette.overlayStrong)
+		}
 	}
-	mailFooter(c, caption, true)
+	row.Children(func() {
+		mailTile(c, skillIconName(skill), selected)
+		ui.Column(c).Grow(1).MinWidth(0).Children(func() {
+			ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+				name := ui.Text(c, skill.Name).FontSize(uiPx(12.5)).FontWeight(500).
+					SingleLine().Ellipsis("...")
+				if skill.Enabled {
+					name.TextColor(palette.text)
+				} else {
+					name.TextColor(palette.textSecondary)
+				}
+				if !skill.Enabled {
+					mailEnabledBadge(c, false, tr("Disabled"))
+				}
+			})
+			sub := skill.Description
+			if strings.TrimSpace(sub) == "" {
+				sub = skillSourcesLabel(skill)
+			}
+			ui.Text(c, sub).FontSize(uiPx(11)).TextColor(palette.textTertiary).
+				SingleLine().Ellipsis("...").Margin(1, 0, 0, 0)
+		})
+	})
+	if row.Clicked() {
+		backend.skillSelected = skill.key()
+		backend.skillTrashConfirm = false
+	}
+}
+
+// skillsFooterCaption mirrors the GPUI roster caption: the shown/total
+// filter caption while a query or source filter is active, else the skill
+// count plus the disabled count.
+func skillsFooterCaption(visible []settingsSkill, backend *settingsBackendState, filtered bool) string {
+	if !backend.skill.loaded {
+		return tr("Scanning skill folders…")
+	}
+	total := len(backend.skills)
+	if filtered {
+		shown := fmt.Sprint(len(visible))
+		caption := strings.ReplaceAll(tr("%{shown} of %{total} shown"), "%{shown}", shown)
+		return strings.ReplaceAll(caption, "%{total}", fmt.Sprint(total))
+	}
+	if total == 1 {
+		return tr("1 skill")
+	}
+	caption := strings.ReplaceAll(tr("%{count} skills"), "%{count}", fmt.Sprint(total))
+	disabled := 0
+	for _, skill := range backend.skills {
+		if !skill.Enabled {
+			disabled++
+		}
+	}
+	if disabled > 0 {
+		caption += " · " + strings.ReplaceAll(tr("%{count} disabled"), "%{count}", fmt.Sprint(disabled))
+	}
+	return caption
 }
 
 // mcpListPane is the MCP roster: live search, Local/Remote sections hidden

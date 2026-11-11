@@ -87,14 +87,19 @@ type settingsSkillInstall struct {
 }
 
 type settingsSkill struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Scope       string                 `json:"scope"`
-	Project     string                 `json:"project"`
-	Installs    []settingsSkillInstall `json:"installs"`
-	Enabled     bool                   `json:"enabled"`
-	Body        string                 `json:"body"`
-	RowKey      uint64                 `json:"rowKey"`
+	Name            string                 `json:"name"`
+	Description     string                 `json:"description"`
+	Scope           string                 `json:"scope"`
+	Project         string                 `json:"project"`
+	Installs        []settingsSkillInstall `json:"installs"`
+	Enabled         bool                   `json:"enabled"`
+	AllowedTools    *string                `json:"allowedTools"`
+	Body            string                 `json:"body"`
+	SupportingFiles int                    `json:"supportingFiles"`
+	TotalBytes      uint64                 `json:"totalBytes"`
+	ModifiedAt      *uint64                `json:"modifiedAt"`
+	Duplicates      int                    `json:"duplicates"`
+	RowKey          uint64                 `json:"rowKey"`
 }
 
 func (s settingsSkill) key() string {
@@ -324,7 +329,10 @@ func (a *app) loadSettingsMcp() {
 	}()
 }
 
-func (a *app) mutateSettingsSkill(skill settingsSkill, trash bool) {
+// toggleSettingsSkill flips every copy of the skill keyed by its primary
+// dir, mirroring GPUI toggle_skill_enabled: the switch answers immediately
+// from the cached catalog, then SetSkillsEnabled confirms from disk.
+func (a *app) toggleSettingsSkill(skill settingsSkill, enabled bool) {
 	st := &a.settings.backend
 	if st.skill.writing || st.skill.uncertain || !st.skill.loaded {
 		return
@@ -336,17 +344,21 @@ func (a *app) mutateSettingsSkill(skill settingsSkill, trash bool) {
 	if len(dirs) == 0 {
 		return
 	}
-	source, generation := st.source, st.generation
-	command := map[string]any{"type": "setSkillsEnabled", "dirs": dirs, "enabled": !skill.Enabled}
-	if trash {
-		command["type"] = "trashSkills"
-		delete(command, "enabled")
+	for i := range st.skills {
+		if st.skills[i].key() != skill.key() {
+			continue
+		}
+		st.skills[i].Enabled = enabled
+		for j := range st.skills[i].Installs {
+			st.skills[i].Installs[j].Enabled = enabled
+		}
 	}
-	st.skill.writing, st.skill.err, st.skillTrashConfirm = true, "", false
+	source, generation := st.source, st.generation
+	st.skill.writing, st.skill.err, st.skill.message, st.skillTrashConfirm = true, "", "", false
 	go func() {
 		ctx, cancel := context.WithTimeout(a.lifetime, 45*time.Second)
 		defer cancel()
-		err := settingsRequest(ctx, source, command, "ack", nil)
+		err := settingsRequest(ctx, source, map[string]any{"type": "setSkillsEnabled", "dirs": dirs, "enabled": enabled}, "ack", nil)
 		a.post(func() {
 			if !a.settingsSourceMatches(source, generation) {
 				return
@@ -354,13 +366,70 @@ func (a *app) mutateSettingsSkill(skill settingsSkill, trash bool) {
 			st := &a.settings.backend
 			st.skill.writing = false
 			if err != nil {
-				st.skill.err = tr("Skill operation failed. Reload before retrying. ") + err.Error()
+				st.skill.err = strings.ReplaceAll(tr("Couldn't update the skill: %{error}"), "%{error}", err.Error())
 				st.skill.uncertain = true
 				return
 			}
 			a.loadSettingsSkills()
 		})
 	}()
+}
+
+// trashSettingsSkill removes every copy of the skill keyed by its primary
+// dir, mirroring GPUI delete_skill: the row leaves the roster immediately,
+// the trash runs in the background, then the library rescans from disk.
+func (a *app) trashSettingsSkill(skill settingsSkill) {
+	st := &a.settings.backend
+	if st.skill.writing || st.skill.uncertain || !st.skill.loaded {
+		return
+	}
+	dirs := make([]string, 0, len(skill.Installs))
+	for _, install := range skill.Installs {
+		dirs = append(dirs, install.Dir)
+	}
+	if len(dirs) == 0 {
+		return
+	}
+	name := skill.Name
+	kept := make([]settingsSkill, 0, len(st.skills))
+	for _, item := range st.skills {
+		if item.key() != skill.key() {
+			kept = append(kept, item)
+		}
+	}
+	st.skills = kept
+	if st.skillSelected == skill.key() {
+		st.skillSelected = ""
+	}
+	source, generation := st.source, st.generation
+	st.skill.writing, st.skill.err, st.skill.message, st.skillTrashConfirm = true, "", "", false
+	go func() {
+		ctx, cancel := context.WithTimeout(a.lifetime, 45*time.Second)
+		defer cancel()
+		err := settingsRequest(ctx, source, map[string]any{"type": "trashSkills", "dirs": dirs}, "ack", nil)
+		a.post(func() {
+			if !a.settingsSourceMatches(source, generation) {
+				return
+			}
+			st := &a.settings.backend
+			st.skill.writing = false
+			if err != nil {
+				st.skill.err = strings.ReplaceAll(tr("Couldn't delete the skill: %{error}"), "%{error}", err.Error())
+				st.skill.uncertain = true
+				return
+			}
+			st.skill.message = strings.ReplaceAll(tr("Moved \u201c%{name}\u201d to the Trash"), "%{name}", name)
+			a.loadSettingsSkills()
+		})
+	}()
+}
+
+func (a *app) mutateSettingsSkill(skill settingsSkill, trash bool) {
+	if trash {
+		a.trashSettingsSkill(skill)
+		return
+	}
+	a.toggleSettingsSkill(skill, !skill.Enabled)
 }
 
 func settingsCloneObject(value map[string]any) map[string]any {

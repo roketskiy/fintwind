@@ -21,6 +21,8 @@ func (a *app) openSettingsPage(page string) {
 		a.cancelSettingsOAuth()
 		a.clearSettingsMcpSecrets()
 		a.settings.catalog.mcpAdding = false
+		a.settings.catalog.mcpRenaming = false
+		a.settings.catalog.mcpVarActive = false
 	}
 	a.cancelProviderAdd()
 	a.mode = modeSettings

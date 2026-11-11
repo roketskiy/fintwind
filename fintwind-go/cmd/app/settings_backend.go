@@ -411,6 +411,7 @@ func (a *app) loadSettingsMcp() {
 				return
 			}
 			st.mcpServers, st.mcpRevision, st.mcp.loaded, st.mcp.uncertain = body.Servers, body.Revision, true, false
+			a.syncMcpSelectionLocked()
 			st.mcpStatuses = statuses.Statuses
 			st.mcpStatusError = ""
 			if statusErr != nil {

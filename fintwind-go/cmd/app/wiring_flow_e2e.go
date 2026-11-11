@@ -58,6 +58,7 @@ func wiringRun(ctx context.Context, r *wiringReport, round string) {
 	wiringLanguage(ctx, r, round)
 	wiringSidebarHistory(ctx, r, root)
 	wiringSkills(ctx, r, a, f, root)
+	wiringMcpSettings(ctx, r, client, f, root)
 }
 
 func wiringApp(ctx context.Context, client *daemon.Client, root string) *app {

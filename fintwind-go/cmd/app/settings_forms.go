@@ -1,6 +1,8 @@
 package main
 
 import (
+	"strings"
+
 	"github.com/egoist/mygo/ui"
 )
 
@@ -168,12 +170,31 @@ func (a *app) mcpDetail(c *ui.Context) {
 
 func (a *app) mcpAddForm(c *ui.Context) {
 	st := &a.settings.catalog
+	backend := &a.settings.backend
 	if st.mfKind == "" {
 		st.mfKind = "local"
 	}
+	name := strings.TrimSpace(st.mfName)
+	command := mcpParseCommand(st.mfCommand)
+	url := strings.TrimSpace(st.mfURL)
+	valid := name != ""
+	hint := ""
+	switch st.mfKind {
+	case "local":
+		valid = valid && len(command) != 0
+	case "remote":
+		if !mcpURLValid(url) {
+			valid = false
+			if url != "" {
+				hint = tr("Enter an HTTP or HTTPS URL")
+			}
+		}
+	default:
+		valid = false
+	}
 	ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
 		ui.Column(c).FillWidth().Padding(18, 24, 24, 24).Gap(14).Children(func() {
-			formTitle(c, choice(a.settings.backend.mcpEditing != "", tr("Edit server"), tr("Add server")))
+			formTitle(c, tr("Add an MCP server"))
 			settingsFormField(c, "mcp-form-name", tr("Name"), &st.mfName, "my-server")
 			ui.Column(c).FillWidth().Gap(6).Children(func() {
 				ui.Text(c, tr("Type")).FontSize(uiPx(11)).FontWeight(500).TextColor(palette.text)
@@ -184,24 +205,20 @@ func (a *app) mcpAddForm(c *ui.Context) {
 			if st.mfKind == "remote" {
 				settingsFormField(c, "mcp-form-url", tr("URL"), &st.mfURL, "https://example.com/mcp")
 			} else {
-				settingsFormField(c, "mcp-form-command", tr("Command arguments (JSON)"), &st.mfCommand, `["npx", "-y", "my-server"]`)
+				settingsFormField(c, "mcp-form-command", tr("Command"), &st.mfCommand, "npx -y my-server")
 			}
-			settingsFormField(c, "mcp-form-environment", tr("Environment (JSON)"), &st.mfEnvironment, `{"NAME":"value"}`)
-			if st.mfKind == "remote" {
-				settingsFormField(c, "mcp-form-headers", tr("Headers (JSON)"), &st.mfHeaders, `{"Authorization":"Bearer ..."}`)
-				a.settingsChoice(c, "mcp-form-oauth", tr("OAuth"), st.mfOAuth, formPickerWidth, []settingsOption{{label: "Automatic OAuth", value: "automatic"}, {label: "Headers only", value: "disabled"}, {label: "Custom OAuth client", value: "custom"}}, func(option settingsOption) { st.mfOAuth = option.value })
-				if st.mfOAuth == "custom" {
-					settingsFormField(c, "mcp-form-client", tr("OAuth client ID"), &st.mfClientID, "")
-					formSecretField(c, "mcp-form-client-secret", tr("OAuth client secret"), &st.mfClientSecret, &st.mfShowSecret)
-					settingsFormField(c, "mcp-form-scope", tr("OAuth scope"), &st.mfScope, "")
-				}
+			if hint != "" {
+				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+					icon(c, "info", 12, palette.textTertiary)
+					ui.Text(c, hint).FontSize(uiPx(11)).TextColor(palette.textSecondary).Wrap()
+				})
 			}
-			settingsOperationStatus(c, a.settings.backend.mcp, "")
-			formActions(c, "mcp-form", tr("Save"), !a.settings.backend.mcp.loaded || a.settings.backend.mcp.writing || a.settings.backend.mcp.uncertain, func() {
+			settingsOperationStatus(c, backend.mcp, "")
+			formActions(c, "mcp-form", tr("Add server"), !valid || !backend.mcp.loaded || backend.mcp.writing || backend.mcp.uncertain, func() {
 				st.mcpAdding = false
 				a.clearSettingsMcpSecrets()
 				a.closeSettingsMenus()
-			}, a.saveSettingsMcpForm)
+			}, a.submitMcpAddForm)
 		})
 	})
 }

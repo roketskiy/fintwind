@@ -2,8 +2,11 @@ package main
 
 import (
 	"fmt"
-	"github.com/egoist/mygo/ui"
 	"strings"
+
+	"github.com/egoist/mygo/ui"
+	lobechoice "github.com/lobehub/lobe-mygo/pkg/choice"
+	"github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 type settingsCatalogUIState struct {
@@ -34,10 +37,30 @@ type settingsCatalogUIState struct {
 	mfClientSecret    string
 	mfScope           string
 	mfShowSecret      bool
-	marketQuery       string
-	marketCat         string
-	marketSel         string
-	marketList        ui.ListState
+	// MCP detail drafts mirror the selected server's editable fields. They
+	// are synced on selection and after loads/commits; keystroke edits
+	// update the working roster immediately and debounce the save.
+	mdCommand      string
+	mdURL          string
+	mdClientID     string
+	mdClientSecret string
+	mdScope        string
+	mdRename       string
+	mcpRenaming    bool
+	// Inline variable editor: active table ("environment"/"headers"), row
+	// index for edits, and key/value drafts. mcpVarIsAdd selects the add
+	// row; otherwise mcpVarIndex edits that table row.
+	mcpVarActive bool
+	mcpVarTable  string
+	mcpVarIndex  int
+	mcpVarIsAdd  bool
+	mcpVarKey    string
+	mcpVarValue  string
+	mdCommitGeneration uint64
+	marketQuery  string
+	marketCat    string
+	marketSel    string
+	marketList   ui.ListState
 }
 
 // settingsFilterWidth is the full inner width of each roster pane: the
@@ -248,40 +271,152 @@ func skillsFooterCaption(visible []settingsSkill, backend *settingsBackendState,
 func (a *app) mcpListPane(c *ui.Context) {
 	st := &a.settings.catalog
 	backend := &a.settings.backend
-	mailPaneHeader(c, "MCP Servers")
+	mailPaneHeader(c, tr("MCP Servers"))
 	ui.Column(c).FillWidth().Padding(10, 12, 0, 12).Children(func() {
 		settingsSearchInput(c, "mcp-search", tr("Search servers"), &st.mcpQuery)
 	})
 	settingsOperationStatus(c, backend.mcp, "")
-	visible := make([]settingsMcpServer, 0, len(backend.mcpServers))
-	for _, server := range backend.mcpServers {
-		if settingsMatches(st.mcpQuery, server.Name+" "+server.Kind+" "+server.URL+" "+strings.Join(server.Command, " ")) {
-			visible = append(visible, server)
+	matches := mcpServerMatchesFunc(st.mcpQuery)
+	// Sections render as plain columns (not a virtual list) so Local/Remote
+	// headers can hide while empty like the Rust page. The roster stays
+	// small; virtualization would complicate section headers.
+	ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
+		ui.Column(c).FillWidth().Padding(0, 8, 8, 8).Gap(1).Children(func() {
+			selected := backend.mcpSelected
+			if st.mcpAdding {
+				selected = ""
+			}
+			for _, section := range []struct {
+				key  string
+				kind string
+			}{
+				{tr("Local"), "local"},
+				{tr("Remote"), "remote"},
+			} {
+				visible := make([]settingsMcpServer, 0)
+				for _, server := range backend.mcpServers {
+					if server.Kind == section.kind && matches(server) {
+						visible = append(visible, server)
+					}
+				}
+				if len(visible) == 0 {
+					continue
+				}
+				mailSectionLabel(c, section.key, false)
+				for _, server := range visible {
+					server := server
+					a.mcpRow(c, server, selected == server.Name)
+				}
+			}
+			if mailAddRow(c, tr("Add server"), st.mcpAdding) {
+				a.beginSettingsMcp()
+			}
+		})
+	})
+	componentTextButton(c, "settings-mcp-reload", tr("Reload"), false).Disabled(backend.mcp.loading || backend.mcp.writing).OnClick(a.loadSettingsMcp)
+	caption := tr("Not loaded")
+	if backend.mcp.loaded {
+		count := len(backend.mcpServers)
+		caption = fmt.Sprintf("%d servers", count)
+		if count == 0 {
+			caption = tr("No servers")
 		}
 	}
-	c.Key("settings-mcp-list")
-	ui.List(c, &backend.mcpList, len(visible)).FillWidth().Grow(1).MinHeight(0).ItemKey(func(i int) any { return visible[i].Name }).Rows(func(row ui.ListRow) {
-		server := visible[row.Index]
-		c := row.Context
-		a.mailRow(c, server.Name, backend.mcpSelected == server.Name && !st.mcpAdding, func() {
-			if backend.mcpSelected != server.Name {
-				a.cancelSettingsOAuth()
-			}
-			a.clearSettingsMcpSecrets()
-			st.mcpAdding = false
-			backend.mcpSelected = server.Name
-			backend.removeConfirm = ""
-		}, func() { mailTile(c, "wrench", backend.mcpSelected == server.Name) }, func() { mailEnabledBadge(c, server.Enabled, choice(server.Enabled, "Enabled", "Disabled")) })
-	})
-	if mailAddRow(c, "Add server", st.mcpAdding) {
-		a.beginSettingsMcp(nil)
-	}
-	componentTextButton(c, "settings-mcp-reload", tr("Reload"), false).Disabled(backend.mcp.loading || backend.mcp.writing).OnClick(a.loadSettingsMcp)
-	caption := "Not loaded"
-	if backend.mcp.loaded {
-		caption = fmt.Sprintf("%d servers", len(backend.mcpServers))
-	}
 	mailFooter(c, caption, false)
+}
+
+// mcpServerMatches mirrors the Rust roster filter: a server stays visible
+// when the trimmed, case-insensitive query hits its name, command, or URL.
+func mcpServerMatchesFunc(query string) func(settingsMcpServer) bool {
+	return func(server settingsMcpServer) bool {
+		return mcpServerMatches(query, server)
+	}
+}
+
+// mcpServerMatches is the testable predicate behind mcpServerMatchesFunc.
+func mcpServerMatches(query string, server settingsMcpServer) bool {
+	return settingsMatches(query, server.Name+" "+strings.Join(server.Command, " ")+" "+server.URL)
+}
+
+// mcpRow is one roster entry: tile, name over a mono connection caption,
+// status glyph when known, and an enable switch. Geometry reuses the mail
+// row (px9 py7, r8, gap9, selected on sidebarItem).
+func (a *app) mcpRow(c *ui.Context, server settingsMcpServer, selected bool) {
+	backend := &a.settings.backend
+	caption := mcpRowCaption(server)
+	tileIcon := choice(server.Kind == "remote", "globe", "terminal")
+	row := ui.ButtonBase(c).Label(server.Name).FillWidth().Padding(7, 9).
+		Radius(8).Gap(9).Justify(ui.Start).AlignItems(ui.Center)
+	if selected {
+		row.Background(palette.sidebarItem)
+	} else {
+		if row.Hovered() {
+			row.Background(palette.overlay)
+		}
+		if row.Pressed() {
+			row.Background(palette.overlayStrong)
+		}
+	}
+	row.Children(func() {
+		mailTile(c, tileIcon, selected)
+		ui.Column(c).Grow(1).MinWidth(0).Children(func() {
+			color := palette.textSecondary
+			if selected || server.Enabled {
+				color = palette.text
+			}
+			ui.Text(c, server.Name).FontSize(uiPx(12.5)).FontWeight(500).
+				TextColor(color).SingleLine().Ellipsis("...")
+			ui.Text(c, caption).Font(monoFont()).FontSize(uiPx(10.5)).
+				TextColor(palette.textTertiary).SingleLine().Ellipsis("...").Margin(1, 0, 0, 0)
+		})
+		if glyph, color, ok := mcpStatusGlyph(backend, server.Name); ok {
+			icon(c, glyph, 12, color)
+		}
+		c.Key("mcp-toggle-" + server.Name)
+		enabled := server.Enabled
+		lobechoice.Switch(c, &enabled, lobechoice.SwitchProps{Size: theme.Small}).Label(server.Name).Disabled(backend.mcp.writing || backend.mcp.uncertain).OnChange(func() {
+			a.toggleSettingsMcp(server.Name)
+		})
+	})
+	if row.Clicked() {
+		a.selectMcpServer(server.Name)
+	}
+}
+
+// mcpRowCaption mirrors the Rust row caption: the command it launches or
+// the endpoint it serves, else the no-connection copy.
+func mcpRowCaption(server settingsMcpServer) string {
+	if server.Kind == "local" && len(server.Command) != 0 {
+		return strings.Join(server.Command, " ")
+	}
+	if server.Kind == "remote" && strings.TrimSpace(server.URL) != "" {
+		return strings.TrimSpace(server.URL)
+	}
+	return tr("No command or URL yet")
+}
+
+// mcpStatusGlyph maps the daemon's snake_case connection state to the same
+// glyph/color pairs the Rust page uses. Unknown/absent states hide the dot.
+func mcpStatusGlyph(backend *settingsBackendState, name string) (string, ui.Color, bool) {
+	for _, status := range backend.mcpStatuses {
+		if status.Name != name {
+			continue
+		}
+		switch status.Status {
+		case "connected":
+			return "check", palette.success, true
+		case "pending":
+			return "loader-circle", palette.accent, true
+		case "disabled":
+			return "block", palette.textTertiary, true
+		case "failed":
+			return "alert", palette.danger, true
+		case "needs_auth":
+			return "lock", palette.danger, true
+		}
+		return "", ui.Color{}, false
+	}
+	return "", ui.Color{}, false
 }
 
 func (a *app) marketListPane(c *ui.Context) {

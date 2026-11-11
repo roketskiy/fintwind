@@ -7,6 +7,7 @@ import (
 	"fintwind-go/assets"
 	"fintwind-go/internal/model"
 
+	"github.com/ELY-Open-Source/CrychicUI/kit"
 	"github.com/egoist/mygo/ui"
 	"github.com/lobehub/lobe-mygo/pkg/action"
 	"github.com/lobehub/lobe-mygo/pkg/field"
@@ -75,6 +76,21 @@ func contextInspector(c *ui.Context, label, value string) {
 		ui.Text(c, value).Grow(1).MinWidth(0).FontSize(11.5).TextColor(palette.text).
 			SingleLine().Ellipsis("…").TextAlign(ui.End).Tooltip(value)
 	})
+}
+
+// contextStatCard is one KPI mini card inside the Used context card: title
+// over a large value. Labels stay the inspector names so automation and
+// translations keep working.
+func contextStatCard(c *ui.Context, key, title, value string) {
+	c.Key("context-stat-" + key)
+	ui.Column(c).Grow(1).Basis(110).MinWidth(0).Padding(10, 12).Gap(4).
+		Radius(10).Background(palette.overlay).Border(1, palette.cardBorder).
+		Label(tr(title)).Description(value).Tooltip(tr(title) + " · " + value).
+		Children(func() {
+			ui.Text(c, tr(title)).FontSize(11).TextColor(palette.textSecondary).SingleLine().Ellipsis("…")
+			kit.Numeric(c, value).FontFeatures("tnum").FontSize(18).FontWeight(600).
+				TextColor(palette.text).SingleLine().Ellipsis("…")
+		})
 }
 
 func (a *app) contextSurface(c *ui.Context) {
@@ -174,9 +190,11 @@ func (a *app) contextUsageCard(c *ui.Context) {
 				}
 			}
 		}
-		contextInspector(c, "Total tokens", total)
-		contextInspector(c, "Cache hit rate", cache)
-		contextInspector(c, "First token latency", first)
+		ui.Row(c).FillWidth().MinWidth(0).Gap(8).Wrap().Children(func() {
+			contextStatCard(c, "total", "Total tokens", total)
+			contextStatCard(c, "cache", "Cache hit rate", cache)
+			contextStatCard(c, "first", "First token latency", first)
+		})
 		contextComposition(c, usage)
 		a.contextCompactControl(c)
 	})

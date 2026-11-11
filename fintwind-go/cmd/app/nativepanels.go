@@ -18,7 +18,6 @@ import (
 // through a.post and rechecks generations before touching state.
 type nativePanelState struct {
 	sessions map[string]*nativeSessionPanels
-	ports    nativePortsState
 }
 
 // nativeSessionPanels is everything the right panel owns for one session.
@@ -160,7 +159,7 @@ func newNativeTabID() string {
 // Native tabs address their surfaces as "browser:<tabID>" and
 // "terminal:<tabID>": one unique surface per tab, mirroring how file tabs
 // use "file:<relative>". Single-instance surfaces keep their bare kinds
-// ("files", "ports").
+// ("files").
 const (
 	browserTabPrefix  = "browser:"
 	terminalTabPrefix = "terminal:"

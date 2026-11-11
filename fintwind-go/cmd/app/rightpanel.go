@@ -79,8 +79,6 @@ func (a *app) rightPanel(c *ui.Context) {
 				a.browserSurface(c, a.lookupNativeBrowserTab(a.selectedID, tabID))
 			} else if tabID, ok := terminalTabID(kind); ok {
 				a.terminalSurface(c, a.lookupNativeTerminalTab(a.selectedID, tabID))
-			} else if kind == rightPanelPorts {
-				a.portsSurface(c)
 			} else {
 				a.surfacePlaceholder(c, "Browser", "Open a local app or URL")
 			}
@@ -162,7 +160,7 @@ func (a *app) addSurfaceButton(c *ui.Context) {
 			Shadow(0, 12, 28, 0, ui.RGBA(0, 0, 0, 0.22)).
 			Children(func() {
 				for _, kind := range []string{
-					rightPanelBrowser, rightPanelTerminal, rightPanelFiles, rightPanelPorts,
+					rightPanelBrowser, rightPanelTerminal, rightPanelFiles,
 				} {
 					kind := kind
 					alreadyOpen := kind != rightPanelBrowser && kind != rightPanelTerminal &&
@@ -206,7 +204,6 @@ func (a *app) surfaceChooser(c *ui.Context) {
 				})
 				ui.Row(c).FillWidth().Gap(8).Margin(8, 0, 0, 0).Children(func() {
 					a.surfaceCard(c, rightPanelFiles, "Browse and read workspace files")
-					a.surfaceCard(c, rightPanelPorts, "Forward remote ports to this machine")
 				})
 			})
 		})
@@ -250,7 +247,6 @@ const (
 	rightPanelFiles    = "files"
 	rightPanelBrowser  = "browser"
 	rightPanelTerminal = "terminal"
-	rightPanelPorts    = "ports"
 	rightPanelContext  = "context"
 )
 
@@ -264,7 +260,7 @@ func surfaceLabel(kind string) string {
 		return tr("Context")
 	case rightPanelFiles:
 		return tr("Files")
-	case rightPanelBrowser, rightPanelTerminal, rightPanelPorts:
+	case rightPanelBrowser, rightPanelTerminal:
 		return surfaceBaseLabel(kind)
 	}
 	if strings.HasPrefix(kind, browserTabPrefix) || strings.HasPrefix(kind, terminalTabPrefix) {
@@ -281,8 +277,6 @@ func surfaceBaseLabel(kind string) string {
 		return tr("Browser")
 	case kind == rightPanelTerminal || strings.HasPrefix(kind, terminalTabPrefix):
 		return tr("Terminal")
-	case kind == rightPanelPorts:
-		return tr("Ports")
 	}
 	return kind
 }
@@ -301,8 +295,6 @@ func surfaceIcon(kind string) string {
 		return "terminal"
 	case kind == rightPanelFiles:
 		return "folder"
-	case kind == rightPanelPorts:
-		return "arrow-up-right"
 	}
 	return "file"
 }

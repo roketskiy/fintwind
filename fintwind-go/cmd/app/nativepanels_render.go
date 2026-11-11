@@ -157,25 +157,6 @@ func (a *app) terminalSurface(c *ui.Context, tab *nativeTerminalTab) {
 	})
 }
 
-// portsSurface is the honest gap: no daemon channel exists for SSH port
-// forwarding, so the surface names the missing piece instead of a fake
-// button.
-func (a *app) portsSurface(c *ui.Context) {
-	state := a.nativePortsFor()
-	message := state.unavailable
-	if message == "" {
-		message = nativePortsUnavailable
-	}
-	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Label(nativePortsLabel).Children(func() {
-		ui.Column(c).FillWidth().Grow(1).Center().Padding(0, 20, 32, 20).Children(func() {
-			ui.Text(c, tr("Ports")).FontSize(13).FontWeight(500).TextColor(palette.text)
-			ui.Text(c, message).FontSize(11).FixedLineHeight(17).
-				TextColor(palette.textTertiary).MaxWidth(300).TextAlign(ui.Center).
-				Margin(6, 0, 0, 0).Label(nativePortsErrorLabel)
-		})
-	})
-}
-
 // fileEditorSurface is one open file tab: the Rust 42px path header with
 // Save state, an explicit disk-conflict dialog, and the editable MyGo editor
 // widget filling the rest.

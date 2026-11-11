@@ -2,11 +2,9 @@ package main
 
 import (
 	"math"
-	"sort"
 
 	"fintwind-go/internal/model"
 	"github.com/egoist/mygo/ui"
-	"github.com/egoist/mygo/ui/chart"
 )
 
 type contextComponent struct {
@@ -42,18 +40,27 @@ func contextComposition(c *ui.Context, usage *model.ContextUsage) {
 		}
 	}
 	contextInspector(c, "Estimated tokens", "≈ "+formatTokens(total))
+	// Static proportion strip in fixed category order. The library treemap
+	// animates entrance, selection and every value change with no toggle,
+	// which reads as constant sluggish motion here; plain boxes carry the
+	// same shares with zero animation calls.
 	positive := make([]contextComponent, 0, len(entries))
 	for _, entry := range entries {
 		if entry.tokens > 0 {
 			positive = append(positive, entry)
 		}
 	}
-	sort.SliceStable(positive, func(i, j int) bool { return positive[i].tokens > positive[j].tokens })
-	if len(positive) > 0 {
-		chart.Plot(c.Key("context-composition-treemap"), chart.Axes{}, func(area ui.Element) {
-			area.Clip().Label(tr("Composition (estimated)"))
-			contextTreemap(c, positive, 0, 0, 1, 1)
-		}).FillWidth().Height(180)
+	if len(positive) > 0 && total > 0 {
+		c.Key("context-composition-strip")
+		ui.Row(c).FillWidth().Height(12).Radius(6).Clip().
+			Label(tr("Composition (estimated)")).Children(func() {
+			for _, entry := range positive {
+				share := float32(entry.tokens) / float32(total) * 100
+				tip := tr(entry.name) + " · ≈ " + formatTokens(entry.tokens) +
+					" · " + formatPercent(float64(entry.tokens)*100/float64(total))
+				ui.Box(c).Height(12).WidthPercent(share).Background(entry.color).Tooltip(tip)
+			}
+		})
 	}
 	for _, entry := range entries {
 		value := "≈ " + formatTokens(entry.tokens)
@@ -82,53 +89,5 @@ func contextComposition(c *ui.Context, usage *model.ContextUsage) {
 	}
 	if composition.Incomplete {
 		ui.Text(c, tr("Partial estimate")).FontSize(11).TextColor(palette.textTertiary)
-	}
-}
-
-// Split near half the weight along the longer side. Work stays bounded by
-// the eight composition categories; zero values remain in the legend only.
-func contextTreemap(c *ui.Context, entries []contextComponent, x, y, w, h float32) {
-	if len(entries) == 1 {
-		entry := entries[0]
-		value := "≈ " + formatTokens(entry.tokens)
-		if entry.opaque {
-			value += " + · " + tr("Partial estimate")
-		}
-		chart.Rect(c.Key("context-tile-"+entry.name), chart.Span{Lo: x, Hi: x + w}, chart.Span{Lo: 1 - y - h, Hi: 1 - y}).
-			Background(entry.color.Alpha(0.18)).Border(1, palette.raised).Clip().
-			Focusable().Label(tr(entry.name)).Description(value).Tooltip(tr(entry.name) + " · " + value).
-			Children(func() {
-				// Tiny cells keep their exact area, with details in the legend.
-				if w >= 0.22 && h >= 0.16 {
-					ui.Column(c).Fill().Padding(5).Gap(2).Children(func() {
-						ui.Text(c, tr(entry.name)).FontSize(11).FontWeight(600).TextColor(palette.text).SingleLine().Ellipsis("…")
-						if h >= 0.28 {
-							ui.Text(c, value).FontSize(10).TextColor(palette.textSecondary).SingleLine().Ellipsis("…")
-						}
-					})
-				}
-			})
-		return
-	}
-	var total float64
-	for _, entry := range entries {
-		total += float64(entry.tokens)
-	}
-	weight := float64(entries[0].tokens)
-	split := 1
-	for split < len(entries)-1 && math.Abs(weight+float64(entries[split].tokens)-total/2) < math.Abs(weight-total/2) {
-		weight += float64(entries[split].tokens)
-		split++
-	}
-	fraction := float32(weight / total)
-	// The panel is wider than the fixed-height plot.
-	if w*1.5 >= h {
-		cut := w * fraction
-		contextTreemap(c, entries[:split], x, y, cut, h)
-		contextTreemap(c, entries[split:], x+cut, y, w-cut, h)
-	} else {
-		cut := h * fraction
-		contextTreemap(c, entries[:split], x, y, w, cut)
-		contextTreemap(c, entries[split:], x, y+cut, w, h-cut)
 	}
 }

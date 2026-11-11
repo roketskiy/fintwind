@@ -47,3 +47,8 @@ docs/dev-notes/
 # Cloudflare Worker local state and generated types (regen via `wrangler types`)
 .wrangler/
 workers/**/worker-configuration.d.ts
+
+# MyGo build output and local probe artifacts
+/fintwind-go/**/*.exe
+/fintwind-go/.preview-launch/
+/fintwind-go/docs/dev-notes/

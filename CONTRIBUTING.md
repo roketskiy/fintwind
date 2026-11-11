@@ -34,16 +34,10 @@ The right-panel browser runs on WebView2.
 
 ## MyGo 日用与开发入口
 
-`fintwind-go/` 是连接 Rust daemon 的 MyGo 前端；`mygo-clone/` 仍是独立界面原型。
+`fintwind-go/` 是连接 Rust daemon 的正式 MyGo 前端。
 本地启动需要 PowerShell 7、Go（版本见 `fintwind-go/go.mod`）和上述 Rust/MSVC 工具链。
-首次检出后先初始化固定版本的组件库子模块：
-
-```sh
-git submodule update --init --recursive -- vendor/CrychicUI
-```
-
-前端使用 MyGo（MIT）、Lobe MyGo（MIT）和 CrychicUI（MIT）。MyGo 和 Lobe MyGo
-通过 Go 模块固定版本；CrychicUI 通过子模块固定提交，不跟随上游自动更新。
+前端使用 MyGo（MIT）、Lobe MyGo（MIT）和 CrychicUI（MIT），均通过 Go 模块
+固定版本，由 Go 自动下载并按 `go.sum` 校验，不需要初始化子模块或准备本地组件库。
 许可及图标来源见 [`docs/licenses/mygo-MIT.txt`](docs/licenses/mygo-MIT.txt)、
 [`docs/licenses/lobe-mygo-MIT.txt`](docs/licenses/lobe-mygo-MIT.txt)、
 [`docs/licenses/CrychicUI-MIT.txt`](docs/licenses/CrychicUI-MIT.txt) 和

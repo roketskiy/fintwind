@@ -19,7 +19,7 @@
 
 ### Go 界面组件库（必用）
 - Go 界面新造控件一律先用成品组件库，禁止手搓基础控件（按钮、菜单、输入框、列表、开关、标签、弹层、提示）。
-- 选用顺序：lobe-mygo（`github.com/lobehub/lobe-mygo`，MIT，与 Lobe UI 同设计语言）优先；lobe-mygo 没有的才用本地 CrychicUI（`vendor/CrychicUI`）；两者都没有才手写，且只允许组装已有原语。
+- 选用顺序：lobe-mygo（`github.com/lobehub/lobe-mygo`，MIT，与 Lobe UI 同设计语言）优先；lobe-mygo 没有的才用 CrychicUI（`github.com/ELY-Open-Source/CrychicUI`，版本固定在 `fintwind-go/go.mod`）；两者都没有才手写，且只允许组装已有原语。
 - 动手前先读对应组件的 skills 页（`https://mygo.lobehub.com/skills/components/<name>.md`），只用文档记载的 props、variant 和 import。
 - 禁止拿 CrychicUI `button.TextButton` 当次级文字按钮：它是 accent 色，只适合主操作。次级动作用 lobe `action.Button` 的 Text/Default 变体或同等 muted 样式。
 - 不调用 lobe `theme.Apply`：它整帧生效且跟随系统外观，会扰乱同帧其他视图。lobe 组件在不调用时自动跟随窗口 Dark 标志渲染；与自有 palette 混用时接受视觉差，只保证功能与状态一致。
@@ -182,7 +182,7 @@ bun scripts/bundle-windows.ts --channel=beta
 - 在 dev watcher 管理的刚重新编译、已签名的应用中,针对确切的 provider 交互
   验证可见变更;仅凭一次成功的 Rust 构建是不够的。
 
-## mygo 原型与组件库
+## mygo 前端与组件库
 
 `fintwind-go/` 是正式迁移主线，连接 Rust daemon。日用入口为根目录 `MyGo.cmd`，
 直接使用真实 Fintwind 数据；未获用户明确许可，agent 不得运行该入口（`--plan` 除外）。
@@ -198,6 +198,5 @@ Agent 开发使用 `MyGo-Agent.cmd --name <task>`；只构建加 `--build-only`�
 启动器只清理自身持有 Job 的进程，不关闭已安装 Fintwind 或其他会话的进程。
 用法和边界见 [CONTRIBUTING.md](CONTRIBUTING.md) 的 MyGo 章节。
 
-`mygo-clone/` 是用 mygo 原生 UI 复刻 Fintwind 前端的独立 Go 原型,不接后端。
-mygo 的开发方式、构建命令、API 速查,以及本地组件库 CrychicUI 的位置、
-版本兼容性和用法,见 [mygo-clone/AGENTS.md](mygo-clone/AGENTS.md)。
+MyGo、lobe-mygo 与 CrychicUI 均由 `fintwind-go/go.mod` 固定版本，使用 Go 模块缓存，
+不依赖 `vendor/` 子模块。查阅组件源码时先按该版本定位模块缓存，不使用旧原型中的 API。

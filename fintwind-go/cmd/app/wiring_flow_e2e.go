@@ -53,6 +53,7 @@ func wiringRun(ctx context.Context, r *wiringReport, round string) {
 	wiringAppliedCallbacks(ctx, r, round)
 	wiringHistoryEditing(ctx, r, round)
 	wiringAuthCompletion(ctx, r, round)
+	wiringProviders(ctx, r, round)
 	wiringRuntimeConfig(ctx, r, round)
 	wiringLanguage(ctx, r, round)
 	wiringSidebarHistory(ctx, r, root)

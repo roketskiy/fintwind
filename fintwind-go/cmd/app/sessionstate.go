@@ -17,6 +17,7 @@ type sessionState struct {
 	raw                  map[string]any
 	draft                string
 	attachments          []draftAttachment
+	references           []composerReference
 	permission           *pendingPermission
 	question             *userInputState
 	list                 ui.ListState
@@ -133,6 +134,7 @@ func (a *app) rememberSession() {
 	state.raw = a.detailRaw
 	state.draft = a.draft
 	state.attachments = a.pendingAttachments
+	state.references = a.pendingReferences
 	state.permission = a.pendingPermission
 	state.question = a.pendingUserInput
 	state.list = a.messageList
@@ -159,6 +161,7 @@ func (a *app) restoreSession(id string) bool {
 	a.detailRaw = state.raw
 	a.draft = state.draft
 	a.pendingAttachments = state.attachments
+	a.pendingReferences = state.references
 	a.pendingPermission = state.permission
 	a.pendingUserInput = state.question
 	a.messageList = state.list
@@ -188,6 +191,7 @@ func (a *app) resetSessionView() {
 	a.detailRaw = nil
 	a.draft = ""
 	a.pendingAttachments = nil
+	a.pendingReferences = nil
 	a.pendingPermission = nil
 	a.pendingUserInput = nil
 	a.editMessage = nil

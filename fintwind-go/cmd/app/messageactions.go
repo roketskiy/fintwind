@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"fintwind-go/internal/model"
@@ -153,20 +154,72 @@ func (a *app) forkSessionFromResponse(sessionID, messageID string, turnCount int
 	}()
 }
 
-// messageCopyMenu attaches one message row's context menu: Copy message.
-// Message text keeps its own selection menu (the innermost element with a
-// menu gets the click), which already covers copying a selection. Quote
-// staging is unavailable in this client — there are no composer reference
-// chips to stage into — so the menu stays at the single always-available
-// item and never shows an empty or disabled entry.
-func (a *app) messageCopyMenu(target ui.Element, messageID, copyContent string) ui.Element {
+// messageCopyMenu attaches one message row's unified context menu, mirroring
+// the source's message_menu_items order: Copy selection first while the row's
+// shared selection covers text, then Copy message, then Quote. The markdown
+// views leave their selection to the Selectable row (ShareSelection), so
+// right-clicking text or row padding opens this same menu. Quote stages a
+// text reference chip above the composer; only the entries that live
+// elsewhere (rewind/fork) stay out.
+func (a *app) messageCopyMenu(target ui.Element, messageID, role, copyContent string) ui.Element {
 	return target.ContextMenu(func(m *ui.Menu) {
-		if m.Item("Copy message").Chosen() {
+		selected := messageSelectedText(target)
+		if selected != "" {
+			if m.Item(tr("Copy Selection")).Chosen() {
+				if err := mygo.Clipboard.Write(transfer.TextData(selected)); err != nil {
+					a.status = tr("Cannot copy selection: ") + err.Error()
+					return
+				}
+				a.showCopied(messageID)
+			}
+		}
+		if m.Item(tr("Copy message")).Chosen() {
 			if err := mygo.Clipboard.Write(transfer.TextData(copyContent)); err != nil {
 				a.status = tr("Cannot copy message: ") + err.Error()
 				return
 			}
 			a.showCopied(messageID)
 		}
+		// A quote keeps what was read — the selection when one covers part
+		// of the message, the whole message otherwise — like the source's
+		// quote_message item.
+		quoteText := selected
+		if quoteText == "" {
+			quoteText = copyContent
+		}
+		if strings.TrimSpace(quoteText) != "" {
+			if m.Item(tr("Quote to composer")).Chosen() {
+				a.stageComposerReference(messageReference(quoteRoleLabel(role), quoteText))
+			}
+		}
 	})
+}
+
+// quoteRoleLabel attributes a quoted message with its speaker, mirroring
+// the source's message_role_label. The label travels into the prompt block,
+// so it stays fixed like the source's.
+func quoteRoleLabel(role string) string {
+	if role == "assistant" {
+		return "助手"
+	}
+	return "用户"
+}
+
+// messageSelectedText joins the row's shared selection in build order, the
+// way the framework's own Copy does, or reports nothing when the row holds
+// no selection.
+func messageSelectedText(target ui.Element) string {
+	parts := target.SelectedTexts()
+	if len(parts) == 0 {
+		return ""
+	}
+	selected := make([]string, 0, len(parts))
+	for _, part := range parts {
+		runes := []rune(part.Text)
+		start, end := max(0, part.Start), min(len(runes), part.End)
+		if start < end {
+			selected = append(selected, string(runes[start:end]))
+		}
+	}
+	return strings.Join(selected, "\n")
 }

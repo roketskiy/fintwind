@@ -174,6 +174,8 @@ type app struct {
 	settingsRaw          map[string]any
 	settingsLoaded       bool
 	pendingAttachments   []draftAttachment
+	// Staged text quotes above the composer, folded into the next prompt.
+	pendingReferences []composerReference
 	// Composer autocomplete (/ and @) over prefetched indexes. Render reads
 	// only these slices; refreshAutocompleteSources fills them off-thread.
 	slashIndex            []slashCommand
@@ -237,6 +239,7 @@ type userInputOption struct {
 
 func main() {
 	sound.SetEnabled(false)
+	redirectCrashLog()
 	dataDir := flag.String("data-dir", defaultDataDir(), "daemon data directory")
 	daemonPath := flag.String("daemon", defaultDaemonPath(), "path to fintwind-daemon.exe")
 	profile := flag.String("profile", "agent", "launch profile: daily or agent")
@@ -555,6 +558,7 @@ func (a *app) loadSession(id string) {
 	a.detailRaw = nil
 	a.draft = ""
 	a.pendingAttachments = nil
+	a.pendingReferences = nil
 	a.pendingPermission = nil
 	a.pendingUserInput = nil
 	a.editMessage = nil
@@ -692,6 +696,11 @@ func (a *app) view(c *ui.Context) {
 		a.mdUser = newMarkdownOptions(c, 14, 20, 11.5, 17.5)
 		a.mdCompact = newMarkdownOptions(c, 11.5, 17, 10.5, 16)
 		a.mdReasoning = newMarkdownOptions(c, 11.5, 17, 10.5, 16)
+		// Transcript messages share one selection per message row (like the
+		// source's transcript selection): the row column is Selectable and
+		// carries the unified menu, so these views leave selection to it.
+		a.md.ShareSelection = true
+		a.mdUser.ShareSelection = true
 		if theme := a.mdReasoning.Theme; theme != nil {
 			theme.Text = palette.textSecondary
 			theme.Strong = palette.textSecondary

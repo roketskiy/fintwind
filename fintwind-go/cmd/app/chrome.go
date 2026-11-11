@@ -7,7 +7,7 @@ import (
 )
 
 func iconButton(c *ui.Context, name string, box, glyph float32, color ui.Color, tip string) bool {
-	el := ui.ButtonBase(c).Label(tip).Tooltip(tip).Size(box, box).Center().Radius(7)
+	el := ui.ButtonBase(c).Label(tip).Size(box, box).Center().Radius(7)
 	if el.Hovered() {
 		el.Background(palette.overlay)
 	}
@@ -23,7 +23,7 @@ func iconButton(c *ui.Context, name string, box, glyph float32, color ui.Color, 
 // historyButton is the top bar's back/forward control: 28 square, dimmed to
 // 35% when there is nowhere to go.
 func historyButton(c *ui.Context, name, tip string, enabled bool) bool {
-	el := ui.ButtonBase(c).Label(tip).Tooltip(tip).Size(28, 28).Center().Radius(7)
+	el := ui.ButtonBase(c).Label(tip).Size(28, 28).Center().Radius(7)
 	if enabled {
 		if el.Hovered() {
 			el.Background(palette.overlay)
@@ -43,7 +43,7 @@ func historyButton(c *ui.Context, name, tip string, enabled bool) bool {
 // revealButton is the top bar's "open folder" control: dimmed and inert when
 // the current mode has no workspace to reveal.
 func revealButton(c *ui.Context, enabled bool, tip string) bool {
-	el := ui.ButtonBase(c).Label(tip).Tooltip(tip).Size(28, 28).Center().Radius(7)
+	el := ui.ButtonBase(c).Label(tip).Size(28, 28).Center().Radius(7)
 	if !enabled {
 		el.Opacity(0.35)
 	} else {
@@ -95,7 +95,7 @@ func (a *app) topBar(c *ui.Context) {
 			if !rightEnabled {
 				rightTip = "Right panel is unavailable here"
 			}
-			toggle := ui.ButtonBase(c).Label(rightTip).Tooltip(rightTip).Size(28, 28).
+			toggle := ui.ButtonBase(c).Label(rightTip).Size(28, 28).
 				Center().Radius(7)
 			if !rightEnabled {
 				toggle.Opacity(0.35)
@@ -132,7 +132,7 @@ func (a *app) topBar(c *ui.Context) {
 // captionButton is one self-drawn window control: 28 square like the
 // other top bar buttons, textSecondary glyph, red hover for close.
 func (a *app) captionButton(c *ui.Context, name, tip string, danger bool, onClick func()) {
-	el := ui.ButtonBase(c).Label(tip).Tooltip(tip).Size(28, 28).Center().Radius(7)
+	el := ui.ButtonBase(c).Label(tip).Size(28, 28).Center().Radius(7)
 	hot := el.Hovered() || el.Pressed()
 	switch {
 	case danger && hot:

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"sync/atomic"
+
+	"github.com/egoist/mygo"
 )
 
 //go:embed locales/*.json
@@ -39,6 +41,22 @@ func SetLanguage(language string) {
 	key := localeKey(language)
 	catalog := catalogs[key]
 	activeCatalog.Store(&catalog)
+	// Framework menus (editor, text fields, date pickers) read the window
+	// locale, not this catalog: keep them on the same language, or the
+	// editor's Cut/Copy/Paste stay English under a Chinese UI.
+	mygo.App.SetLocale(frameworkLocale(key))
+}
+
+// frameworkLocale maps the app language to the framework's BCP 47 tags.
+func frameworkLocale(key string) string {
+	switch key {
+	case "zh-CN":
+		return "zh-Hans"
+	case "ja":
+		return "ja"
+	default:
+		return "en"
+	}
 }
 
 func init() { SetLanguage("system") }

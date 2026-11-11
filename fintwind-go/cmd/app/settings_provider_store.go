@@ -247,41 +247,40 @@ func (a *app) saveSettingsProvider() {
 
 func (a *app) commitSettingsProviders(roster []settingsProvider, selected, key string) {
 	st := &a.settings.backend
-	if st.provider.writing || !st.provider.loaded || st.provider.uncertain {
+	if st.provider.writing || st.providerSaveInFlight || !st.provider.loaded || st.provider.uncertain {
 		return
 	}
-	source, generation, revision := st.source, st.generation, st.providerRevision
+	source, generation := st.source, st.generation
 	draftGeneration, wasAdding, previousSelected := st.providerDraftGeneration, a.settings.catalog.providerAdding, st.providerSelected
 	binary := a.settingsStr("opencode_binary_path", "opencode")
-	st.provider.writing, st.provider.err, st.provider.message = true, "", ""
+	st.provider.writing, st.providerSaveInFlight, st.provider.err, st.provider.message = true, true, "", ""
+	st.providerLoadGen++
 	go func() {
 		ctx, cancel := context.WithTimeout(a.lifetime, 90*time.Second)
 		defer cancel()
 		var err error
 		keySaved := false
-		if key != "" {
-			err = settingsRequest(ctx, source, map[string]any{"type": "storeCustomProviderKey", "binary": binary, "directory": source.directory, "providerId": selected, "key": key}, "ack", nil)
+		if strings.TrimSpace(key) != "" {
+			err = settingsRequest(ctx, source, map[string]any{"type": "storeCustomProviderKey", "binary": binary, "directory": source.directory, "providerId": selected, "key": strings.TrimSpace(key)}, "ack", nil)
 			keySaved = err == nil
 		}
-		var body struct {
-			Providers []settingsProvider `json:"providers"`
-			Revision  uint64             `json:"revision"`
-		}
 		if err == nil {
-			command := settingsCommand("saveCustomProviders", source)
-			command["expectedRevision"], command["providers"] = revision, roster
-			err = settingsRequest(ctx, source, command, "customProviders", &body)
-			if err == nil && body.Providers == nil {
-				err = errors.New("Saved provider list is missing from the response")
-			}
+			err = saveOpencodeProviders(roster, st.modelsTable)
 		}
-		key = ""
+		saved, loadErr := loadOpencodeProviders()
+		if err == nil {
+			err = loadErr
+		}
+		if err == nil && saved == nil {
+			err = errors.New("Saved provider list is missing from the response")
+		}
 		a.post(func() {
 			if !a.settingsSourceMatches(source, generation) {
 				return
 			}
 			st := &a.settings.backend
 			st.provider.writing = false
+			st.providerSaveInFlight = false
 			if err != nil {
 				st.provider.err = tr("Save failed. Reload before retrying. ") + err.Error()
 				if keySaved {
@@ -293,7 +292,7 @@ func (a *app) commitSettingsProviders(roster []settingsProvider, selected, key s
 				st.provider.uncertain = true
 				return
 			}
-			st.providers, st.providerRevision = body.Providers, body.Revision
+			st.providers = saved
 			if st.providerSelected == previousSelected {
 				st.providerSelected = selected
 			}
@@ -301,40 +300,103 @@ func (a *app) commitSettingsProviders(roster []settingsProvider, selected, key s
 				a.cancelProviderAdd()
 			}
 			st.provider.message = tr("Saved")
+			a.refreshSettingsIntegrations()
 		})
 	}()
 }
 
 func (a *app) probeSettingsProvider(id string) {
 	st := &a.settings.backend
-	if st.provider.writing || st.provider.loading {
+	if st.provider.writing || st.provider.loading || st.providerSaveInFlight {
 		return
 	}
-	source, generation := st.source, st.generation
-	st.provider.writing, st.provider.err, st.provider.message = true, "", ""
-	go func() {
-		ctx, cancel := context.WithTimeout(a.lifetime, 90*time.Second)
-		defer cancel()
-		command := settingsCommand("probeCustomProvider", source)
-		command["providerId"] = id
-		var body struct {
-			Models []struct {
-				ID string `json:"id"`
-			} `json:"models"`
-			Latency uint64 `json:"latencyMs"`
+	var target *settingsProvider
+	for i := range st.providers {
+		if st.providers[i].ID == id {
+			target = &st.providers[i]
+			break
 		}
-		err := settingsRequest(ctx, source, command, "customProviderProbed", &body)
+	}
+	if target == nil {
+		return
+	}
+	format := settingsProviderFormatForEntry(target.Entry, target.Native)
+	baseURL := settingsProviderBaseURL(target.Entry, target.Native)
+	apiKey := settingsProviderAPIKey(target.Entry, target.Native)
+	if strings.TrimSpace(apiKey) == "" {
+		apiKey = a.resolveProviderKeyForProbe(id)
+	}
+	st.provider.writing, st.provider.err, st.provider.message = true, "", ""
+	go func(format, baseURL, apiKey string) {
+		outcome := probeProviderConnectivity(format, baseURL, apiKey)
 		a.post(func() {
-			if !a.settingsSourceMatches(source, generation) {
-				return
-			}
 			st := &a.settings.backend
 			st.provider.writing = false
-			if err != nil {
-				st.provider.err = tr("Probe failed. ") + err.Error()
+			if !outcome.reachable {
+				msg := ""
+				if outcome.err != nil {
+					msg = outcome.err.text()
+				}
+				st.provider.err = tr("Probe failed. ") + msg
 				return
 			}
-			st.provider.message = fmt.Sprintf(tr("%d models · %d ms"), len(body.Models), body.Latency)
+			st.provider.message = fmt.Sprintf(tr("%d models · %d ms"), outcome.models, outcome.latency.Milliseconds())
 		})
-	}()
+	}(format, baseURL, apiKey)
+}
+
+func settingsProviderFormatForEntry(entry map[string]any, native bool) string {
+	if native {
+		if pkg, ok := entry["package"].(string); ok {
+			if format := settingsProviderFormat(pkg); format != "" {
+				return format
+			}
+		}
+		return "openai"
+	}
+	if pkg, ok := entry["npm"].(string); ok {
+		if format := settingsProviderFormat(pkg); format != "" {
+			return format
+		}
+	}
+	return "openai"
+}
+
+func settingsProviderBaseURL(entry map[string]any, native bool) string {
+	key := "options"
+	if native {
+		key = "settings"
+	}
+	options, _ := entry[key].(map[string]any)
+	base, _ := options["baseURL"].(string)
+	return base
+}
+
+func settingsProviderAPIKey(entry map[string]any, native bool) string {
+	key := "options"
+	if native {
+		key = "settings"
+	}
+	options, _ := entry[key].(map[string]any)
+	apiKey, _ := options["apiKey"].(string)
+	return apiKey
+}
+
+func (a *app) resolveProviderKeyForProbe(id string) string {
+	st := &a.settings.backend
+	source := st.source
+	if source.client == nil {
+		return ""
+	}
+	binary := a.settingsStr("opencode_binary_path", "opencode")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	var body struct {
+		Key *string `json:"key"`
+	}
+	_ = settingsRequest(ctx, source, map[string]any{"type": "resolveCustomProviderKey", "binary": binary, "directory": source.directory, "providerId": id}, "customProviderKey", &body)
+	if body.Key == nil {
+		return ""
+	}
+	return *body.Key
 }

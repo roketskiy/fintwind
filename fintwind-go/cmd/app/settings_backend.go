@@ -36,6 +36,31 @@ type settingsBackendState struct {
 	providerFormatTouched             bool
 	providerDraftGeneration           uint64
 	providerList                      ui.ListState
+	providerRenaming                  bool
+	providerRename                    string
+	providerKeyRevealed               bool
+	providerKeyDraft                  string
+	providerModelEditor               *providerModelEditorState
+	providerConnectivity              map[string]providerConnectivityState
+	providerLatency                   map[string]providerLatencyState
+	providerBuiltinCheck              *providerBuiltinCheckState
+	providerBuiltinCheckID            string
+	builtinProviders                  *modelsDevProviders
+	builtinLoading                    bool
+	builtinGeneration                 uint64
+	modelsTable                       *modelsDevTable
+	modelsTableLoading                bool
+	providerFormStage                 string
+	providerFormBuiltin               string
+	providerFormSearch                string
+	providerFormConnectivity          *providerConnectivityState
+	providerFormFetching              bool
+	providerFormFetchGen              uint64
+	providerFormProbeGen              uint64
+	providerCommitGen                 uint64
+	providerSaveInFlight              bool
+	providerSavePending               bool
+	providerLoadGen                   uint64
 	skills                            []settingsSkill
 	skill                             settingsOperation
 	skillSelected                     string
@@ -63,6 +88,36 @@ type settingsBackendState struct {
 	integrationKey                    string
 	integrationShowKey                bool
 	general                           settingsGeneralState
+}
+
+type providerModelEditorState struct {
+	add   bool
+	index int
+	id    string
+	context string
+	input map[string]bool
+	output map[string]bool
+	packageName string
+}
+
+type providerConnectivityState struct {
+	testing   bool
+	reachable bool
+	models    int
+	latencyMs int64
+	err       string
+}
+
+type providerLatencyState struct {
+	testing bool
+	latencyMs int64
+	err     string
+}
+
+type providerBuiltinCheckState struct {
+	testing bool
+	models  int
+	err     string
 }
 
 type settingsOAuthFormState struct {
@@ -211,24 +266,19 @@ func (a *app) loadSettingsCatalog(page string) {
 
 func (a *app) loadSettingsProviders() {
 	st := &a.settings.backend
-	if st.provider.loading || st.provider.writing {
+	if st.provider.loading || st.provider.writing || st.providerSaveInFlight {
 		return
 	}
 	st.provider.loading, st.provider.err = true, ""
-	source, generation := st.source, st.generation
+	st.providerLoadGen++
+	generation := st.providerLoadGen
+	source, sourceGen := st.source, st.generation
 	go func() {
-		ctx, cancel := context.WithTimeout(a.lifetime, 90*time.Second)
-		defer cancel()
-		var body struct {
-			Providers []settingsProvider `json:"providers"`
-			Revision  uint64             `json:"revision"`
-		}
-		err := settingsRequest(ctx, source, settingsCommand("loadCustomProviders", source), "customProviders", &body)
-		if err == nil && body.Providers == nil {
-			err = errors.New("Provider list is missing from the response")
-		}
+		providers, err := loadOpencodeProviders()
+		table := fetchModelsDevCatalogWithFallback(a.settings.backend.modelsTable)
+		builtin, _ := fetchModelsDevProvidersWithFallback(a.settings.backend.builtinProviders)
 		a.post(func() {
-			if !a.settingsSourceMatches(source, generation) {
+			if !a.settingsSourceMatches(source, sourceGen) || a.settings.backend.providerLoadGen != generation {
 				return
 			}
 			st := &a.settings.backend
@@ -237,10 +287,51 @@ func (a *app) loadSettingsProviders() {
 				st.provider.err = tr("Could not load providers. ") + err.Error()
 				return
 			}
-			st.providers, st.providerRevision = body.Providers, body.Revision
+			if st.providerCommitGen != 0 {
+				return
+			}
+			selectedMissing := st.providerSelected != "" && !isBuiltinSelection(st.providerSelected) && st.providerSelected != "opencode"
+			if selectedMissing {
+				found := false
+				for _, provider := range providers {
+					if provider.ID == st.providerSelected {
+						found = true
+						break
+					}
+				}
+				if !found {
+					st.providerSelected = ""
+					st.providerAddingReset()
+				}
+			}
+			st.providers = providers
 			st.provider.loaded, st.provider.uncertain = true, false
+			if table != nil {
+				st.modelsTable = table
+			}
+			if builtin != nil {
+				st.builtinProviders = builtin
+			}
+			a.refreshSettingsIntegrations()
 		})
 	}()
+}
+
+func isBuiltinSelection(id string) bool {
+	return len(id) > 8 && id[:8] == "builtin:"
+}
+
+func builtinSelectionID(catalogID string) string {
+	return "builtin:" + catalogID
+}
+
+func (st *settingsBackendState) providerAddingReset() {
+	st.providerRenaming = false
+	st.providerKeyRevealed = false
+	st.removeConfirm = ""
+	st.providerModelEditor = nil
+	st.providerFormStage = ""
+	st.providerFormBuiltin = ""
 }
 
 func (a *app) loadSettingsSkills() {

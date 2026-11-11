@@ -599,7 +599,7 @@ func (a *app) modelPickerSidebar(c *ui.Context, tabs []pickerTab, favoritesSelec
 	ui.Column(c).Width(50).FillHeight().Padding(5).Gap(4).AlignItems(ui.Center).
 		Background(palette.canvas).BorderWidth(0, 1, 0, 0).BorderColor(palette.border).
 		Radius(12, 0, 0, 12).Children(func() {
-		star := ui.ButtonBase(c).Label(tr("Favorites")).Tooltip(tr("Favorites")).Size(40, 40).Radius(8).Center()
+		star := ui.ButtonBase(c).Label(tr("Favorites")).Size(40, 40).Radius(8).Center()
 		starColor := palette.textTertiary
 		if star.Pressed() {
 			star.Background(palette.overlayStrong)
@@ -630,7 +630,7 @@ func (a *app) modelPickerSidebar(c *ui.Context, tabs []pickerTab, favoritesSelec
 					if mark == "" {
 						mark = "bot"
 					}
-					btn := ui.ButtonBase(c).Label(tab.label).Tooltip(tab.label).Size(40, 40).Radius(8).Center()
+					btn := ui.ButtonBase(c).Label(tab.label).Size(40, 40).Radius(8).Center()
 					iconColor := alpha(palette.text, 0.82)
 					if btn.Pressed() {
 						btn.Background(palette.overlayStrong)
@@ -723,7 +723,7 @@ func (a *app) modelPickerRow(c *ui.Context, id, name, secondary string, selected
 				starIcon = "star-filled"
 				starColor = palette.neutral
 			}
-			star := ui.ButtonBase(c).Label(tip).Tooltip(tip).Size(30, 30).
+			star := ui.ButtonBase(c).Label(tip).Size(30, 30).
 				Radius(7).Center()
 			if star.Pressed() {
 				star.Opacity(0.8)
@@ -871,7 +871,7 @@ func modelOptionMenu(id string) *bool {
 // (explicit, else model default) carries the check; the Default row is
 // checked only while the session leaves the value unset.
 func (a *app) modelOptionChip(c *ui.Context, id, label string, options []providerModelOption, clear bool, choose func(string)) {
-	chip := ui.ButtonBase(c).Label(label).Tooltip(label).Height(composerChipHeight).
+	chip := ui.ButtonBase(c).Label(label).Height(composerChipHeight).
 		Padding(0, composerChipInset).Radius(composerChipRadius).
 		Gap(composerChipGap).AlignItems(ui.Center).Disabled(a.detail == nil)
 	open := modelOptionMenu(id)
@@ -910,7 +910,7 @@ func (a *app) modelOptionChip(c *ui.Context, id, label string, options []provide
 				}
 				if clear {
 					defaultSelected := explicit == ""
-					row := ui.ButtonBase(c).Label(tr("Default")).Tooltip(tr("Use the model default")).FillWidth().Height(28).
+					row := ui.ButtonBase(c).Label(tr("Default")).FillWidth().Height(28).
 						Padding(0, 8).Radius(7).Gap(8).Justify(ui.Start).AlignItems(ui.Center)
 					if defaultSelected {
 						row.Background(alpha(palette.inverse, 0.10))

@@ -212,6 +212,34 @@ func (ed *nativeFileEditor) editorState() *editor.State {
 	return ed.edState
 }
 
+// quoteFileEditorSelection stages the file editor's current selection as a
+// quote chip, attributed with its file and the 1-based line span the range
+// covers like the source's quote_editor_selection.
+func (a *app) quoteFileEditorSelection(ed *nativeFileEditor) {
+	if ed == nil {
+		return
+	}
+	state := ed.editorState()
+	sel := state.Selection()
+	if sel.Empty() {
+		return
+	}
+	text := state.SelectedText()
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	content := ""
+	if state.Buffer != nil {
+		content = state.Buffer.String()
+	}
+	start, end := referenceLineSpan(content, sel.Start(), sel.End())
+	language := ""
+	if detected := editor.LanguageFor(ed.relative); detected != nil {
+		language = strings.ToLower(detected.Name)
+	}
+	a.stageComposerReference(selectionReference(ed.relative, language, start, end, text))
+}
+
 // pushToBuffer replaces the widget text after an external adoption. The
 // draft already holds the same text; the buffer follows it.
 func (ed *nativeFileEditor) pushToBuffer(text string) {

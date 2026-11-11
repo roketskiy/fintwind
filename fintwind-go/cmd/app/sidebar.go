@@ -142,7 +142,7 @@ func (a *app) sidebarGroupHeader(c *ui.Context, project *model.Project) {
 				OnShortcut(0, ui.KeyLeft, func() { a.setSidebarCollapsed(id, true) }).
 				OnShortcut(0, ui.KeyRight, func() { a.setSidebarCollapsed(id, false) })
 			b := sidebarButton(c.Key("new-task"), tr("New task")).Size(28, 28).
-				Padding(0).Radius(7).Center().Tooltip(tr("New task"))
+				Padding(0).Radius(7).Center()
 			b.Children(func() { icon(c, "compose", 14, palette.textTertiary) })
 			b.OnClick(func() {
 				a.lastProject = id

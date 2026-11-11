@@ -118,7 +118,7 @@ func (a *app) scBranchRow(c *ui.Context) {
 	}
 	ui.Row(c).FillWidth().Gap(4).AlignItems(ui.Center).Children(func() {
 		chip := action.Button(c, "", action.ButtonProps{Variant: action.Default, Size: theme.Small})
-		chip.Label(branchLabel).Tooltip(branchLabel).Grow(1).MinWidth(0)
+		chip.Label(branchLabel).Grow(1).MinWidth(0)
 		if !st.writable() {
 			chip.Disabled(true).Opacity(0.4)
 		}
@@ -277,7 +277,7 @@ func (a *app) scCommitBox(c *ui.Context) {
 			c.OnShortcut(ui.Ctrl, ui.KeyEnter, func() { a.scAcceptInput() })
 			ui.Row(c).FillWidth().Gap(6).Children(func() {
 				primary := action.Button(c, "", action.ButtonProps{Variant: choice(primaryReady, action.Primary, action.Filled), Size: theme.Middle})
-				primary.Label(primaryLabel).Tooltip(primaryLabel).Grow(1).MinWidth(0)
+				primary.Label(primaryLabel).Grow(1).MinWidth(0)
 				if !primaryReady {
 					primary.Disabled(true)
 				} else {
@@ -515,7 +515,7 @@ func (a *app) scListRowView(c *ui.Context, row scListRow) {
 		c.Key(row.key())
 		key := row.Group + "\x00" + row.Dir
 		open := !st.CollapsedDirs[key]
-		entry := ui.ButtonBase(c).Label(row.Dir).Tooltip(row.Dir).FillWidth().MinHeight(scRowHeight).Padding(5, 12).Gap(6).AlignItems(ui.Center)
+		entry := ui.ButtonBase(c).Label(row.Dir).FillWidth().MinHeight(scRowHeight).Padding(5, 12).Gap(6).AlignItems(ui.Center)
 		if entry.Hovered() {
 			entry.Background(palette.overlay)
 		}
@@ -538,7 +538,7 @@ func (a *app) scListRowView(c *ui.Context, row scListRow) {
 		})
 	case 'i':
 		c.Key("ignored")
-		entry := ui.ButtonBase(c).Label(tr("Ignored")).Tooltip(tr("Ignored")).FillWidth().MinHeight(scRowHeight).Padding(5, 12, 5, 8).Gap(6).AlignItems(ui.Center)
+		entry := ui.ButtonBase(c).Label(tr("Ignored")).FillWidth().MinHeight(scRowHeight).Padding(5, 12, 5, 8).Gap(6).AlignItems(ui.Center)
 		if entry.Hovered() {
 			entry.Background(palette.overlay)
 		}
@@ -606,7 +606,7 @@ func (a *app) scGroupAction(c *ui.Context, group, label string, unstage bool) {
 func (a *app) scFileRow(c *ui.Context, file scFile, depth int) {
 	st := &a.sourceControl
 	c.Key(file.key())
-	entry := ui.ButtonBase(c).Label(scFileLabel(file)).Tooltip(scFileLabel(file)).FillWidth().MinHeight(scRowHeight).Padding(5, 12).Gap(6).AlignItems(ui.Center)
+	entry := ui.ButtonBase(c).Label(scFileLabel(file)).FillWidth().MinHeight(scRowHeight).Padding(5, 12).Gap(6).AlignItems(ui.Center)
 	if st.Selected == file.key() {
 		entry.Background(palette.overlayStrong)
 	} else if entry.Hovered() {

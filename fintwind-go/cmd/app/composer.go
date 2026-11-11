@@ -36,6 +36,9 @@ func (a *app) composer(c *ui.Context) {
 			PaddingY(10)
 		card = cardShadow(card)
 		card.Children(func() {
+			// Quotes stage above the input like the source's reference
+			// chips; file attachments keep their row below it.
+			a.pendingReferenceChips(c)
 			ui.Row(c).FillWidth().Padding(2, 14, 0, 14).Children(func() {
 				// Stable identity before construction: the draft keeps
 				// focus and text across rebuilds. IME composing keys never
@@ -136,16 +139,17 @@ func (a *app) composer(c *ui.Context) {
 					if k.Key != ui.KeyEnter || k.Mods != 0 {
 						return false
 					}
-					if strings.TrimSpace(k.Text()) == "" && len(a.pendingAttachments) == 0 {
+					if strings.TrimSpace(k.Text()) == "" && len(a.pendingAttachments) == 0 && len(a.pendingReferences) == 0 {
 						return false
 					}
 					if a.submitSessionSubmission(sessionSubmission{
 						sessionID:   a.composerTargetSessionID(),
-						text:        k.Text(),
+						text:        a.promptWithReferences(k.Text()),
 						attachments: append([]draftAttachment(nil), a.pendingAttachments...),
 					}) {
 						a.draft = ""
 						a.pendingAttachments = nil
+						a.pendingReferences = nil
 						a.autocompleteDismissed = false
 						a.autocompleteKey = ""
 						k.SetText("")
@@ -165,11 +169,11 @@ func (a *app) composer(c *ui.Context) {
 				a.attachButton(c)
 				ui.Row(c).Grow(1)
 				busy := a.detail != nil && a.detail.Busy()
-				hasDraft := strings.TrimSpace(a.draft) != "" || len(a.pendingAttachments) > 0
+				hasDraft := strings.TrimSpace(a.draft) != "" || len(a.pendingAttachments) > 0 || len(a.pendingReferences) > 0
 				uploading := a.composerUploading()
 				sendable := hasDraft && !uploading
 				if busy {
-					stop := ui.ButtonBase(c).Label(tr("Stop")).Tooltip(tr("Stop the running turn (Esc)")).Size(composerSendSize, composerSendSize).
+					stop := ui.ButtonBase(c).Label(tr("Stop")).Size(composerSendSize, composerSendSize).
 						Radius(15).Center().Background(palette.overlayStrong)
 					if stop.Hovered() {
 						stop.Background(palette.dangerSoft)
@@ -209,11 +213,12 @@ func (a *app) composer(c *ui.Context) {
 						if queue.Clicked() {
 							if a.submitSessionSubmission(sessionSubmission{
 								sessionID:   a.composerTargetSessionID(),
-								text:        a.draft,
+								text:        a.promptWithReferences(a.draft),
 								attachments: append([]draftAttachment(nil), a.pendingAttachments...),
 							}) {
 								a.draft = ""
 								a.pendingAttachments = nil
+								a.pendingReferences = nil
 								a.autocompleteDismissed = false
 								a.autocompleteKey = ""
 							}
@@ -221,11 +226,7 @@ func (a *app) composer(c *ui.Context) {
 					}
 					return
 				}
-				sendTip := tr("Send")
-				if uploading {
-					sendTip = tr("Wait for the attachments to finish importing")
-				}
-				send := ui.ButtonBase(c).Label(tr("Send")).Tooltip(sendTip).Size(composerSendSize, composerSendSize).
+				send := ui.ButtonBase(c).Label(tr("Send")).Size(composerSendSize, composerSendSize).
 					Radius(15).Center().Disabled(!sendable)
 				if sendable {
 					send.Background(palette.inverse)
@@ -248,11 +249,12 @@ func (a *app) composer(c *ui.Context) {
 				if send.Clicked() && sendable {
 					if a.submitSessionSubmission(sessionSubmission{
 						sessionID:   a.composerTargetSessionID(),
-						text:        a.draft,
+						text:        a.promptWithReferences(a.draft),
 						attachments: append([]draftAttachment(nil), a.pendingAttachments...),
 					}) {
 						a.draft = ""
 						a.pendingAttachments = nil
+						a.pendingReferences = nil
 						a.autocompleteDismissed = false
 						a.autocompleteKey = ""
 					}
@@ -344,7 +346,7 @@ func (a *app) queuedMessages(c *ui.Context) {
 						})
 						ui.Row(c).Gap(2).AlignItems(ui.Center).Children(func() {
 							if steerable {
-								steer := ui.ButtonBase(c).Label(tr("Steer")).Tooltip(tr("Steer")).
+								steer := ui.ButtonBase(c).Label(tr("Steer")).
 									Height(22).Padding(0, 8).Radius(5).Center().
 									Border(1, palette.border)
 								if steer.Hovered() {
@@ -772,7 +774,7 @@ func (a *app) modelChip(c *ui.Context) {
 	// MenuChip geometry from src/ui/mod.rs (CHIP_* consts + RenderOnce):
 	// 28 high, 9 insets, 7 radius, 7 gap, 12.5/16 text; the model mark
 	// draws at 10.5 per render_provider_model_control; open reads overlay.
-	chip := ui.ButtonBase(c).Label(label).Tooltip(label).Height(composerChipHeight).
+	chip := ui.ButtonBase(c).Label(label).Height(composerChipHeight).
 		Padding(0, composerChipInset).Radius(composerChipRadius).
 		Gap(composerChipGap).AlignItems(ui.Center).Disabled(a.detail == nil)
 	if a.modelMenuOpen {

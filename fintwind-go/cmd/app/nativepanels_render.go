@@ -293,6 +293,14 @@ func (a *app) fileEditorSurface(c *ui.Context, ed *nativeFileEditor) {
 				state.ReadOnly = false
 				state.Font = ui.Font{Family: monoFont(), Size: codePx(13)}
 				state.LineHeight = 20.0 / 13.0
+				// The source's code editor menu ends with Quote selection:
+				// the editor's own Cut/Copy/Paste stay first, this stages
+				// the selection as a composer reference chip.
+				state.ContextMenu = func(m *ui.Menu) {
+					if m.Item(tr("Quote selection")).Disabled(state.SelectedText() == "").Chosen() {
+						a.quoteFileEditorSelection(ed)
+					}
+				}
 				editor.View(c, state).Grow(1).FillWidth().Label(nativeFileEditorLabel)
 				ed.syncNativeFileBuffer()
 			}

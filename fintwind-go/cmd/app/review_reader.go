@@ -284,7 +284,7 @@ func reviewSeparator(onHeaderClick func()) func(*ui.Context, ui.Element, *editor
 					fn()
 				}
 				chevron := func(down bool, label string, fn func()) {
-					b := ui.ButtonBase(c).Key(label).Size(20, 20).Radius(4).Label(label).Tooltip(label)
+					b := ui.ButtonBase(c).Key(label).Size(20, 20).Radius(4).Label(label)
 					if b.Hovered() {
 						b.Background(ct.Text.Alpha(0.08))
 					}
@@ -314,7 +314,7 @@ func reviewSeparator(onHeaderClick func()) func(*ui.Context, ui.Element, *editor
 					chevron(false, above, s.ExpandUp)
 				}
 				label := trf("%d unmodified lines", s.Lines)
-				b := ui.ButtonBase(c).Key("all").Padding(2, 6).Radius(4).Label(label).Tooltip(all)
+				b := ui.ButtonBase(c).Key("all").Padding(2, 6).Radius(4).Label(label)
 				if b.Hovered() {
 					b.Background(ct.Text.Alpha(0.06))
 				}

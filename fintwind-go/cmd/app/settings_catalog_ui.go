@@ -85,40 +85,7 @@ func marketCategoryOptions() []settingsOption {
 }
 
 func (a *app) providersListPane(c *ui.Context) {
-	st := &a.settings.catalog
-	backend := &a.settings.backend
-	mailPaneHeader(c, "Providers")
-	ui.Column(c).FillWidth().Padding(6, 8, 0, 8).Gap(1).Children(func() {
-		mailSectionLabel(c, "Built-in", true)
-		a.mailRow(c, "OpenCode", !st.providerAdding && backend.providerSelected == "", func() { a.cancelProviderAdd(); backend.providerSelected = "" }, func() {
-			mailTile(c, "bot", !st.providerAdding && backend.providerSelected == "")
-		}, func() {
-			mailStatusDot(c, a.modelProbe != nil && a.modelProbe.Installed)
-		})
-		mailSectionLabel(c, "Custom", false)
-		settingsOperationStatus(c, backend.provider, "")
-		if backend.provider.loaded && len(backend.providers) == 0 {
-			mailStatusRow(c, "No custom providers")
-		}
-	})
-	c.Key("settings-custom-provider-list")
-	ui.List(c, &backend.providerList, len(backend.providers)).FillWidth().Grow(1).MinHeight(0).ItemKey(func(i int) any { return backend.providers[i].ID }).Rows(func(row ui.ListRow) {
-		provider, c := backend.providers[row.Index], row.Context
-		ui.Column(c).FillWidth().Padding(0, 8).Children(func() {
-			a.mailRow(c, settingsProviderName(provider), backend.providerSelected == provider.ID, func() { a.cancelProviderAdd(); backend.providerSelected = provider.ID }, func() { mailTile(c, "bot", backend.providerSelected == provider.ID) }, func() { mailEnabledBadge(c, provider.Enabled, choice(provider.Enabled, "Enabled", "Disabled")) })
-		})
-	})
-	ui.Column(c).FillWidth().Padding(0, 8, 8, 8).Gap(4).Children(func() {
-		if mailAddRow(c, "Add provider", st.providerAdding) {
-			a.beginSettingsProvider(nil)
-		}
-		componentTextButton(c, "settings-providers-reload", tr("Reload"), false).Disabled(backend.provider.loading || backend.provider.writing).OnClick(a.loadSettingsProviders)
-	})
-	caption := "Not loaded"
-	if backend.provider.loaded {
-		caption = fmt.Sprintf("%d custom providers", len(backend.providers))
-	}
-	mailFooter(c, caption, false)
+	a.providersListPaneFull(c)
 }
 
 func (a *app) skillsListPane(c *ui.Context) {

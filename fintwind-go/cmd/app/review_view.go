@@ -126,7 +126,7 @@ func (a *app) reviewSecondary(c *ui.Context) {
 	ui.List(c, &st.FileList, len(st.Rows)).FillWidth().Grow(1).MinHeight(0).ItemKey(func(i int) any { return st.Rows[i].Path }).Rows(func(row ui.ListRow) {
 		file := st.Rows[row.Index]
 		c.Key(file.Path)
-		entry := ui.ButtonBase(c).Label(scFileLabel(file)).Tooltip(scFileLabel(file)).FillWidth().MinHeight(34).Padding(5, 12).Gap(5).AlignItems(ui.Center)
+		entry := ui.ButtonBase(c).Label(scFileLabel(file)).FillWidth().MinHeight(34).Padding(5, 12).Gap(5).AlignItems(ui.Center)
 		if st.Selected == file.Path {
 			entry.Background(palette.overlayStrong)
 		} else if entry.Hovered() {

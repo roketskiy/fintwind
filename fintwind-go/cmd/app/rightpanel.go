@@ -139,7 +139,7 @@ var addSurfaceMenuOpen bool
 // chooser cards offer, with a check on the single-instance ones already
 // open — render_right_panel_header's dropdown_menu.
 func (a *app) addSurfaceButton(c *ui.Context) {
-	plus := ui.ButtonBase(c).Label(tr("Open a surface")).Tooltip(tr("Open a surface")).
+	plus := ui.ButtonBase(c).Label(tr("Open a surface")).
 		Size(26, 26).Center().Radius(7)
 	if plus.Hovered() {
 		plus.Background(palette.overlay)

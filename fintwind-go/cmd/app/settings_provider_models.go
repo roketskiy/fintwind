@@ -50,7 +50,7 @@ func (a *app) settingsProviderModels(c *ui.Context) {
 					ui.Column(c).Width(120).Shrink(0).Children(func() {
 						settingsFormField(c, key+"-context", tr("Context window"), &draft.context, "Optional")
 					})
-					componentIconButton(c, key+"-remove", "trash", true).Label(tr("Remove model")).Tooltip(tr("Remove model")).
+					componentIconButton(c, key+"-remove", "trash", true).Label(tr("Remove model")).
 						OnClick(func() {
 							for index, candidate := range st.pfModels {
 								if candidate == draft {

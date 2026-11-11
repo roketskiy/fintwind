@@ -226,7 +226,7 @@ func (a *app) handleComposerDrop(card ui.Element) {
 // for the file picker, sitting after the interaction chip like the source's
 // quote entry sits after its mode control.
 func (a *app) attachButton(c *ui.Context) {
-	attach := ui.ButtonBase(c).Label(tr("Attach files")).Tooltip(tr("Attach files")).
+	attach := ui.ButtonBase(c).Label(tr("Attach files")).
 		Size(composerChipHeight, composerChipHeight).Radius(composerChipRadius).Center()
 	if attach.Hovered() {
 		attach.Background(palette.overlay)
@@ -272,7 +272,7 @@ func (a *app) pendingAttachmentChips(c *ui.Context) {
 					ui.Text(c, attachment.Name).FontSize(uiPx(12)).FixedLineHeight(uiPx(16)).
 						TextColor(palette.textSecondary).SingleLine().Ellipsis("...")
 				})
-				remove := ui.ButtonBase(c).Label(tr("Remove attachment")).Tooltip(tr("Remove")).
+				remove := ui.ButtonBase(c).Label(tr("Remove attachment")).
 					Size(20, 20).Radius(5).Center()
 				if remove.Hovered() {
 					remove.Background(palette.overlayStrong)

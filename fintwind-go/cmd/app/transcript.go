@@ -405,7 +405,17 @@ func (a *app) messageView(c *ui.Context, messageIndex int) {
 		collapsible := userMessageCollapsible(text)
 		collapsed := collapsible && !a.expandedUserMessages[m.ID]
 		column := ui.Column(c).FillWidth().AlignItems(ui.End).Gap(3)
+		column.Selectable()
 		column.Children(func() {
+			if len(m.Attachments) > 0 {
+				ui.Row(c).MaxWidth(540).Wrap().Justify(ui.End).Gap(8).Children(func() {
+					for _, attachment := range m.Attachments {
+						a.attachmentChip(c, attachment)
+					}
+				})
+			}
+			// The source renders the bubble only for non-empty text, so an
+			// attachment-only message shows its tiles with no empty box.
 			if len(m.Attachments) > 0 {
 				ui.Row(c).MaxWidth(540).Wrap().Justify(ui.End).Gap(8).Children(func() {
 					for _, attachment := range m.Attachments {
@@ -459,7 +469,7 @@ func (a *app) messageView(c *ui.Context, messageIndex int) {
 				})
 				_ = bubble
 			}
-			_ = a.messageCopyMenu(column, m.ID, text)
+			_ = a.messageCopyMenu(column, m.ID, "user", text)
 			footer := a.messageFooter(c, m, messageIndex, text, true)
 			if !column.Hovered() {
 				footer.Invisible()
@@ -467,6 +477,7 @@ func (a *app) messageView(c *ui.Context, messageIndex int) {
 		})
 	case "assistant":
 		column := ui.Column(c).FillWidth().MinWidth(0).PaddingY(4).Gap(3)
+		column.Selectable()
 		column.Children(func() {
 			if text != "" {
 				a.renderMarkdown(c, "msg:"+m.ID, text, &a.md, m.Streaming)
@@ -499,7 +510,7 @@ func (a *app) messageView(c *ui.Context, messageIndex int) {
 		if content, _, ok := a.assistantFooter(messageIndex); ok {
 			menuCopy = content
 		}
-		_ = a.messageCopyMenu(column, m.ID, menuCopy)
+		_ = a.messageCopyMenu(column, m.ID, "assistant", menuCopy)
 	case "system":
 		a.systemMessage(c, text)
 	case "compaction":
@@ -844,6 +855,7 @@ func (a *app) compactionMessage(c *ui.Context, messageID, text string) {
 	}
 	card := ui.Column(c).FillWidth().MinWidth(0).Radius(9).
 		Border(1, palette.borderStrong).Background(hex(0x2A2A2A))
+	card.Selectable()
 	card.Children(func() {
 		row := ui.ButtonBase(c).Label(tr("Compaction")).FillWidth().Height(30).
 			Padding(0, 10).Gap(6).AlignItems(ui.Center)

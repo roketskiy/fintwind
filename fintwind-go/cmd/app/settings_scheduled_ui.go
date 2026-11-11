@@ -37,7 +37,28 @@ func schedFilterIndex(filter string) int {
 
 func (a *app) scheduledListPane(c *ui.Context) {
 	st, backend := &a.settings.catalog, &a.settings.backend
-	mailPaneHeader(c, tr("Scheduled tasks"))
+	tk := theme.TokensOf(c)
+	ui.Row(c).FillWidth().Padding(14, 12, 0, 12).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, tr("Scheduled tasks")).FontSize(uiPx(20)).FontWeight(500).
+			TextColor(palette.text).Grow(1).MinWidth(0).SingleLine().Ellipsis("...")
+		newTask := ui.ButtonBase(c).Label(tr("New task")).Height(32).Padding(0, 12).
+			Radius(7).Gap(6).AlignItems(ui.Center).Border(0, ui.Transparent).
+			Background(tk.Primary).TextColor(tk.PrimaryForeground).
+			FontSize(uiPx(12.5)).FontWeight(500)
+		if newTask.Hovered() {
+			newTask.Background(tk.PrimaryHover)
+		}
+		if newTask.Pressed() {
+			newTask.Background(tk.PrimaryActive)
+		}
+		newTask.Children(func() {
+			icon(c, "plus", 13, tk.PrimaryForeground)
+			ui.Text(c, tr("New task")).SingleLine()
+		})
+		if newTask.Clicked() {
+			a.beginScheduledTask(nil)
+		}
+	})
 	ui.Column(c).FillWidth().Padding(10, 12, 0, 12).Gap(8).Children(func() {
 		settingsSearchInput(c, "scheduled-search", tr("Search tasks"), &st.schedQuery)
 		c.Key("scheduled-filter")
@@ -70,24 +91,9 @@ func (a *app) scheduledListPane(c *ui.Context) {
 	ui.List(c, &backend.schedList, len(visible)).FillWidth().Grow(1).MinHeight(0).ItemKey(func(i int) any { return visible[i].ID }).Rows(func(row ui.ListRow) {
 		task := visible[row.Index]
 		rowCtx := row.Context
-		ui.Column(rowCtx).FillWidth().Padding(2, 8, 2, 8).Children(func() {
-			a.mailRow(rowCtx, task.Title, backend.schedSelected == task.ID && !st.schedAdding, func() {
-				st.schedAdding = false
-				backend.schedEditing, backend.schedDeleteConfirm = "", ""
-				backend.schedSelected = task.ID
-				a.closeSettingsMenus()
-			}, func() { mailTile(rowCtx, "clock", backend.schedSelected == task.ID) }, func() {
-				mailEnabledBadge(rowCtx, task.Enabled, choice(task.Enabled, tr("Enabled"), tr("Paused")))
-			})
-			meta := schedScheduleSummary(task.Schedule) + tr(" · ") + a.schedNextLabel(task)
-			ui.Text(rowCtx, meta).FontSize(uiPx(10.5)).TextColor(palette.textTertiary).SingleLine().Ellipsis("...").Margin(0, 9, 0, 9)
+		ui.Column(rowCtx).FillWidth().Padding(4, 8, 4, 8).Children(func() {
+			a.schedTaskCard(rowCtx, task, backend.schedSelected == task.ID && !st.schedAdding)
 		})
-	})
-	ui.Column(c).FillWidth().Padding(0, 8, 8, 8).Gap(4).Children(func() {
-		if mailAddRow(c, tr("New task"), st.schedAdding) {
-			a.beginScheduledTask(nil)
-		}
-		componentTextButton(c, "settings-scheduled-reload", tr("Reload"), false).Disabled(backend.sched.loading || backend.sched.writing).OnClick(a.loadSettingsScheduled)
 	})
 	caption := tr("Not loaded")
 	if backend.sched.loaded {
@@ -96,8 +102,69 @@ func (a *app) scheduledListPane(c *ui.Context) {
 	mailFooter(c, caption, false)
 }
 
-func (a *app) schedNextLabel(task scheduledTask) string {
-	if !task.Enabled {
+// schedStatusBadge is the roster's enable badge with a tone dot: success
+// while enabled, danger while paused, like the source's badge tones.
+func schedStatusBadge(c *ui.Context, enabled bool) {
+	color, label := palette.success, tr("Enabled")
+	if !enabled {
+		color, label = palette.danger, tr("Paused")
+	}
+	badge := ui.Row(c).Padding(2, 7).Radius(10).Gap(5).AlignItems(ui.Center).
+		Background(ui.RGBA(color.R, color.G, color.B, 0.14))
+	badge.Children(func() {
+		ui.Row(c).Size(6, 6).Shrink(0).Radius(3).Background(color)
+		ui.Text(c, label).FontSize(uiPx(9.5)).TextColor(color)
+	})
+}
+
+// schedTaskCard is one roster card: title plus status badge over the
+// target/schedule/next/last meta, with the row menu (Edit/Run/Delete) like
+// the source's task row menu. Enter/Space on a focused card selects it.
+func (a *app) schedTaskCard(c *ui.Context, task scheduledTask, selected bool) {
+	st, backend := &a.settings.catalog, &a.settings.backend
+	card := ui.ButtonBase(c).Label(task.Title).FillWidth().Padding(10, 12).Radius(9).
+		Gap(6).Border(1, palette.cardBorder).Background(palette.raised)
+	if selected {
+		card.Border(1, palette.accent)
+	}
+	card.Children(func() {
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, task.Title).FontSize(uiPx(12.5)).FontWeight(500).
+				TextColor(palette.text).Grow(1).MinWidth(0).SingleLine().Ellipsis("...")
+			schedStatusBadge(c, task.Enabled)
+		})
+		meta := a.schedTargetLabel(task) + tr(" · ") + schedScheduleSummary(task.Schedule) + tr(" · ") + a.schedNextLabel(task)
+		if task.Last != nil {
+			meta += tr(" · ") + strings.ReplaceAll(tr("Last %{time}"), "%{time}", schedFormatTimestamp(task.Last.At))
+		}
+		ui.Text(c, meta).FontSize(uiPx(10.5)).TextColor(palette.textTertiary).SingleLine().Ellipsis("...")
+	})
+	busy := backend.sched.writing || backend.sched.uncertain
+	card.ContextMenu(func(m *ui.Menu) {
+		if m.Item(tr("Edit task")).Disabled(busy).Chosen() {
+			a.beginScheduledTask(&task)
+		}
+		runDisabled := busy || task.Pending != nil
+		if m.Item(tr("Run now")).Disabled(runDisabled).Chosen() {
+			a.runScheduledTaskNow(task)
+		}
+		m.Separator()
+		if m.Item(tr("Delete")).Disabled(busy).Chosen() {
+			st.schedAdding = false
+			backend.schedEditing = ""
+			backend.schedSelected = task.ID
+			backend.schedDeleteConfirm = "scheduled:" + task.ID
+		}
+	})
+	if card.Clicked() || (card.Focused() && (c.Shortcut(0, ui.KeyEnter) || c.Shortcut(0, ui.KeySpace))) {
+		st.schedAdding = false
+		backend.schedEditing, backend.schedDeleteConfirm = "", ""
+		backend.schedSelected = task.ID
+		a.closeSettingsMenus()
+	}
+}
+
+func (a *app) schedNextLabel(task scheduledTask) string {	if !task.Enabled {
 		return tr("Not scheduled")
 	}
 	if task.NextDueAt == nil {
@@ -210,7 +277,6 @@ func (a *app) scheduledForm(c *ui.Context) {
 			})
 			settingsOperationStatus(c, backend.sched, "")
 			formActions(c, "scheduled-form", tr("Save"), !backend.sched.loaded || backend.sched.writing || backend.sched.uncertain, a.cancelScheduledTask, a.saveScheduledTask)
-			ui.Text(c, tr("New sessions run in the project directory.")).FontSize(uiPx(11)).TextColor(palette.textTertiary).Wrap()
 		})
 	})
 }

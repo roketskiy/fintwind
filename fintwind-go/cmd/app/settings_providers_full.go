@@ -214,7 +214,7 @@ func (a *app) providersListPaneFull(c *ui.Context) {
 			a.cancelProviderAdd()
 			a.selectProvider("opencode")
 		}, func() {
-			mailTile(c, "bot", !st.providerAdding && selected == "opencode")
+			providerTile(c, "opencode", !st.providerAdding && selected == "opencode")
 		}, func() {
 			mailStatusDot(c, a.modelProbe != nil && a.modelProbe.Installed)
 		})
@@ -229,7 +229,7 @@ func (a *app) providersListPaneFull(c *ui.Context) {
 					a.cancelProviderAdd()
 					a.selectProvider(id)
 				}, func() {
-					mailTile(c, "bot", !st.providerAdding && selected == id)
+					providerTile(c, provider.Name, !st.providerAdding && selected == id)
 				}, func() {
 					mailStatusDot(c, !a.providerNeedsAuth(provider.ID))
 				})
@@ -249,7 +249,7 @@ func (a *app) providersListPaneFull(c *ui.Context) {
 			a.mailRow(c, settingsProviderName(provider), selected, func() {
 				a.cancelProviderAdd()
 				a.selectProvider(provider.ID)
-			}, func() { mailTile(c, "bot", selected) }, func() {
+			}, func() { providerTile(c, settingsProviderName(provider), selected) }, func() {
 				mailEnabledBadge(c, provider.Enabled, choice(provider.Enabled, tr("Enabled"), tr("Disabled")))
 			})
 		})
@@ -258,9 +258,6 @@ func (a *app) providersListPaneFull(c *ui.Context) {
 		if mailAddRow(c, tr("Add provider"), st.providerAdding) {
 			a.beginProviderForm()
 		}
-		componentTextButton(c, "settings-providers-reload", tr("Reload"), false).Disabled(backend.provider.loading || backend.provider.writing).OnClick(func() {
-			a.resetProvidersPage()
-		})
 	})
 	caption := tr("Not loaded")
 	if backend.provider.loaded {
@@ -1195,7 +1192,7 @@ func (a *app) providerPickerForm(c *ui.Context) {
 						a.mailRow(c, label, false, func() {
 							backend.providerFormStage = "builtin"
 							backend.providerFormBuiltin = provider.ID
-						}, func() { mailTile(c, "bot", false) }, nil)
+						}, func() { providerTile(c, provider.Name, false) }, nil)
 					}
 				}
 			})

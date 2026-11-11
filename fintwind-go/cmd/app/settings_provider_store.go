@@ -305,46 +305,6 @@ func (a *app) commitSettingsProviders(roster []settingsProvider, selected, key s
 	}()
 }
 
-func (a *app) probeSettingsProvider(id string) {
-	st := &a.settings.backend
-	if st.provider.writing || st.provider.loading || st.providerSaveInFlight {
-		return
-	}
-	var target *settingsProvider
-	for i := range st.providers {
-		if st.providers[i].ID == id {
-			target = &st.providers[i]
-			break
-		}
-	}
-	if target == nil {
-		return
-	}
-	format := settingsProviderFormatForEntry(target.Entry, target.Native)
-	baseURL := settingsProviderBaseURL(target.Entry, target.Native)
-	apiKey := settingsProviderAPIKey(target.Entry, target.Native)
-	if strings.TrimSpace(apiKey) == "" {
-		apiKey = a.resolveProviderKeyForProbe(id)
-	}
-	st.provider.writing, st.provider.err, st.provider.message = true, "", ""
-	go func(format, baseURL, apiKey string) {
-		outcome := probeProviderConnectivity(format, baseURL, apiKey)
-		a.post(func() {
-			st := &a.settings.backend
-			st.provider.writing = false
-			if !outcome.reachable {
-				msg := ""
-				if outcome.err != nil {
-					msg = outcome.err.text()
-				}
-				st.provider.err = tr("Probe failed. ") + msg
-				return
-			}
-			st.provider.message = fmt.Sprintf(tr("%d models · %d ms"), outcome.models, outcome.latency.Milliseconds())
-		})
-	}(format, baseURL, apiKey)
-}
-
 func settingsProviderFormatForEntry(entry map[string]any, native bool) string {
 	if native {
 		if pkg, ok := entry["package"].(string); ok {

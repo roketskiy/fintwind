@@ -50,33 +50,33 @@ type settingsCatalogUIState struct {
 	// Inline variable editor: active table ("environment"/"headers"), row
 	// index for edits, and key/value drafts. mcpVarIsAdd selects the add
 	// row; otherwise mcpVarIndex edits that table row.
-	mcpVarActive bool
-	mcpVarTable  string
-	mcpVarIndex  int
-	mcpVarIsAdd  bool
-	mcpVarKey    string
-	mcpVarValue  string
+	mcpVarActive       bool
+	mcpVarTable        string
+	mcpVarIndex        int
+	mcpVarIsAdd        bool
+	mcpVarKey          string
+	mcpVarValue        string
 	mdCommitGeneration uint64
-	marketQuery  string
-	marketCat    string
-	marketSel    string
-	marketList   ui.ListState
-	schedQuery        string
-	schedFilter       string
-	schedAdding       bool
-	schedTitle        string
-	schedPrompt       string
-	schedSchedule     string
-	schedTime         string
-	schedWeekdays     uint8
-	schedDate         string
-	schedInterval     string
-	schedTarget       string
-	schedProject      string
-	schedSession      string
-	schedModel        string
-	schedAccess       string
-	schedEnabled      bool
+	marketQuery        string
+	marketCat          string
+	marketSel          string
+	marketList         ui.ListState
+	schedQuery         string
+	schedFilter        string
+	schedAdding        bool
+	schedTitle         string
+	schedPrompt        string
+	schedSchedule      string
+	schedTime          string
+	schedWeekdays      uint8
+	schedDate          string
+	schedInterval      string
+	schedTarget        string
+	schedProject       string
+	schedSession       string
+	schedModel         string
+	schedAccess        string
+	schedEnabled       bool
 }
 
 // settingsFilterWidth is the full inner width of each roster pane: the
@@ -201,7 +201,6 @@ func (a *app) skillsListPane(c *ui.Context) {
 			})
 		})
 	}
-	componentTextButton(c, "settings-skills-reload", tr("Reload"), false).Disabled(backend.skill.loading || backend.skill.writing).OnClick(a.loadSettingsSkills)
 	filtered := strings.TrimSpace(st.skillQuery) != "" || st.skillSource != ""
 	mailFooter(c, skillsFooterCaption(visible, backend, filtered), true)
 }
@@ -217,7 +216,7 @@ func (a *app) skillRosterRow(c *ui.Context, skill settingsSkill, selected bool) 
 	if selected {
 		row.Background(palette.sidebarItem)
 	} else {
-		if row.Hovered() {
+		if row.Hovered() || row.Focused() {
 			row.Background(palette.overlay)
 		}
 		if row.Pressed() {
@@ -247,7 +246,7 @@ func (a *app) skillRosterRow(c *ui.Context, skill settingsSkill, selected bool) 
 				SingleLine().Ellipsis("...").Margin(1, 0, 0, 0)
 		})
 	})
-	if row.Clicked() {
+	if row.Clicked() || (row.Focused() && (c.Shortcut(0, ui.KeyEnter) || c.Shortcut(0, ui.KeySpace))) {
 		backend.skillSelected = skill.key()
 		backend.skillTrashConfirm = false
 	}
@@ -329,7 +328,6 @@ func (a *app) mcpListPane(c *ui.Context) {
 			}
 		})
 	})
-	componentTextButton(c, "settings-mcp-reload", tr("Reload"), false).Disabled(backend.mcp.loading || backend.mcp.writing).OnClick(a.loadSettingsMcp)
 	caption := tr("Not loaded")
 	if backend.mcp.loaded {
 		count := len(backend.mcpServers)
@@ -366,7 +364,7 @@ func (a *app) mcpRow(c *ui.Context, server settingsMcpServer, selected bool) {
 	if selected {
 		row.Background(palette.sidebarItem)
 	} else {
-		if row.Hovered() {
+		if row.Hovered() || row.Focused() {
 			row.Background(palette.overlay)
 		}
 		if row.Pressed() {
@@ -394,7 +392,7 @@ func (a *app) mcpRow(c *ui.Context, server settingsMcpServer, selected bool) {
 			a.toggleSettingsMcp(server.Name)
 		})
 	})
-	if row.Clicked() {
+	if row.Clicked() || (row.Focused() && (c.Shortcut(0, ui.KeyEnter) || c.Shortcut(0, ui.KeySpace))) {
 		a.selectMcpServer(server.Name)
 	}
 }

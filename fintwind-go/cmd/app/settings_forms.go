@@ -93,66 +93,6 @@ func (a *app) providerAddForm(c *ui.Context) {
 	a.providerAddFormFull(c)
 }
 
-func (a *app) providersDetailLegacy(c *ui.Context) {
-	ui.Row(c).FillWidth().Padding(14, 24, 0, 24).Gap(6).
-		AlignItems(ui.Center).Children(func() {
-		ui.Text(c, tr("Device")).FontSize(uiPx(11)).FontWeight(500).
-			TextColor(palette.textSecondary)
-		deviceChip(c, "This computer", true)
-	})
-	ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
-		ui.Column(c).FillWidth().Padding(18, 24, 24, 24).Children(func() {
-			ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
-				mailDetailTile(c, "bot", 17)
-				ui.Column(c).Grow(1).MinWidth(0).Children(func() {
-					ui.Text(c, tr("OpenCode")).FontSize(uiPx(15)).FontWeight(500).
-						TextColor(palette.text)
-					ui.Text(c, tr("Built-in · managed by the OpenCode CLI")).
-						FontSize(uiPx(10.5)).TextColor(palette.textTertiary).
-						SingleLine().Ellipsis("...")
-				})
-				status := tr("Not checked")
-				installed := a.modelProbe != nil && a.modelProbe.Installed
-				if a.modelProbeLoad {
-					status = tr("Checking")
-				} else if a.modelProbe != nil {
-					if installed {
-						status = tr("Installed")
-					} else {
-						status = tr("Not installed")
-					}
-				}
-				mailEnabledBadge(c, installed, status)
-				a.providerRefreshButton(c)
-			})
-			a.providerModelSection(c)
-			a.settingsBuiltinIntegrations(c)
-		})
-	})
-}
-
-func (a *app) providerAddFormLegacy(c *ui.Context) {
-	st := &a.settings.catalog
-	ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
-		ui.Column(c).FillWidth().Padding(18, 24, 24, 24).Gap(14).Children(func() {
-			formTitle(c, choice(a.settings.backend.providerEditing != "", tr("Edit provider"), tr("Add provider")))
-			settingsFormField(c, "provider-form-name", tr("Name"), &st.pfName, "My provider")
-			settingsFormField(c, "provider-form-url", tr("Base URL"), &st.pfBaseURL, "https://api.example.com/v1")
-			formSecretField(c, "provider-form-key", tr("API key"), &st.pfAPIKey, &st.pfShowKey)
-			ui.Column(c).FillWidth().Gap(6).Children(func() {
-				ui.Text(c, tr("API format")).FontSize(uiPx(11)).FontWeight(500).TextColor(palette.text)
-				a.settingsChoice(c, "provider-form-format", tr("API format"), st.pfFormat, formPickerWidth, providerFormatOptions(), func(option settingsOption) {
-					st.pfFormat = option.value
-					a.settings.backend.providerFormatTouched = true
-				})
-			})
-			a.settingsProviderModels(c)
-			settingsOperationStatus(c, a.settings.backend.provider, "")
-			formActions(c, "provider-form", tr("Save"), !a.settings.backend.provider.loaded || a.settings.backend.provider.writing || a.settings.backend.provider.uncertain, a.cancelProviderAdd, a.saveSettingsProvider)
-		})
-	})
-}
-
 // skillsDetail has no selection without a catalog: the placeholder stands.
 func (a *app) skillsDetail(c *ui.Context) {
 	a.settingsSkillDetail(c)

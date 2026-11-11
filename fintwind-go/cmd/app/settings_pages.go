@@ -36,27 +36,52 @@ func mailSectionLabel(c *ui.Context, label string, first bool) {
 		TextColor(palette.textTertiary).Margin(top, 9, 4, 9)
 }
 
+// providerTile is one provider roster icon: the company's brand mark when
+// the name maps to one (like the source's model_mark Company arm), else the
+// bot glyph. Selected rows tint the fallback with the accent, like the
+// source's selected mark.
+func providerTile(c *ui.Context, name string, active bool) {
+	mailTileContent(c, providerMark(name), active)
+}
+
 // mailTile is the 28x28 overlay icon box inside roster rows.
 func mailTile(c *ui.Context, iconName string, active bool) {
+	mailTileContent(c, iconName, active)
+}
+
+func mailTileContent(c *ui.Context, iconName string, active bool) {
 	color := palette.textSecondary
 	if active {
-		color = palette.text
+		color = palette.accent
 	}
 	ui.Row(c).Size(28, 28).Shrink(0).Radius(2).Background(palette.overlay).
 		Justify(ui.Center).AlignItems(ui.Center).Children(func() {
-		icon(c, iconName, 14, color)
+		markIcon(c, iconName, 14, color)
 	})
+}
+
+// providerMark names the brand asset for a provider, falling back to the
+// bot glyph when the name maps to no company.
+func providerMark(name string) string {
+	if strings.Contains(strings.ToLower(name), "opencode") {
+		return "provider-opencode"
+	}
+	if mark := companyIconFor(name); mark != "" {
+		return mark
+	}
+	return "bot"
 }
 
 // mailRow is one roster entry: px9 py7, radius 8, gap 9. Selected rows sit on
 // sidebarItem (accent 0.13 in Rust); the rest hover/press on the overlays.
+// Like the source's rows, a focused row activates on Enter/Space.
 func (a *app) mailRow(c *ui.Context, label string, selected bool, onClick func(), tile func(), tail func()) {
 	row := ui.ButtonBase(c).Label(label).FillWidth().Padding(7, 9).
 		Radius(8).Gap(9).Justify(ui.Start).AlignItems(ui.Center)
 	if selected {
 		row.Background(palette.sidebarItem)
 	} else {
-		if row.Hovered() {
+		if row.Hovered() || row.Focused() {
 			row.Background(palette.overlay)
 		}
 		if row.Pressed() {
@@ -73,22 +98,24 @@ func (a *app) mailRow(c *ui.Context, label string, selected bool, onClick func()
 			tail()
 		}
 	})
-	if row.Clicked() && onClick != nil {
+	if onClick != nil && (row.Clicked() || (row.Focused() && (c.Shortcut(0, ui.KeyEnter) || c.Shortcut(0, ui.KeySpace)))) {
 		onClick()
 	}
 }
 
-// mailStatusDot is the 8px presence dot at the end of provider rows.
+// mailStatusDot is the 8px presence dot at the end of provider rows:
+// accent while active, ghost while not, like the source's row dot.
 func mailStatusDot(c *ui.Context, active bool) {
 	color := palette.textGhost
 	if active {
-		color = palette.text
+		color = palette.accent
 	}
 	ui.Row(c).Size(8, 8).Shrink(0).Radius(4).Background(color)
 }
 
 // mailAddRow is the dashed-style add entry: bordered, plus icon, hover lifts
 // to overlay. `adding` marks the open-form state with the accent border.
+// Like mailRow, a focused row activates on Enter/Space.
 func mailAddRow(c *ui.Context, label string, adding bool) bool {
 	row := ui.ButtonBase(c).Label(label).FillWidth().Padding(7, 9).
 		Radius(8).Gap(9).Justify(ui.Start).AlignItems(ui.Center).
@@ -107,14 +134,14 @@ func mailAddRow(c *ui.Context, label string, adding bool) bool {
 		ui.Text(c, label).FontSize(uiPx(12.5)).TextColor(textColor)
 	})
 	if !adding {
-		if row.Hovered() {
+		if row.Hovered() || row.Focused() {
 			row.Background(palette.overlay)
 		}
 		if row.Pressed() {
 			row.Background(palette.overlayStrong)
 		}
 	}
-	return row.Clicked()
+	return row.Clicked() || (row.Focused() && (c.Shortcut(0, ui.KeyEnter) || c.Shortcut(0, ui.KeySpace)))
 }
 
 // mailFooter is the h26 caption strip under the roster, over a top hairline.

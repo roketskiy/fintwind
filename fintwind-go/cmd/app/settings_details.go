@@ -32,7 +32,6 @@ func (a *app) settingsCustomProviderDetail(c *ui.Context) {
 			mailEnabledBadge(c, provider.Enabled, choice(provider.Enabled, "Enabled", "Disabled"))
 			ui.Row(c).Gap(8).Children(func() {
 				componentTextButton(c, "provider-edit", tr("Edit"), false).Disabled(st.provider.writing).OnClick(func() { a.beginSettingsProvider(&provider) })
-				componentTextButton(c, "provider-probe", tr("Probe models"), false).Disabled(st.provider.writing).OnClick(func() { a.probeSettingsProvider(provider.ID) })
 				componentTextButton(c, "provider-toggle", choice(provider.Enabled, tr("Disable"), tr("Enable")), false).Disabled(st.provider.writing || st.provider.uncertain).OnClick(func() {
 					roster := append([]settingsProvider{}, st.providers...)
 					for i := range roster {

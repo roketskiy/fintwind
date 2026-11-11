@@ -12,6 +12,10 @@ use uuid::Uuid;
 /// viewable read-only.
 pub const OPENCODE_PROVIDER: &str = "opencode";
 
+/// Local scope marker: without remote environments every operation runs in
+/// the nil environment.
+pub const LOCAL_ENVIRONMENT_ID: Uuid = Uuid::nil();
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(
     rename_all = "camelCase",

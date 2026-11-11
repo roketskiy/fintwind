@@ -20,6 +20,7 @@ required-features = ["dev-binary"]
 
 [dependencies]
 anyhow = "1.0"
+dirs = "6.0"
 serde_json = "1.0"
 fintwind-core = { path = "../fintwind-core" }
 fintwind-protocol = { path = "../fintwind-protocol" }

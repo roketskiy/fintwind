@@ -64,7 +64,7 @@ pub fn create(
     prompt: &str,
     base_branch: Option<&str>,
 ) -> anyhow::Result<CreatedWorktree> {
-    let root = dirs::home_dir()
+    let root = fintwind_protocol::profile_paths::home_dir()
         .ok_or_else(|| anyhow!("could not locate the home directory for ~/.fintwind/worktrees"))?
         .join(".fintwind/worktrees");
     create_in(

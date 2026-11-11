@@ -8,6 +8,8 @@ use std::time::Duration;
 use anyhow::{Context as _, anyhow, bail};
 use fintwind_protocol::{DAEMON_TOKEN_ENV, DaemonReady, PROTOCOL_VERSION};
 
+mod startup_profile;
+
 fn main() -> anyhow::Result<()> {
     let arguments = Arguments::parse(std::env::args().skip(1))?;
     let token = std::env::var(DAEMON_TOKEN_ENV)
@@ -19,11 +21,6 @@ fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(&arguments.bind)
         .with_context(|| format!("could not bind Fintwind daemon to {}", arguments.bind))?;
     let address = listener.local_addr()?;
-    let ready = DaemonReady {
-        address: address.to_string(),
-        protocol_version: PROTOCOL_VERSION,
-        pid: std::process::id(),
-    };
     let shutdown = Arc::new(AtomicBool::new(false));
     if let Some(parent_pid) = arguments.parent_pid {
         let monitor_shutdown = shutdown.clone();
@@ -40,27 +37,38 @@ fn main() -> anyhow::Result<()> {
             })?;
     }
 
+    let profile = startup_profile::resolve(&arguments)?;
+    // Exclusive ownership of the data directory, before any database or
+    // settings access: a second daemon on the same directory fails fast
+    // instead of racing migrations. The handle lives until process exit.
+    let _data_lock =
+        fintwind_core::daemon::acquire_data_directory_lock(&profile.data_dir)
+            .context("could not acquire fintwind data directory")?;
+    // Stable per data directory, fresh per process: the ready announcement
+    // and every hello carry both, so a client can tell environments apart.
+    let identity = fintwind_core::daemon::claim_daemon_identity(&profile.data_dir)
+        .context("could not load fintwind environment identity")?;
+    let ready = DaemonReady {
+        address: address.to_string(),
+        protocol_version: PROTOCOL_VERSION,
+        pid: std::process::id(),
+        environment_id: identity.environment_id,
+        instance_id: identity.instance_id,
+    };
     // Failure modes for isolated E2E: the task database was relocated but
     // settings/legacy migration still read the real user profile, or a failed
     // isolated directory silently fell back to the default. An explicit data
     // directory owns both paths and never consults legacy profile settings.
-    let (task_path, settings) = if let Some(directory) = arguments.data_dir.as_ref() {
-        std::fs::create_dir_all(directory).context("could not create daemon data directory")?;
-        (
-            directory.join("app.db"),
-            fintwind_core::DaemonSettingsStore::open(directory.join("daemon.json"))
-                .context("could not load isolated daemon settings")?,
+    let settings = match &profile.isolated_settings {
+        Some(path) => fintwind_core::DaemonSettingsStore::open(path.clone())
+            .context("could not load isolated daemon settings")?,
+        None => fintwind_core::DaemonSettingsStore::open_with_legacy(
+            profile.settings_path.clone(),
+            [profile.legacy_settings_path.clone()],
         )
-    } else {
-        let task_path = fintwind_core::persistence::StateStore::default_path();
-        let settings = fintwind_core::DaemonSettingsStore::open_with_legacy(
-            fintwind_core::DaemonSettings::default_path(),
-            [task_path.with_file_name("settings.json")],
-        )
-        .context("could not load daemon settings")?;
-        (task_path, settings)
+        .context("could not load daemon settings")?,
     };
-    let task_store = fintwind_core::persistence::StateStore::daemon(task_path);
+    let task_store = fintwind_core::persistence::StateStore::daemon(profile.task_path);
     let backend = Arc::new(fintwind_core::daemon::FintwindBackend::new(
         settings, task_store,
     )?);
@@ -83,6 +91,7 @@ struct Arguments {
     bind: String,
     parent_pid: Option<u32>,
     data_dir: Option<PathBuf>,
+    production_data: bool,
 }
 
 impl Arguments {
@@ -90,6 +99,7 @@ impl Arguments {
         let mut bind = "127.0.0.1:0".to_owned();
         let mut parent_pid = None;
         let mut data_dir = None;
+        let mut production_data = false;
         let mut arguments = arguments.into_iter();
         while let Some(argument) = arguments.next() {
             match argument.as_str() {
@@ -118,9 +128,12 @@ impl Arguments {
                     }
                     data_dir = Some(directory);
                 }
+                "--production-data" => {
+                    production_data = true;
+                }
                 "--help" | "-h" => {
                     println!(
-                        "usage: {} [--bind ADDRESS] [--parent-pid PID] [--data-dir DIRECTORY]",
+                        "usage: {} [--bind ADDRESS] [--parent-pid PID] [--data-dir DIRECTORY] [--production-data]",
                         env!("CARGO_BIN_NAME")
                     );
                     std::process::exit(0);
@@ -128,10 +141,14 @@ impl Arguments {
                 unknown => bail!("unknown argument {unknown:?}"),
             }
         }
+        if production_data && data_dir.is_some() {
+            bail!("--production-data cannot be combined with --data-dir");
+        }
         Ok(Self {
             bind,
             parent_pid,
             data_dir,
+            production_data,
         })
     }
 }

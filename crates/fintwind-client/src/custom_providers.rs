@@ -192,7 +192,7 @@ impl CustomProvider {
             let path = if let Some(relative) =
                 path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\"))
             {
-                dirs::home_dir()
+                fintwind_protocol::profile_paths::home_dir()
                     .ok_or_else(|| std::io::Error::other("Home directory is unavailable"))?
                     .join(relative)
             } else {

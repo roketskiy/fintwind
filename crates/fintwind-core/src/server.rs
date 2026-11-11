@@ -774,6 +774,8 @@ fn handle_connection(
         &ServerMessage::Hello {
             protocol_version: PROTOCOL_VERSION,
             daemon_version: env!("CARGO_PKG_VERSION").into(),
+            environment_id: crate::daemon::daemon_identity().environment_id,
+            instance_id: crate::daemon::daemon_identity().instance_id,
         },
     )?;
     socket.set_config(|config| {

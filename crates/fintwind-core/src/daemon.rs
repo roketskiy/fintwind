@@ -195,6 +195,42 @@ impl FintwindBackend {
         }
     }
 
+    /// Persist `settings` and apply it to the live backend: workspace root,
+    /// MCP registries and the provider proxy all follow the stored document
+    /// without a daemon restart. Shared by whole-document and single-key
+    /// updates. The caller holds `settings_update_gate` across read and write.
+    fn apply_settings(
+        &self,
+        settings: crate::settings::DaemonSettings,
+    ) -> anyhow::Result<ResponsePayload> {
+        let data_directory = self
+            .task_store
+            .path()
+            .parent()
+            .context("task database has no parent directory")?;
+        let root = if settings.general_workspace_path()
+            != self.settings.get().general_workspace_path()
+        {
+            crate::projectless::prepare_workspace_root(&settings, data_directory)?
+        } else {
+            crate::projectless::configured_workspace_root(&settings, data_directory)?
+        };
+        self.settings.replace(settings)?;
+        crate::projectless::set_workspace_root(Some(root));
+        // Persisting alone keeps the MCP host on its previous state;
+        // apply it so the change reaches models on the next request.
+        self.browser_mcp
+            .set_enabled(self.settings.get().browser_tools_enabled());
+        self.scheduled_tools
+            .set_enabled(self.settings.get().scheduled_tools_enabled());
+        // Reinstall the proxy so later fetches and `opencode serve` children
+        // pick the new address up without a daemon restart.
+        fintwind_protocol::http::set_active_proxy(
+            self.settings.get().network_proxy_url().map(str::to_owned),
+        );
+        Ok(ResponsePayload::Ack)
+    }
+
     pub(crate) fn scheduled_channel(&self) -> Option<SystemChannel> {
         self.system_channel.lock().clone()
     }
@@ -1087,6 +1123,82 @@ impl FintwindBackend {
 /// rows and the directories name paths on its host. Persist after each move
 /// so a later failure cannot leave an earlier project pointing at its old
 /// location in SQLite.
+/// Exclusive ownership of a data directory, taken before any database or
+/// settings access. The guard file lives as long as the returned handle;
+/// dropping it (or process exit) releases the directory. A second daemon on
+/// the same directory — either frontend — fails fast instead of racing
+/// migrations or splitting state. This is separate from the scheduler lock,
+/// which is taken lazily when a system channel attaches.
+pub fn acquire_data_directory_lock(data_dir: &Path) -> anyhow::Result<std::fs::File> {
+    let path = data_dir.join("daemon.lock");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = std::fs::File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .with_context(|| format!("could not open {}", path.display()))?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(std::fs::TryLockError::WouldBlock) => bail!(
+            "another Fintwind daemon already holds data directory {}",
+            data_dir.display()
+        ),
+        Err(std::fs::TryLockError::Error(error)) => {
+            Err(error).context("could not lock the data directory")
+        }
+    }
+}
+
+/// Identity this daemon process reports in its ready announcement and hello.
+/// The environment id is stable per data directory (first opener claims it);
+/// the instance id is fresh per process so a client can tell a restarted
+/// daemon, or a second data directory, apart from the one it speaks to.
+#[derive(Clone, Copy, Debug)]
+pub struct DaemonIdentity {
+    pub environment_id: uuid::Uuid,
+    pub instance_id: uuid::Uuid,
+}
+
+static DAEMON_IDENTITY: OnceLock<DaemonIdentity> = OnceLock::new();
+
+/// Claim this process's identity for `data_dir`, creating the stable
+/// environment id on first open. Call after taking the data directory lock
+/// so two starters cannot claim different identities for one directory.
+pub fn claim_daemon_identity(data_dir: &Path) -> anyhow::Result<DaemonIdentity> {
+    let environment_id = load_or_create_environment_id(data_dir)?;
+    let identity = DaemonIdentity {
+        environment_id,
+        instance_id: uuid::Uuid::new_v4(),
+    };
+    let _ = DAEMON_IDENTITY.set(identity);
+    Ok(identity)
+}
+
+pub(crate) fn daemon_identity() -> DaemonIdentity {
+    DAEMON_IDENTITY.get().copied().unwrap_or(DaemonIdentity {
+        environment_id: uuid::Uuid::nil(),
+        instance_id: uuid::Uuid::nil(),
+    })
+}
+
+fn load_or_create_environment_id(data_dir: &Path) -> anyhow::Result<uuid::Uuid> {
+    let path = data_dir.join("environment_id");
+    if let Ok(raw) = std::fs::read_to_string(&path) {
+        if let Ok(id) = uuid::Uuid::parse_str(raw.trim()) {
+            if !id.is_nil() {
+                return Ok(id);
+            }
+        }
+    }
+    let id = uuid::Uuid::new_v4();
+    std::fs::write(&path, format!("{id}\n"))?;
+    Ok(id)
+}
+
 fn migrate_projectless_state(
     task_store: &StateStore,
     task_state: &mut PersistedState,
@@ -1522,32 +1634,14 @@ impl Backend for FintwindBackend {
             }),
             Command::UpdateSettings { settings } => {
                 let _gate = self.settings_update_gate.lock();
-                let data_directory = self
-                    .task_store
-                    .path()
-                    .parent()
-                    .context("task database has no parent directory")?;
-                let root = if settings.general_workspace_path()
-                    != self.settings.get().general_workspace_path()
-                {
-                    crate::projectless::prepare_workspace_root(&settings, data_directory)?
-                } else {
-                    crate::projectless::configured_workspace_root(&settings, data_directory)?
-                };
-                self.settings.replace(settings)?;
-                crate::projectless::set_workspace_root(Some(root));
-                // Persisting alone keeps the MCP host on its previous state;
-                // apply it so the change reaches models on the next request.
-                self.browser_mcp
-                    .set_enabled(self.settings.get().browser_tools_enabled());
-                self.scheduled_tools
-                    .set_enabled(self.settings.get().scheduled_tools_enabled());
-                // Reinstall the proxy so later fetches and `opencode serve`
-                // children pick the new address up without a daemon restart.
-                fintwind_protocol::http::set_active_proxy(
-                    self.settings.get().network_proxy_url().map(str::to_owned),
-                );
-                Ok(ResponsePayload::Ack)
+                return self.apply_settings(settings);
+            }
+            Command::UpdateSetting { key, value } => {
+                let _gate = self.settings_update_gate.lock();
+                let mut settings = self.settings.get();
+                key.apply(&mut settings, value)
+                    .map_err(anyhow::Error::msg)?;
+                return self.apply_settings(settings);
             }
             Command::ProbeProvider {
                 binary_override,
@@ -3173,6 +3267,7 @@ fn handle_driver_command(
         | Command::Start { .. }
         | Command::GetSettings
         | Command::UpdateSettings { .. }
+        | Command::UpdateSetting { .. }
         | Command::ProbeProvider { .. }
         | Command::CheckOpenCodeUpdate
         | Command::InstallOpenCode

@@ -179,7 +179,7 @@ pub fn config_path() -> PathBuf {
             directory.join("opencode.json")
         };
     }
-    let json = dirs::home_dir()
+    let json = fintwind_protocol::profile_paths::home_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join(".config")
         .join("opencode")

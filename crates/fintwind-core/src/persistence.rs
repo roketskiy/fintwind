@@ -774,6 +774,13 @@ pub fn apply_migrations(connection: &Connection) -> io::Result<usize> {
         transaction.commit().map_err(to_io_error)?;
         applied += 1;
     }
+    // Databases that upgraded through retired local builds may still carry
+    // `projects.project_path`: an intermediate migration renamed `path` and
+    // was later squashed away, while the shipped schema and every query use
+    // `path`. Plain SQLite cannot rename a column conditionally, so repair it
+    // here instead of as a migration step; this is a no-op on databases that
+    // already match the shipped schema.
+    restore_project_path_column(connection).map_err(to_io_error)?;
     Ok(applied)
 }
 
@@ -792,6 +799,23 @@ fn preserve_retired_scheduled_tasks(connection: &Connection) -> rusqlite::Result
     if retired {
         connection
             .execute_batch("ALTER TABLE scheduled_tasks RENAME TO retired_scheduled_tasks;")?;
+    }
+    Ok(())
+}
+
+/// Restores `projects.path` on databases that passed through the retired
+/// `0011_project_path_rename` migration. Fresh databases created from the
+/// current schema already have `path`, so the rename runs only when the
+/// database is actually in the retired shape.
+fn restore_project_path_column(connection: &Connection) -> rusqlite::Result<()> {
+    let renamed: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('projects') WHERE name = 'project_path')
+         AND NOT EXISTS(SELECT 1 FROM pragma_table_info('projects') WHERE name = 'path')",
+        [],
+        |row| row.get(0),
+    )?;
+    if renamed {
+        connection.execute_batch("ALTER TABLE projects RENAME COLUMN project_path TO path;")?;
     }
     Ok(())
 }
@@ -842,7 +866,7 @@ impl StateStore {
                 .join("temp")
                 .join("app.db")
         } else {
-            dirs::data_local_dir()
+            fintwind_protocol::profile_paths::data_local_dir()
                 .unwrap_or_else(std::env::temp_dir)
                 .join(DATA_DIRECTORY_NAME)
                 .join("app.db")
@@ -851,7 +875,7 @@ impl StateStore {
 
     pub fn new(path: PathBuf) -> Self {
         let directory = path.parent().unwrap_or_else(|| Path::new(".")).to_owned();
-        let configuration_directory = dirs::home_dir()
+        let configuration_directory = fintwind_protocol::profile_paths::home_dir()
             .unwrap_or_else(std::env::temp_dir)
             .join(".fintwind");
         let (app_settings_path, legacy_settings_paths) = if cfg!(debug_assertions) {

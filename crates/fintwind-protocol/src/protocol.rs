@@ -43,6 +43,8 @@ pub struct DaemonReady {
     pub address: String,
     pub protocol_version: u32,
     pub pid: u32,
+    pub environment_id: Uuid,
+    pub instance_id: Uuid,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -193,6 +195,12 @@ pub enum Command {
     GetSettings,
     UpdateSettings {
         settings: DaemonSettings,
+    },
+    /// Change one setting without resending the whole document. The key uses
+    /// the same snake_case names as the settings file.
+    UpdateSetting {
+        key: crate::settings::DaemonSettingKey,
+        value: serde_json::Value,
     },
     ProbeProvider {
         binary_override: Option<String>,
@@ -614,6 +622,8 @@ pub enum ServerMessage {
     Hello {
         protocol_version: u32,
         daemon_version: String,
+        environment_id: Uuid,
+        instance_id: Uuid,
     },
     Rejected {
         message: String,

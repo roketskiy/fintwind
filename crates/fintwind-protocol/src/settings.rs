@@ -11,6 +11,51 @@ pub struct DaemonSettings {
     pub extra: BTreeMap<String, Value>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DaemonSettingKey {
+    NetworkProxyUrl,
+    ScheduledToolsEnabled,
+    AutoCompactEnabled,
+    AutoCompactThresholdTokens,
+    OpencodeBinaryPath,
+    GeneralWorkspacePath,
+}
+
+impl DaemonSettingKey {
+    pub fn apply(self, settings: &mut DaemonSettings, value: Value) -> Result<(), String> {
+        let (key, valid) = match self {
+            Self::NetworkProxyUrl => (NETWORK_PROXY_URL_KEY, value.is_null() || value.is_string()),
+            Self::ScheduledToolsEnabled => (SCHEDULED_TOOLS_ENABLED_KEY, value.is_boolean()),
+            Self::AutoCompactEnabled => (AUTO_COMPACT_ENABLED_KEY, value.is_boolean()),
+            Self::AutoCompactThresholdTokens => (
+                AUTO_COMPACT_THRESHOLD_TOKENS_KEY,
+                value.as_u64().is_some_and(|tokens| {
+                    (AUTO_COMPACT_THRESHOLD_TOKENS_MIN..=AUTO_COMPACT_THRESHOLD_TOKENS_MAX)
+                        .contains(&tokens)
+                }),
+            ),
+            Self::OpencodeBinaryPath => (
+                OPENCODE_BINARY_PATH_KEY,
+                value.is_null() || value.is_string(),
+            ),
+            Self::GeneralWorkspacePath => (
+                GENERAL_WORKSPACE_PATH_KEY,
+                value.is_null() || value.is_string(),
+            ),
+        };
+        if !valid {
+            return Err("invalid setting value".into());
+        }
+        if value.is_null() {
+            settings.extra.remove(key);
+        } else {
+            settings.extra.insert(key.into(), value);
+        }
+        Ok(())
+    }
+}
+
 impl Default for DaemonSettings {
     fn default() -> Self {
         Self {
@@ -37,7 +82,7 @@ impl DaemonSettings {
     }
 
     pub fn default_path() -> PathBuf {
-        dirs::home_dir()
+        crate::profile_paths::home_dir()
             .unwrap_or_else(std::env::temp_dir)
             .join(".fintwind")
             .join("settings.json")

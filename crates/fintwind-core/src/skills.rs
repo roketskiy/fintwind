@@ -42,7 +42,7 @@ const DIR_WALK_MAX_FILES: usize = 500;
 /// Every user-scope skill root, present on disk or not. Path joins only — no
 /// filesystem access — so this is safe to call while building a frame.
 pub fn user_skill_locations() -> Vec<SkillLocation> {
-    let home = dirs::home_dir();
+    let home = fintwind_protocol::profile_paths::home_dir();
     let mut locations = Vec::new();
     let mut push = |source: SkillSource, root: Option<PathBuf>| {
         if let Some(root) = root {

@@ -42,6 +42,7 @@ pub mod mermaid;
 pub mod model;
 pub mod model_catalog;
 pub mod persistence;
+pub mod profile_paths;
 pub mod projectless;
 pub mod provider_quota;
 pub mod provider_session;

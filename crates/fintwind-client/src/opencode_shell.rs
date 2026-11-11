@@ -26,7 +26,7 @@ pub fn config_path() -> PathBuf {
                 .map(|value| PathBuf::from(value).join("opencode"))
         })
         .unwrap_or_else(|| {
-            dirs::home_dir()
+            fintwind_protocol::profile_paths::home_dir()
                 .unwrap_or_else(std::env::temp_dir)
                 .join(".config/opencode")
         });

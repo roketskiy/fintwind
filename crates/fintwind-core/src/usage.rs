@@ -58,7 +58,10 @@ fn opencode_go_api_key() -> Option<String> {
             let data_home = std::env::var_os("XDG_DATA_HOME")
                 .filter(|path| !path.is_empty())
                 .map(std::path::PathBuf::from)
-                .or_else(|| dirs::home_dir().map(|home| home.join(".local/share")))?;
+                .or_else(|| {
+                    fintwind_protocol::profile_paths::home_dir()
+                        .map(|home| home.join(".local/share"))
+                })?;
             let payload = std::fs::read_to_string(data_home.join("opencode/auth.json")).ok()?;
             serde_json::from_str(&payload).ok()
         });

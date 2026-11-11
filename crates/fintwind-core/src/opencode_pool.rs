@@ -249,7 +249,9 @@ pub(crate) fn shutdown_all() {
 /// [`crate::persistence::StateStore::default_path`]; release builds use the
 /// per-user local data directory.
 fn serve_working_directory() -> anyhow::Result<PathBuf> {
-    let directory = if cfg!(debug_assertions) {
+    let directory = if cfg!(debug_assertions)
+        && !fintwind_protocol::profile_paths::launcher_profile()
+    {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .and_then(Path::parent)
@@ -257,7 +259,7 @@ fn serve_working_directory() -> anyhow::Result<PathBuf> {
             .join("temp")
             .join("opencode-serve")
     } else {
-        dirs::data_local_dir()
+        fintwind_protocol::profile_paths::data_local_dir()
             .unwrap_or_else(std::env::temp_dir)
             .join(crate::identity::DATA_DIRECTORY_NAME)
             .join("opencode-serve")

@@ -150,7 +150,8 @@ pub fn execute(operation: WorkspaceOperation) -> anyhow::Result<WorkspaceResult>
             include_hidden,
         } => browse_directories(path.as_deref(), base.as_deref(), include_hidden)?,
         WorkspaceOperation::BrowseDirectory { path } => {
-            let home = dirs::home_dir().ok_or_else(|| anyhow!("home directory is unavailable"))?;
+            let home = fintwind_protocol::profile_paths::home_dir()
+                .ok_or_else(|| anyhow!("home directory is unavailable"))?;
             let path = fs::canonicalize(path.as_deref().unwrap_or(&home)).with_context(|| {
                 format!(
                     "could not open directory {}",
@@ -621,7 +622,7 @@ fn browse_directories(
 ) -> anyhow::Result<WorkspaceResult> {
     use fintwind_protocol::workspace::directory_browse as kinds;
 
-    let home = dirs::home_dir()
+    let home = fintwind_protocol::profile_paths::home_dir()
         .ok_or_else(|| anyhow!("{}: home directory is unavailable", kinds::HOME_UNAVAILABLE))?;
 
     let joined: PathBuf;

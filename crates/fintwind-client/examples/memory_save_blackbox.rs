@@ -104,6 +104,8 @@ fn main() -> anyhow::Result<()> {
             serde_json::to_string(&ServerMessage::Hello {
                 protocol_version: PROTOCOL_VERSION,
                 daemon_version: "blackbox".into(),
+                environment_id: Uuid::nil(),
+                instance_id: Uuid::nil(),
             })?
             .into(),
         ))?;

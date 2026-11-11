@@ -104,13 +104,15 @@ fn discover_opencode_agents(binary: &Path, directory: Option<&Path>) -> Vec<Prov
 /// in the checkout's gitignored `temp/` beside the debug database, so
 /// development never touches the installed app's cache.
 fn model_cache_path(directory: Option<&Path>) -> PathBuf {
-    let cache_directory = if cfg!(debug_assertions) {
+    let cache_directory = if cfg!(debug_assertions)
+        && !fintwind_protocol::profile_paths::launcher_profile()
+    {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join("temp")
             .join("model-cache")
     } else {
-        dirs::cache_dir()
+        fintwind_protocol::profile_paths::cache_dir()
             .unwrap_or_else(std::env::temp_dir)
             .join(crate::identity::DATA_DIRECTORY_NAME)
             .join("models")

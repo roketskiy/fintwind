@@ -173,7 +173,7 @@ fn builtin_fintwind_commands() -> Vec<SlashCommand> {
 /// win a same-scope name collision. Live processes may add more at runtime
 /// ([`merge_reported_commands`], [`server_commands`]).
 pub fn discover_slash_commands(project_root: &Path) -> Vec<SlashCommand> {
-    let home = dirs::home_dir();
+    let home = fintwind_protocol::profile_paths::home_dir();
     let mut commands = Vec::new();
     // The renamed plural directory is OpenCode's documented layout; the
     // singular predecessor stays discovered behind it.

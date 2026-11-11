@@ -237,7 +237,7 @@ pub fn resolve_binary_override(spec: &str) -> Option<PathBuf> {
         return None;
     }
     if let Some(rest) = spec.strip_prefix("~/") {
-        let candidate = dirs::home_dir()?.join(rest);
+        let candidate = fintwind_protocol::profile_paths::home_dir()?.join(rest);
         return candidate.is_file().then_some(candidate);
     }
     find_executable(spec)
@@ -275,7 +275,7 @@ fn executable_search_paths() -> Vec<PathBuf> {
     search_paths_from(
         cached_login_shell_variable(OsStr::new("PATH")).as_deref(),
         std::env::var_os("PATH").as_deref(),
-        dirs::home_dir().as_deref(),
+        fintwind_protocol::profile_paths::home_dir().as_deref(),
     )
 }
 

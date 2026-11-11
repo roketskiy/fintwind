@@ -11,7 +11,7 @@ struct WorkspacePaths {
 fn workspace_root_slot() -> &'static RwLock<WorkspacePaths> {
     static ROOT: OnceLock<RwLock<WorkspacePaths>> = OnceLock::new();
     ROOT.get_or_init(|| {
-        let legacy_root = dirs::home_dir().map(|home| home.join(".fintwind"));
+        let legacy_root = crate::profile_paths::home_dir().map(|home| home.join(".fintwind"));
         RwLock::new(WorkspacePaths {
             root: legacy_root.as_ref().map(|root| root.join("projects")),
             legacy_root,

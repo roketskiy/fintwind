@@ -44,8 +44,11 @@ func (a *app) openSettingsPage(page string) {
 	if page == "appearance" {
 		a.detectSettingsShells()
 	}
-	if page == "providers" && a.modelProbe == nil && !a.modelProbeLoad {
-		a.requestModelProbe()
+	if page == "providers" {
+		a.resetProvidersPage()
+		if a.modelProbe == nil && !a.modelProbeLoad {
+			a.requestModelProbe()
+		}
 	}
 }
 
@@ -57,6 +60,14 @@ func (a *app) cancelProviderAdd() {
 	a.settings.backend.integrationKey, a.settings.backend.integrationShowKey = "", false
 	a.settings.backend.providerEditing = ""
 	a.settings.backend.removeConfirm = ""
+	a.settings.backend.providerRenaming = false
+	a.settings.backend.providerKeyRevealed = false
+	a.settings.backend.providerModelEditor = nil
+	a.settings.backend.providerFormStage = ""
+	a.settings.backend.providerFormBuiltin = ""
+	a.settings.backend.providerFormSearch = ""
+	a.settings.backend.providerFormConnectivity = nil
+	a.settings.backend.providerFormFetching = false
 	a.closeSettingsMenus()
 }
 

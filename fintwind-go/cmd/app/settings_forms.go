@@ -84,15 +84,14 @@ func formTitle(c *ui.Context, title string) {
 
 // providersDetail reads the Built-in detail or the custom add form.
 func (a *app) providersDetail(c *ui.Context) {
-	st := &a.settings.catalog
-	if st.providerAdding {
-		a.providerAddForm(c)
-		return
-	}
-	if a.settings.backend.providerSelected != "" {
-		a.settingsCustomProviderDetail(c)
-		return
-	}
+	a.providersDetailFull(c)
+}
+
+func (a *app) providerAddForm(c *ui.Context) {
+	a.providerAddFormFull(c)
+}
+
+func (a *app) providersDetailLegacy(c *ui.Context) {
 	ui.Row(c).FillWidth().Padding(14, 24, 0, 24).Gap(6).
 		AlignItems(ui.Center).Children(func() {
 		ui.Text(c, tr("Device")).FontSize(uiPx(11)).FontWeight(500).
@@ -130,7 +129,7 @@ func (a *app) providersDetail(c *ui.Context) {
 	})
 }
 
-func (a *app) providerAddForm(c *ui.Context) {
+func (a *app) providerAddFormLegacy(c *ui.Context) {
 	st := &a.settings.catalog
 	ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
 		ui.Column(c).FillWidth().Padding(18, 24, 24, 24).Gap(14).Children(func() {

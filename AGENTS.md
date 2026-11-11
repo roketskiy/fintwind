@@ -17,6 +17,14 @@
 ## UI
 - 对于新 UI 首先复用 Ely 组件
 
+### Go 界面组件库（必用）
+- Go 界面新造控件一律先用成品组件库，禁止手搓基础控件（按钮、菜单、输入框、列表、开关、标签、弹层、提示）。
+- 选用顺序：lobe-mygo（`github.com/lobehub/lobe-mygo`，MIT，与 Lobe UI 同设计语言）优先；lobe-mygo 没有的才用本地 CrychicUI（`vendor/CrychicUI`）；两者都没有才手写，且只允许组装已有原语。
+- 动手前先读对应组件的 skills 页（`https://mygo.lobehub.com/skills/components/<name>.md`），只用文档记载的 props、variant 和 import。
+- 禁止拿 CrychicUI `button.TextButton` 当次级文字按钮：它是 accent 色，只适合主操作。次级动作用 lobe `action.Button` 的 Text/Default 变体或同等 muted 样式。
+- 不调用 lobe `theme.Apply`：它整帧生效且跟随系统外观，会扰乱同帧其他视图。lobe 组件在不调用时自动跟随窗口 Dark 标志渲染；与自有 palette 混用时接受视觉差，只保证功能与状态一致。
+- 引入或升级组件库导致 MyGo 版本变动时（大版本，或 0.x 的小版本变动），先读新版 `docs/ui/migration.md`，跑 `migrate-ui` 预览，构建与 vet 全绿才继续。新增开源依赖按文档规范在 `docs/licenses/` 补充许可声明。
+
 ### 图标
 - 新增图标优先从 [Lucide Icons](https://lucide.dev/icons/) 获取对应 SVG，不添加 Lucide 依赖或运行时图标包。
 - 将所需 SVG 纳入 `assets/icons/`，沿用项目现有的嵌入式资源、主题着色和图标渲染机制，并保留所需许可证与来源声明。
@@ -105,9 +113,10 @@ bun scripts/bundle-windows.ts --channel=beta
 
 ## 性能
 
-- 把性能当作产品需求,而不是事后补充。Fintwind 是一个与 Web 客户端竞争的
-  原生应用,在高刷新率屏幕上面对长对话记录仍保持流畅,正是"原生"的意义所在。
-  当更快的方案不牺牲清晰性时,优先选择它;并在假设开销可以接受之前先测量。
+- 把性能当作产品需求,而不是事后补充。界面在正常交互和渲染时以至少 60 FPS
+  为目标。研发渲染功能时,要考虑长文本、多文件等高压力场景,保证加载和交互
+  流畅,避免明显卡顿。当更快的方案不牺牲清晰性时,优先选择它;并在假设开销
+  可以接受之前先测量。
 - 绝不用重活阻塞 UI 线程。渲染独占它,因此一帧能触达的任何数据都必须已在
   内存中:不允许生成子进程、不允许遍历文件系统、不允许网络请求、不允许
   阻塞锁、不允许同步 IPC。
@@ -122,8 +131,8 @@ bun scripts/bundle-windows.ts --channel=beta
   帧处理则不行。
 - 让每帧的工作量与屏幕上可见的内容成比例。长集合用 `list()` 做虚拟化,行
   构建器不得重建整个会话的状态;把它提升到每帧只刷新一次的缓存里。
-- 流式渲染的 CPU 由两个节奏决定——流提交 ≤ ~8.3 Hz、pulse clock 滴答
-  ≤ ~30 Hz——以及一帧能看到的内容。在改动事件泵、pulse clock
+- 流式渲染的刷新率要求高于 60 Hz;设计流提交、pulse clock 滴答和每帧工作量时,
+  都要兼顾这一目标与 CPU 开销。在改动事件泵、pulse clock
   (`src/ui/motion.rs`)、veil、悬浮滚动条、pane 缓存或其他任何流式帧会触达的
   东西之前,先读 [docs/performance.md](docs/performance.md);它还记录了真正能
   发现性能回退的、基于计数器的测量方法。
@@ -172,3 +181,23 @@ bun scripts/bundle-windows.ts --channel=beta
   并保持其顺序。绝不在对话记录中暴露 provider 的私有控制标记。
 - 在 dev watcher 管理的刚重新编译、已签名的应用中,针对确切的 provider 交互
   验证可见变更;仅凭一次成功的 Rust 构建是不够的。
+
+## mygo 原型与组件库
+
+`fintwind-go/` 是正式迁移主线，连接 Rust daemon。日用入口为根目录 `MyGo.cmd`，
+直接使用真实 Fintwind 数据；未获用户明确许可，agent 不得运行该入口（`--plan` 除外）。
+用户已授权（2026-11-11）：每轮 mygo 改动完成后，agent 用
+`pwsh -File scripts/mygo-restart.ps1` 重启日用实例——脚本只停止 `--profile daily`
+且根在本仓库的 launcher（其监督进程以 kill-on-close Job 拆掉 app 与 daemon），
+再拉起新实例；launcher 每次启动都会重建 app，重启即生效。不得绕过该脚本直接
+杀进程，也不得停止 `--profile agent` 或其他会话的实例。
+Agent 开发使用 `MyGo-Agent.cmd --name <task>`；只构建加 `--build-only`，
+只查看路径加 `--plan`，无窗口启动验证加 `--verify --daemon <absolute-path>`。
+不得通过直接运行 app 或修改环境变量绕过启动器的隔离、凭据白名单与数据锁。
+独立环境不是沙箱，自动测试只能添加测试项目，不导入真实凭据或发起真实付费请求。
+启动器只清理自身持有 Job 的进程，不关闭已安装 Fintwind 或其他会话的进程。
+用法和边界见 [CONTRIBUTING.md](CONTRIBUTING.md) 的 MyGo 章节。
+
+`mygo-clone/` 是用 mygo 原生 UI 复刻 Fintwind 前端的独立 Go 原型,不接后端。
+mygo 的开发方式、构建命令、API 速查,以及本地组件库 CrychicUI 的位置、
+版本兼容性和用法,见 [mygo-clone/AGENTS.md](mygo-clone/AGENTS.md)。

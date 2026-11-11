@@ -134,8 +134,7 @@ fn parse_once_at(text: &str) -> anyhow::Result<u64> {
                 .from_local_datetime(&naive)
                 .earliest()
                 .context("one-time run time does not exist in the local time zone")?;
-            return u64::try_from(local.timestamp())
-                .context("one-time run time is out of range");
+            return u64::try_from(local.timestamp()).context("one-time run time is out of range");
         }
     }
     bail!("at must use 'YYYY-MM-DD HH:MM' or RFC3339");

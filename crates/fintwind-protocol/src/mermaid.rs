@@ -24,14 +24,8 @@ pub const MAX_MERMAID_CHECK_ERROR_BYTES: usize = 1024;
     deny_unknown_fields
 )]
 pub enum MermaidCheckMessage {
-    Hello {
-        version: u32,
-        token: String,
-    },
-    Check {
-        request_id: Uuid,
-        source: String,
-    },
+    Hello { version: u32, token: String },
+    Check { request_id: Uuid, source: String },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

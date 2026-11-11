@@ -32,6 +32,7 @@ uuid = { version = "1.18", features = ["v4", "serde"] }
 fintwind-protocol = { path = "../fintwind-protocol" }
 fintwind-client = { path = "../fintwind-client" }
 fintwind-diagram = { path = "../fintwind-diagram" }
+jsonc-parser = { version = "0.34", features = ["cst", "serde_json"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

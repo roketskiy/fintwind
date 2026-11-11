@@ -2267,6 +2267,7 @@ dependencies = [
  "fintwind-client",
  "fintwind-diagram",
  "fintwind-protocol",
+ "jsonc-parser",
  "libc",
  "nucleo-matcher",
  "parking_lot",

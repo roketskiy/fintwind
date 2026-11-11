@@ -39,7 +39,11 @@ static ENDPOINT: OnceLock<Endpoint> = OnceLock::new();
 /// Publishes the endpoint address and generates this daemon's token. Fails
 /// only when called twice, which no daemon lifetime does.
 pub(crate) fn install(address: String) -> anyhow::Result<()> {
-    let token = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
+    let token = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
     ENDPOINT
         .set(Endpoint { address, token })
         .map_err(|_| anyhow::anyhow!("mermaid check endpoint is already installed"))
@@ -167,10 +171,8 @@ pub(crate) fn handle(
                     )?;
                     return Ok(());
                 }
-                let Ok(MermaidCheckMessage::Check {
-                    request_id,
-                    source,
-                }) = serde_json::from_str::<MermaidCheckMessage>(&text)
+                let Ok(MermaidCheckMessage::Check { request_id, source }) =
+                    serde_json::from_str::<MermaidCheckMessage>(&text)
                 else {
                     write(
                         &mut socket,

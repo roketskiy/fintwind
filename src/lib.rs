@@ -234,9 +234,56 @@ impl FintwindApplicationExt for Application {
     }
 }
 
+/// Daemon startup failure: a release build has no console, so a panic would
+/// vanish without a trace. Debug builds keep the panic for the watcher logs.
+fn startup_failure(error: anyhow::Error) -> ! {
+    #[cfg(debug_assertions)]
+    {
+        panic!("failed to start fintwind daemon: {error:#}");
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let message = error.to_string();
+        // The data directory is single-owner; naming the other window is the
+        // whole diagnosis, so say it plainly instead of the raw error.
+        let body = if message.contains("already holds") {
+            "数据目录正被另一个 Fintwind 窗口使用，请关闭后再试。".to_owned()
+        } else {
+            format!("Fintwind 启动失败：{error:#}")
+        };
+        show_startup_alert(&body);
+        std::process::exit(1);
+    }
+}
+
+#[cfg(all(target_os = "windows", not(debug_assertions)))]
+fn show_startup_alert(body: &str) {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+
+    let caption: Vec<u16> = std::ffi::OsStr::new(APP_DISPLAY_NAME)
+        .encode_wide()
+        .chain([0])
+        .collect();
+    let text: Vec<u16> = std::ffi::OsStr::new(body)
+        .encode_wide()
+        .chain([0])
+        .collect();
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            caption.as_ptr(),
+            MB_OK | MB_ICONERROR,
+        );
+    }
+}
+
+#[cfg(not(all(target_os = "windows", not(debug_assertions))))]
+fn show_startup_alert(_body: &str) {}
+
 pub fn run() {
-    let daemon = crate::daemon::start_process()
-        .unwrap_or_else(|error| panic!("failed to start fintwind daemon: {error:#}"));
+    let daemon = crate::daemon::start_process().unwrap_or_else(|error| startup_failure(error));
     gpui_platform::application()
         // Ely's embedded files first, Fintwind's icons and logos underneath:
         // one source, so `ely_gpui_component::init` finds its assets and

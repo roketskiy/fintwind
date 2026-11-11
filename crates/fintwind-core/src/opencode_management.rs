@@ -135,7 +135,8 @@ impl PackageManager {
         } else {
             "opencode"
         };
-        package.join("bin")
+        package
+            .join("bin")
             .join(name)
             .canonicalize()
             .is_ok_and(|path| path == target)
@@ -179,8 +180,11 @@ fn package_command(executable: &Path) -> Command {
         command.env("PATH", path);
     }
     if let Some(proxy) = fintwind_protocol::http::active_proxy() {
-        command.env("HTTP_PROXY", &proxy).env("HTTPS_PROXY", &proxy)
-            .env("http_proxy", &proxy).env("https_proxy", &proxy);
+        command
+            .env("HTTP_PROXY", &proxy)
+            .env("HTTPS_PROXY", &proxy)
+            .env("http_proxy", &proxy)
+            .env("https_proxy", &proxy);
     }
     command
 }

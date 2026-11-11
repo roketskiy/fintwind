@@ -47,6 +47,7 @@ pub mod projectless;
 pub mod provider_quota;
 pub mod provider_session;
 pub mod pull_request;
+pub mod runtime_config;
 pub mod scheduled_task;
 pub mod session_cleanup;
 pub mod settings;
@@ -64,6 +65,9 @@ pub use protocol::{
     MAX_WIRE_MESSAGE_BYTES, PROTOCOL_VERSION, PromptFile, ReplayCursor, Request, ResponseOutcome,
     ResponsePayload, RpcError, SequencedEvent, ServerMessage, WireDriverEvent,
     WireDriverStartOptions, WireSessionOptions,
+};
+pub use runtime_config::{
+    RuntimeConfigDraft, RuntimeConfigScope, RuntimeConfigSnapshot, RuntimeImageModel,
 };
 pub use settings::DaemonSettings;
 pub use workspace::{WorkspaceOperation, WorkspaceResult};

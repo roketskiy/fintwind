@@ -87,7 +87,9 @@ impl<'de> Deserialize<'de> for Weekdays {
     rename_all_fields = "camelCase"
 )]
 pub enum Recurrence {
-    Every { interval_secs: u32 },
+    Every {
+        interval_secs: u32,
+    },
     AtTime {
         at: ClockTime,
         weekdays: Weekdays,
@@ -98,7 +100,9 @@ pub enum Recurrence {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timezone: Option<String>,
     },
-    Once { at: u64 },
+    Once {
+        at: u64,
+    },
 }
 
 impl<'de> Deserialize<'de> for Recurrence {
@@ -110,14 +114,18 @@ impl<'de> Deserialize<'de> for Recurrence {
             rename_all_fields = "camelCase"
         )]
         enum Wire {
-            Every { interval_secs: u32 },
+            Every {
+                interval_secs: u32,
+            },
             AtTime {
                 at: ClockTime,
                 weekdays: Weekdays,
                 #[serde(default)]
                 timezone: Option<String>,
             },
-            Once { at: u64 },
+            Once {
+                at: u64,
+            },
         }
         let recurrence = match Wire::deserialize(deserializer)? {
             Wire::Every { interval_secs } => Self::Every { interval_secs },

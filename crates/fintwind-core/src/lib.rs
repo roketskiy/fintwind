@@ -45,6 +45,7 @@ mod native_goal;
 /// only for the harness that stands in for that process; values are loopback
 /// addresses and per-daemon tokens.
 pub use mermaid_check::environment as mermaid_check_environment;
+pub mod local_quota;
 pub mod mcp_auth;
 mod mermaid_check;
 pub mod model;
@@ -59,8 +60,8 @@ pub mod persistence;
 mod project_create;
 pub mod projectless;
 pub mod provider_quota;
-pub mod local_quota;
 pub mod pull_requests;
+pub mod runtime_config;
 mod scheduled;
 pub mod session_cleanup;
 mod session_generation;

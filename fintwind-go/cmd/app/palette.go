@@ -58,10 +58,12 @@ func (a *app) paletteItems() []paletteEntry {
 			run: func() { a.mode = modeSessions }},
 		paletteEntry{group: "Commands", label: "Source control", icon: "file-diff", keys: "source control git changes diff files",
 			run: func() { a.openSourceControl() }},
+		paletteEntry{group: "Commands", label: "Scheduled tasks", icon: "clock", keys: "scheduled tasks schedule cron repeat daily weekly run prompt 定时",
+			run: func() { a.openScheduledTasks() }},
 		paletteEntry{group: "Commands", label: "Usage", icon: "chart-column", keys: "usage statistics tokens models activity",
 			run: func() { a.mode = modeUsage }},
 	)
-	if a.detail != nil && a.mode != modeSettings && a.mode != modeUsage {
+	if a.detail != nil && a.mode != modeSettings && a.mode != modeUsage && a.mode != modeScheduled {
 		entries = append(entries, paletteEntry{group: "Commands", label: tr("Context"), icon: "gauge", keys: "context usage tokens window ctrl u 上下文", run: a.toggleContextPanel})
 		if a.canCompactContext() {
 			entries = append(entries, paletteEntry{group: "Commands", label: tr("Compact context"), icon: "gauge", keys: "compact context summary 压缩 上下文", run: a.requestContextCompaction})

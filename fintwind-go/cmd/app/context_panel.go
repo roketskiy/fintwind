@@ -26,7 +26,7 @@ type contextPanelState struct {
 }
 
 func (a *app) toggleContextPanel() {
-	if a.detail == nil || a.mode == modeSettings || a.mode == modeUsage {
+	if a.detail == nil || a.mode == modeSettings || a.mode == modeUsage || a.mode == modeScheduled {
 		return
 	}
 	if a.rightOpen && a.activeKind() == rightPanelContext {

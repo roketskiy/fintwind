@@ -228,7 +228,11 @@ func (a *app) handleDaemonNotice(event daemon.Event) {
 			a.refreshCatalog()
 		}
 	case "scheduledTasksChanged":
-		// The daemon retains scheduling support; this client has no task page.
+		// The daemon's scheduled catalog changed elsewhere; refresh the
+		// roster when the page is open so enable/run/delete stay honest.
+		if a.mode == modeScheduled {
+			a.loadSettingsScheduled()
+		}
 	case "browserRequest":
 		a.status = tr("Browser tools are not enabled")
 	case "browserCancel", "browserShareRejected":

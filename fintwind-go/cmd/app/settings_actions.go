@@ -22,6 +22,14 @@ const (
 	settingsKeyUIFontFamily    = "ui_font_family"
 	settingsKeyCodeFontFamily  = "code_font_family"
 	settingsKeyTranscriptWidth = "transcript_width"
+	// Terminal preferences ported from kero's settings: shell, extra env,
+	// right-click behavior, copy-on-select and scrollback. They are local
+	// like the other appearance preferences, not daemon settings.
+	settingsKeyTerminalShell        = "terminal_shell"
+	settingsKeyTerminalEnv          = "terminal_env"
+	settingsKeyTerminalRightClick   = "terminal_right_click"
+	settingsKeyTerminalCopyOnSelect = "terminal_copy_on_select"
+	settingsKeyTerminalScrollback   = "terminal_scrollback"
 )
 
 // Serialized values from the Rust sources:
@@ -112,9 +120,35 @@ func transcriptWidthOptions() []settingsOption {
 	}
 }
 
-// uiFontOptions is a fixed list: the Rust desktop enumerates installed
-// system fonts, which this client cannot do.
+// pinFontOptions mirrors the Rust font menus: pinned defaults first in keep
+// order, then every installed family sorted. Dot-prefixed synthetic entries
+// never come out of enumeration, so no hiding pass is needed.
+func pinFontOptions(pins []settingsOption, names []string) []settingsOption {
+	seen := map[string]bool{}
+	out := make([]settingsOption, 0, len(pins)+len(names))
+	for _, pin := range pins {
+		out = append(out, pin)
+		seen[pin.value] = true
+	}
+	for _, name := range names {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, settingsOption{label: name, value: name, raw: name})
+	}
+	return out
+}
+
+// uiFontOptions mirrors the Rust interface-font menu: the System default
+// pinned first, then every installed family. The fixed list below only
+// applies where enumeration is unavailable.
 func uiFontOptions() []settingsOption {
+	if names := systemFontFamilies(); len(names) > 0 {
+		return pinFontOptions([]settingsOption{
+			{"System", defaultUIFontFamily, defaultUIFontFamily},
+		}, names)
+	}
 	return []settingsOption{
 		{"System", defaultUIFontFamily, defaultUIFontFamily},
 		{"Segoe UI", "Segoe UI", "Segoe UI"},
@@ -123,8 +157,16 @@ func uiFontOptions() []settingsOption {
 	}
 }
 
-// codeFontOptions is a fixed list for the same reason as uiFontOptions.
+// codeFontOptions mirrors the Rust code-font menu: JetBrains Mono and System
+// monospace pinned first, then every installed family. The fixed list below
+// only applies where enumeration is unavailable.
 func codeFontOptions() []settingsOption {
+	if names := systemFontFamilies(); len(names) > 0 {
+		return pinFontOptions([]settingsOption{
+			{"JetBrains Mono", defaultCodeFontFamily, defaultCodeFontFamily},
+			{"System monospace", systemMonoFontFamily, systemMonoFontFamily},
+		}, names)
+	}
 	return []settingsOption{
 		{"System monospace", systemMonoFontFamily, systemMonoFontFamily},
 		{"JetBrains Mono", defaultCodeFontFamily, defaultCodeFontFamily},

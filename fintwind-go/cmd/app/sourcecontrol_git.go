@@ -81,6 +81,9 @@ type sourceControlState struct {
 	// Directory folding mirrors Rust's SOURCE_CONTROL_TREE_INDENT tree:
 	// collapsed dirs hide their files, group headers carry counts.
 	CollapsedDirs map[string]bool
+	// CollapsedGroups folds whole groups (staged/changes/untracked) under
+	// their header, like the review file group.
+	CollapsedGroups map[string]bool
 	// Ignored section mirrors Rust's toggleable ignored block.
 	IgnoredOpen    bool
 	IgnoredLoading bool
@@ -844,6 +847,19 @@ func scGroupLabel(group string) string {
 		return tr("Ignored")
 	default:
 		return tr("Checkpoint")
+	}
+}
+
+// scGroupColor tints only the group header row: staged green, unstaged
+// amber, untracked gray, mirroring the letter colors.
+func scGroupColor(group string) ui.Color {
+	switch group {
+	case "staged":
+		return palette.successText
+	case "changes":
+		return palette.warningText
+	default:
+		return palette.textTertiary
 	}
 }
 

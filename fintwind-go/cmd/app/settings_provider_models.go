@@ -26,7 +26,7 @@ func (a *app) settingsProviderModels(c *ui.Context) {
 		st.addProviderModel()
 	}
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, tr("Models")).Grow(1).FontSize(11).FontWeight(500).TextColor(palette.text)
+		ui.Text(c, tr("Models")).Grow(1).FontSize(uiPx(11)).FontWeight(500).TextColor(palette.text)
 		componentTextButton(c, "provider-model-add", tr("Add model"), false).Height(26).
 			OnClick(func() { st.addProviderModel() })
 	})
@@ -68,10 +68,10 @@ func (a *app) settingsProviderModels(c *ui.Context) {
 
 func settingsModalityRow(c *ui.Context, key, label string, options []string, selected map[string]bool) {
 	ui.Row(c).FillWidth().Gap(4).AlignItems(ui.Center).FocusGroup(ui.Horizontal).Children(func() {
-		ui.Text(c, label).Width(40).Shrink(0).FontSize(10).TextColor(palette.textTertiary)
+		ui.Text(c, label).Width(40).Shrink(0).FontSize(uiPx(10)).TextColor(palette.textTertiary)
 		for _, option := range options {
 			control := componentTextButton(c, key+"-"+option, option, false).
-				Height(22).Padding(0, 6).Radius(5).FontSize(10)
+				Height(22).Padding(0, 6).Radius(5).FontSize(uiPx(10))
 			if selected[option] {
 				control.Background(palette.overlayStrong).TextColor(palette.text)
 			}

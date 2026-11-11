@@ -9,7 +9,6 @@ import (
 	"github.com/egoist/mygo/ui/editor"
 	"github.com/lobehub/lobe-mygo/pkg/action"
 	"github.com/lobehub/lobe-mygo/pkg/display"
-	"github.com/lobehub/lobe-mygo/pkg/field"
 	"github.com/lobehub/lobe-mygo/pkg/overlay"
 	"github.com/lobehub/lobe-mygo/pkg/theme"
 )
@@ -21,17 +20,25 @@ import (
 
 func (a *app) reviewView(c *ui.Context) {
 	ui.Row(c).FillWidth().Grow(1).MinWidth(0).FillHeight().Children(func() {
-		ui.Column(c).Width(scSecondaryWidth).FillHeight().Shrink(0).Background(palette.sidebar).Children(func() {
-			a.reviewSecondary(c)
-		})
+		if a.sidebarOpen {
+			secondary := ui.Column(c).Width(a.scSecWidth).FillHeight().Shrink(0).
+				Background(palette.sidebar).Radius(workspaceRadius).Clip()
+			secondary = sidebarShadow(secondary)
+			secondary.Children(func() {
+				a.reviewSecondary(c)
+				a.secondaryResizeHandle(c, &a.scSecWidth)
+			})
+		}
 		a.reviewMain(c)
 	})
 }
 
 func (a *app) reviewMain(c *ui.Context) {
 	st := &a.review
-	ui.Column(c).Grow(1).MinWidth(0).FillHeight().Background(palette.surface).
-		BorderWidth(0, 0, 0, 1).BorderColor(palette.sidebarBorder).Radius(workspaceRadius, 0, 0, workspaceRadius).Clip().Children(func() {
+	main := ui.Column(c).Grow(1).MinWidth(0).FillHeight().Background(palette.surface).
+		BorderWidth(0, 0, 0, 1).BorderColor(palette.sidebarBorder).Radius(workspaceRadius, 0, 0, workspaceRadius).Clip()
+	main = workspaceShadow(main)
+	main.Children(func() {
 		if st.Kind == reviewKindTurn {
 			a.reviewBanner(c)
 		}
@@ -48,6 +55,9 @@ func (a *app) reviewMain(c *ui.Context) {
 			reviewEmpty(c, st.Error, true)
 			return
 		}
+		if a.sourceControl.Discard != nil {
+			a.scDiscardDialog(c)
+		}
 		a.reviewReaderView(c, st.Selected, &st.Reader, true)
 	})
 }
@@ -61,8 +71,8 @@ func (a *app) reviewSecondary(c *ui.Context) {
 		title = trf("Turn %d", st.TurnCount)
 	}
 	ui.Column(c).FillWidth().Padding(12, 12, 10, 12).Gap(8).Children(func() {
-		ui.Text(c, title).FontSize(12.5).TextColor(palette.textSecondary).SingleLine().Ellipsis("...")
-		field.SearchBar(c, &st.Filter, field.SearchBarProps{Placeholder: tr("Filter files"), Size: theme.Small})
+		ui.Text(c, title).FontSize(uiPx(12.5)).TextColor(palette.textSecondary).SingleLine().Ellipsis("...")
+		sidebarFilterSearch(c, "review-files", tr("Filter files"), &st.Filter)
 		if st.Filter != st.AppliedFilter {
 			st.rebuildRows()
 		}
@@ -83,6 +93,34 @@ func (a *app) reviewSecondary(c *ui.Context) {
 		reviewNote(c, tr("No changes"), false)
 		return
 	}
+	// One group header for the whole file list, like the source control
+	// group rows: count plus a collapse chevron for the entire group.
+	c.Key("review-files-group")
+	group := ui.ButtonBase(c).Label(trf("%d files", len(st.Rows))).FillWidth().MinHeight(28).
+		Padding(5, 12, 5, 8).Gap(6).AlignItems(ui.Center)
+	if group.Hovered() {
+		group.Background(palette.overlay)
+	}
+	if group.Pressed() {
+		group.Background(palette.overlayStrong)
+	}
+	group.Children(func() {
+		if st.FilesCollapsed {
+			icon(c, "chevron-right", 10, palette.textGhost)
+		} else {
+			icon(c, "chevron-down", 10, palette.textGhost)
+		}
+		ui.Text(c, trf("%d files", len(st.Rows))).FontSize(uiPx(11)).TextColor(palette.textTertiary)
+	})
+	// OnClick, not Clicked: like the source control group fold, hiding rows
+	// must wait until the frame ends or the list panics past the end.
+	group.OnClick(func() {
+		st.FilesCollapsed = !st.FilesCollapsed
+	})
+	if st.FilesCollapsed {
+		return
+	}
+	writable := a.reviewFilesWritable()
 	st.FileList.Selected = &st.FileIndex
 	c.Key("review-checkpoint-files")
 	ui.List(c, &st.FileList, len(st.Rows)).FillWidth().Grow(1).MinHeight(0).ItemKey(func(i int) any { return st.Rows[i].Path }).Rows(func(row ui.ListRow) {
@@ -100,9 +138,12 @@ func (a *app) reviewSecondary(c *ui.Context) {
 		entry.Children(func() {
 			ui.Row(c).Width(10).Shrink(0).Children(func() {})
 			brandIcon(c, fileTypeIcon(file.Path), 13)
-			ui.Text(c, file.Path).FontSize(11.5).TextColor(palette.textSecondary).Grow(1).MinWidth(0).SingleLine().Ellipsis("...").Tooltip(file.Path)
-			ui.Text(c, file.Letter).FontSize(10).TextColor(scLetterColor(file.Letter))
-			ui.Text(c, trf("+%d −%d", file.Additions, file.Deletions)).FontSize(10).TextColor(palette.textTertiary)
+			ui.Text(c, file.Path).FontSize(uiPx(11.5)).TextColor(palette.textSecondary).Grow(1).MinWidth(0).SingleLine().Ellipsis("...").Tooltip(file.Path)
+			ui.Text(c, file.Letter).FontSize(uiPx(10)).TextColor(scLetterColor(file.Letter))
+			ui.Text(c, trf("+%d −%d", file.Additions, file.Deletions)).FontSize(uiPx(10)).TextColor(palette.textTertiary)
+			if writable {
+				a.reviewRowActions(c, file)
+			}
 		})
 		entry.OnClick(func() { st.FileIndex = row.Index; a.reviewSelect(file.Path, 3) })
 	}).OnChange(func() {
@@ -113,6 +154,36 @@ func (a *app) reviewSecondary(c *ui.Context) {
 			}
 		}
 	})
+}
+
+// reviewFilesWritable reports whether the listed files are live and can be
+// staged or discarded: snapshots of turns and ranges are read-only.
+func (a *app) reviewFilesWritable() bool {
+	st := &a.review
+	if st.Kind != reviewKindSource {
+		return false
+	}
+	switch st.Source {
+	case reviewSourceUncommitted, reviewSourceUnstaged, reviewSourceStaged:
+		return a.sourceControl.writable()
+	}
+	return false
+}
+
+// reviewRowActions stages or discards one listed file, like the header's
+// actions do for the shown file.
+func (a *app) reviewRowActions(c *ui.Context, file scFile) {
+	f := file
+	stageLabel := tr("Stage")
+	if f.Group == "staged" {
+		stageLabel = tr("Unstage")
+	}
+	stage := reviewMutedButton(c, stageLabel)
+	stage.OnClick(func() { a.scStage(f, f.Group == "staged") })
+	if f.Group != "staged" {
+		discard := reviewMutedButton(c, tr("Discard…"))
+		discard.OnClick(func() { a.sourceControl.Discard = &f })
+	}
 }
 
 // reviewBanner marks a turn snapshot: where it came from, that it is
@@ -132,7 +203,7 @@ func (a *app) reviewBanner(c *ui.Context) {
 		Background(palette.overlay).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
 		icon(c, "history", 13, palette.textTertiary)
 		ui.Row(c).Grow(1).MinWidth(0).Children(func() {
-			ui.Text(c, snapshot).FontSize(11.5).TextColor(palette.textSecondary).SingleLine().Ellipsis("...")
+			ui.Text(c, snapshot).FontSize(uiPx(11.5)).TextColor(palette.textSecondary).SingleLine().Ellipsis("...")
 		})
 		display.Tag(c, tr("Read-only snapshot"), display.TagProps{Variant: display.TagOutlined, Size: theme.Small})
 		live := action.Button(c, tr("View workspace"), action.ButtonProps{Variant: action.Text, Size: theme.Small})
@@ -153,7 +224,7 @@ func (a *app) reviewToolbar(c *ui.Context) {
 		BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
 		a.reviewSourcePill(c, true)
 		if st.Truncated || st.Stats.Truncated {
-			ui.Text(c, tr("Large diff · context incomplete")).FontSize(10.5).TextColor(palette.warningText)
+			ui.Text(c, tr("Large diff · context incomplete")).FontSize(uiPx(10.5)).TextColor(palette.warningText)
 		}
 		ui.Row(c).Grow(1).Children(func() {})
 		a.reviewFileNav(c, total, current, a.reviewStep)
@@ -174,7 +245,7 @@ func (a *app) reviewFileNav(c *ui.Context, total, current int, step func(int)) {
 		prev.OnClick(func() { step(-1) })
 	}
 	ui.Row(c).MinWidth(52).Center().Children(func() {
-		ui.Text(c, trf("%d / %d", current, total)).FontSize(11).TextColor(palette.textTertiary)
+		ui.Text(c, trf("%d / %d", current, total)).FontSize(uiPx(11)).TextColor(palette.textTertiary)
 	})
 	next := action.ActionIcon(c, assets.SVG("chevron-down"), action.ActionIconProps{Size: theme.Small, Title: tr("Next file")})
 	if current >= total {
@@ -224,14 +295,14 @@ func (a *app) reviewSourcePill(c *ui.Context, history bool) {
 			t.Tooltip(trf("%d files", stats.Files))
 		}
 		t.Children(func() {
-			ui.Text(c, label).FontSize(11.5).TextColor(palette.textSecondary).SingleLine().MaxWidth(160)
+			ui.Text(c, label).FontSize(uiPx(11.5)).TextColor(palette.textSecondary).SingleLine().MaxWidth(160)
 			icon(c, "chevron-down", 10, palette.textGhost)
 			if valid {
 				ui.Row(c).Width(1).Height(10).Background(palette.border).Children(func() {})
-				ui.Text(c, trf("+%d", stats.Additions)).FontSize(11.5).TextColor(palette.successText)
-				ui.Text(c, trf("−%d", stats.Deletions)).FontSize(11.5).TextColor(palette.dangerText)
+				ui.Text(c, trf("+%d", stats.Additions)).FontSize(uiPx(11.5)).TextColor(palette.successText)
+				ui.Text(c, trf("−%d", stats.Deletions)).FontSize(uiPx(11.5)).TextColor(palette.dangerText)
 				if stats.Truncated {
-					ui.Text(c, "…").FontSize(11.5).TextColor(palette.textTertiary)
+					ui.Text(c, "…").FontSize(uiPx(11.5)).TextColor(palette.textTertiary)
 				}
 			}
 		})
@@ -313,14 +384,14 @@ func (a *app) reviewFileHeader(c *ui.Context, path string, reader *reviewReader,
 			brandIcon(c, fileTypeIcon(path), 14)
 			if folder != "" {
 				ui.Row(c).Shrink(0).Children(func() {
-					ui.Text(c, folder).FontSize(11).TextColor(palette.textTertiary).SingleLine().Ellipsis("...")
+					ui.Text(c, folder).FontSize(uiPx(11)).TextColor(palette.textTertiary).SingleLine().Ellipsis("...")
 				})
 			}
 			ui.Row(c).MinWidth(0).Shrink(1).Children(func() {
-				ui.Text(c, name).FontSize(11.5).TextColor(palette.textSecondary).SingleLine().Ellipsis("...").Tooltip(path)
+				ui.Text(c, name).FontSize(uiPx(11.5)).TextColor(palette.textSecondary).SingleLine().Ellipsis("...").Tooltip(path)
 			})
 			if letter != "" && letter != " " {
-				ui.Text(c, letter).FontSize(10.5).TextColor(scLetterColor(letter))
+				ui.Text(c, letter).FontSize(uiPx(10.5)).TextColor(scLetterColor(letter))
 			}
 			reviewDiffStat(c, add, del)
 			ui.Row(c).Grow(1).Children(func() {})
@@ -331,19 +402,18 @@ func (a *app) reviewFileHeader(c *ui.Context, path string, reader *reviewReader,
 			// source_control_diff_split.
 			reviewLayoutToggle(c, &a.sourceControl.LayoutSel, reader)
 		})
-		a.reviewReaderActions(c, path, reader, history)
 	})
 }
 
-// reviewMutedButton is a Text button at the muted contrast the row actions
-// have always had: tertiary text, a step brighter under the pointer.
+// reviewMutedButton is a bordered Text button at the muted contrast the row
+// actions have always had: tertiary text, a step brighter under the pointer.
 func reviewMutedButton(c *ui.Context, label string) ui.Element {
 	b := action.Button(c, label, action.ButtonProps{Variant: action.Text, Size: theme.Small})
 	color := palette.textTertiary
 	if b.Hovered() {
 		color = palette.textSecondary
 	}
-	b.TextColor(color)
+	b.TextColor(color).Border(1, palette.border).Radius(6)
 	return b
 }
 
@@ -378,8 +448,8 @@ func (a *app) reviewFileActions(c *ui.Context) {
 // reviewDiffStat draws "+N −N" beside five blocks scaled to the balance of
 // the change, like Rust's render_diff_stat.
 func reviewDiffStat(c *ui.Context, add, del uint64) {
-	ui.Text(c, trf("+%d", add)).FontSize(11).TextColor(palette.successText)
-	ui.Text(c, trf("−%d", del)).FontSize(11).TextColor(palette.dangerText)
+	ui.Text(c, trf("+%d", add)).FontSize(uiPx(11)).TextColor(palette.successText)
+	ui.Text(c, trf("−%d", del)).FontSize(uiPx(11)).TextColor(palette.dangerText)
 	const blocks = 5
 	green := 0
 	if total := add + del; total > 0 {
@@ -402,7 +472,7 @@ func reviewDiffStat(c *ui.Context, add, del uint64) {
 // surface's bound model; the reader follows it the frame after a pick.
 func reviewLayoutToggle(c *ui.Context, layoutSel *int, reader *reviewReader) {
 	options := []string{tr("Unified"), tr("Split")}
-	action.Segmented(c, layoutSel, options, action.SegmentedProps{Size: theme.Small})
+	themeSegmented(c, layoutSel, options)
 	if (*layoutSel == 1) != reader.Split {
 		reader.Split = *layoutSel == 1
 		if reader.Viewer != nil {
@@ -413,32 +483,6 @@ func reviewLayoutToggle(c *ui.Context, layoutSel *int, reader *reviewReader) {
 			}
 		}
 	}
-}
-
-// reviewReaderActions jump between changes, grow the context of a live
-// file, or find in the diff.
-func (a *app) reviewReaderActions(c *ui.Context, path string, reader *reviewReader, history bool) {
-	ui.Row(c).FillWidth().Padding(4, 12).Gap(5).AlignItems(ui.Center).Children(func() {
-		hunkDisabled := reader.Viewer == nil || reader.Hunks == 0
-		reviewTextAction(c, "review-previous-change", tr("Previous change"), hunkDisabled, func() {
-			if reader.Hunk < 0 {
-				reader.Hunk = 0
-			}
-			reader.Hunk = (reader.Hunk - 1 + reader.Hunks) % reader.Hunks
-			reader.Viewer.GoToHunk(reader.Hunk)
-		})
-		reviewTextAction(c, "review-next-change", tr("Next change"), hunkDisabled, func() {
-			reader.Hunk = (reader.Hunk + 1) % reader.Hunks
-			reader.Viewer.GoToHunk(reader.Hunk)
-		})
-		// The 5s background diff refresh must not blink this button, so
-		// reader.Loading is not part of its state.
-		moreDisabled := history || reader.Viewer == nil || reader.Context >= 100000
-		reviewTextAction(c, "review-expand-context", tr("More context"), moreDisabled, func() {
-			a.scGrowContext()
-		})
-		reviewTextAction(c, "review-find", tr("Find"), reader.Viewer == nil, func() { reader.Viewer.Run(editor.Find) })
-	})
 }
 
 // reviewReaderView renders one file's diff, shared by the snapshot surface
@@ -476,23 +520,12 @@ func (a *app) reviewReaderView(c *ui.Context, path string, reader *reviewReader,
 	editor.DiffView(c, reader.Viewer).FillWidth().Grow(1).MinHeight(0)
 }
 
-// reviewTextAction is one muted row action, as a Text button of the library.
-func reviewTextAction(c *ui.Context, key, label string, disabled bool, onClick func()) {
-	c.Key(key)
-	b := reviewMutedButton(c, label)
-	if disabled {
-		b.Disabled(true).Opacity(0.4)
-	} else {
-		b.OnClick(onClick)
-	}
-}
-
 func reviewNote(c *ui.Context, text string, failure bool) {
 	color := palette.textTertiary
 	if failure {
 		color = palette.dangerText
 	}
-	ui.Text(c, text).FontSize(11).TextColor(color).Wrap()
+	ui.Text(c, text).FontSize(uiPx(11)).TextColor(color).Wrap()
 }
 
 // reviewEmpty fills the reader with why there is nothing to show.

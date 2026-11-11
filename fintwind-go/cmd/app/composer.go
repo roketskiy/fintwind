@@ -43,9 +43,9 @@ func (a *app) composer(c *ui.Context) {
 				// Composing guard is needed here.
 				c.Key("composer-draft")
 				input := ui.TextAreaBase(c, &a.draft).FillWidth().Lines(1, 8).
-					MinHeight(composerInputHeight).FixedLineHeight(composerInputLine).
+					MinHeight(composerInputHeight).FixedLineHeight(uiPx(composerInputLine)).
 					Placeholder(tr("Do anything…")).
-					Label(tr("Message")).FontSize(composerInputText).TextColor(palette.text)
+					Label(tr("Message")).FontSize(uiPx(composerInputText)).TextColor(palette.text)
 				// One-shot Rust parity (new_session_action / select_session /
 				// first session page): only the first composer frame after a
 				// session change takes the keyboard. Later frames must not
@@ -179,7 +179,7 @@ func (a *app) composer(c *ui.Context) {
 					}
 					stop.Children(func() {
 						if a.escapeStopArmedForCurrent() {
-							ui.Text(c, tr("Esc")).FontSize(10.5).FontWeight(600).
+							ui.Text(c, tr("Esc")).FontSize(uiPx(10.5)).FontWeight(600).
 								TextColor(palette.text)
 						} else {
 							icon(c, "stop", 20, palette.text)
@@ -311,7 +311,7 @@ func (a *app) queuedMessages(c *ui.Context) {
 		header.Children(func() {
 			icon(c, "queue", 14, palette.textSecondary)
 			ui.Text(c, fmt.Sprintf(tr("Queued · %d"), len(session.QueuedMessages))).
-				FontSize(12).TextColor(palette.textSecondary)
+				FontSize(uiPx(12)).TextColor(palette.textSecondary)
 			chevron := "chevron-up"
 			if collapsed {
 				chevron = "chevron-down"
@@ -339,7 +339,7 @@ func (a *app) queuedMessages(c *ui.Context) {
 					row.Children(func() {
 						icon(c, "grip-vertical", 13, palette.textTertiary)
 						ui.Row(c).Grow(1).MinWidth(0).Children(func() {
-							ui.Text(c, queuedContent(message)).FontSize(13).
+							ui.Text(c, queuedContent(message)).FontSize(uiPx(13)).
 								TextColor(palette.text).SingleLine().Ellipsis("...")
 						})
 						ui.Row(c).Gap(2).AlignItems(ui.Center).Children(func() {
@@ -354,7 +354,7 @@ func (a *app) queuedMessages(c *ui.Context) {
 									steer.Background(palette.overlayStrong)
 								}
 								steer.Children(func() {
-									ui.Text(c, tr("Steer")).FontSize(11.5).FontWeight(500).
+									ui.Text(c, tr("Steer")).FontSize(uiPx(11.5)).FontWeight(500).
 										TextColor(palette.text)
 								})
 								if steer.Clicked() {
@@ -425,13 +425,13 @@ func (a *app) permissionCard(c *ui.Context) {
 		card.Children(func() {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				icon(c, "alert", 13, palette.warning)
-				ui.Text(c, pending.Title).FontSize(12.5).FontWeight(500).TextColor(palette.text)
+				ui.Text(c, pending.Title).FontSize(uiPx(12.5)).FontWeight(500).TextColor(palette.text)
 			})
 			detail := ui.Row(c).FillWidth().Margin(8, 0, 0, 0).MaxHeight(92).
 				Padding(8).Radius(7).Background(palette.inset)
 			detail.Children(func() {
 				ui.Column(c).FillWidth().Children(func() {
-					ui.Text(c, pending.Detail).FontSize(10.5).FixedLineHeight(16).
+					ui.Text(c, pending.Detail).FontSize(uiPx(10.5)).FixedLineHeight(uiPx(16)).
 						Font(monoFont()).TextColor(palette.textSecondary).Wrap()
 				})
 			})
@@ -447,7 +447,7 @@ func (a *app) permissionCard(c *ui.Context) {
 							button.Opacity(0.9)
 						}
 						button.Children(func() {
-							ui.Text(c, option.Label).FontSize(12.5).FontWeight(600).
+							ui.Text(c, option.Label).FontSize(uiPx(12.5)).FontWeight(600).
 								TextColor(palette.onInverse)
 						})
 					} else {
@@ -459,7 +459,7 @@ func (a *app) permissionCard(c *ui.Context) {
 							button.Background(palette.overlayStrong)
 						}
 						button.Children(func() {
-							ui.Text(c, option.Label).FontSize(12.5).FontWeight(600).
+							ui.Text(c, option.Label).FontSize(uiPx(12.5)).FontWeight(600).
 								TextColor(palette.textSecondary)
 						})
 					}
@@ -501,13 +501,13 @@ func (a *app) userInputCard(c *ui.Context) {
 		card.Children(func() {
 			header := ui.Row(c).FillWidth().PaddingY(2).Gap(8).AlignItems(ui.Center)
 			header.Children(func() {
-				ui.Text(c, question.Header).FontSize(10.5).FontWeight(600).
+				ui.Text(c, question.Header).FontSize(uiPx(10.5)).FontWeight(600).
 					TextColor(palette.textTertiary).Shrink(0)
 				if len(pending.Questions) > 1 {
 					ui.Row(c).Height(18).Padding(0, 6).Radius(5).
 						Background(palette.overlay).Center().Children(func() {
 						ui.Text(c, fmt.Sprintf(tr("%d of %d"), pending.Index+1,
-							len(pending.Questions))).FontSize(9.5).FontWeight(500).
+							len(pending.Questions))).FontSize(uiPx(9.5)).FontWeight(500).
 							TextColor(palette.textTertiary)
 					})
 				}
@@ -516,7 +516,7 @@ func (a *app) userInputCard(c *ui.Context) {
 			if pending.Collapsed {
 				ui.Row(c).Height(8)
 			} else {
-				ui.Text(c, question.Question).FontSize(13).FixedLineHeight(18).
+				ui.Text(c, question.Question).FontSize(uiPx(13)).FixedLineHeight(uiPx(18)).
 					FontWeight(500).TextColor(palette.text).Wrap().Margin(5, 0, 0, 0)
 				if len(question.Options) > 0 {
 					options := ui.Column(c).FillWidth().Margin(9, 0, 0, 0).Gap(4)
@@ -540,11 +540,11 @@ func (a *app) userInputCard(c *ui.Context) {
 							}
 							row.Children(func() {
 								ui.Column(c).Grow(1).MinWidth(0).Children(func() {
-									ui.Text(c, option.Label).FontSize(12.5).FontWeight(500).
+									ui.Text(c, option.Label).FontSize(uiPx(12.5)).FontWeight(500).
 										TextColor(palette.text)
 									if option.Description != nil && *option.Description != "" {
-										ui.Text(c, *option.Description).FontSize(11).
-											FixedLineHeight(14).TextColor(palette.textSecondary).
+										ui.Text(c, *option.Description).FontSize(uiPx(11)).
+											FixedLineHeight(uiPx(14)).TextColor(palette.textSecondary).
 											Wrap().Margin(1, 0, 0, 0)
 									}
 								})
@@ -589,7 +589,7 @@ func (a *app) userInputCard(c *ui.Context) {
 					icon(c, "pencil", 12, color)
 					ui.Row(c).Grow(1).MinWidth(0).Children(func() {
 						ui.TextInputBase(c, &pending.Custom[pending.Index]).FillWidth().
-							FontSize(12.5).FixedLineHeight(17).TextColor(palette.text).
+							FontSize(uiPx(12.5)).FixedLineHeight(uiPx(17)).TextColor(palette.text).
 							Placeholder(tr("Type another answer")).Label(tr("Another answer")).Disabled(pending.Response.Phase != "")
 					})
 				})
@@ -626,7 +626,7 @@ func (a *app) userInputCard(c *ui.Context) {
 						button.Opacity(0.9)
 					}
 					button.Children(func() {
-						ui.Text(c, label).FontSize(12).FontWeight(600).
+						ui.Text(c, label).FontSize(uiPx(12)).FontWeight(600).
 							TextColor(palette.onInverse)
 					})
 					if button.Clicked() {
@@ -639,7 +639,7 @@ func (a *app) userInputCard(c *ui.Context) {
 				} else {
 					button.Background(palette.overlay)
 					button.Children(func() {
-						ui.Text(c, label).FontSize(12).FontWeight(600).
+						ui.Text(c, label).FontSize(uiPx(12)).FontWeight(600).
 							TextColor(palette.textGhost)
 					})
 				}
@@ -658,7 +658,7 @@ func (a *app) userInputTextButton(c *ui.Context, label string, onClick func()) {
 		button.Opacity(0.8)
 	}
 	button.Children(func() {
-		ui.Text(c, label).FontSize(12).FontWeight(500).TextColor(palette.textTertiary)
+		ui.Text(c, label).FontSize(uiPx(12)).FontWeight(500).TextColor(palette.textTertiary)
 	})
 	if button.Clicked() {
 		onClick()
@@ -742,7 +742,7 @@ func (a *app) composerChip(c *ui.Context, iconName string, iconColor ui.Color, l
 			icon(c, iconName, composerChipIcon, iconColor)
 		}
 		ui.Row(c).MinWidth(0).Children(func() {
-			ui.Text(c, label).FontSize(composerChipText).FixedLineHeight(16).
+			ui.Text(c, label).FontSize(uiPx(composerChipText)).FixedLineHeight(uiPx(16)).
 				TextColor(textColor).SingleLine().Ellipsis("...")
 		})
 		if caret {
@@ -787,7 +787,7 @@ func (a *app) modelChip(c *ui.Context) {
 	chip.Children(func() {
 		markIcon(c, name, composerModelIcon, palette.neutral)
 		ui.Row(c).MinWidth(0).MaxWidth(modelChipLabelWidth).Children(func() {
-			ui.Text(c, label).FontSize(composerChipText).FixedLineHeight(16).
+			ui.Text(c, label).FontSize(uiPx(composerChipText)).FixedLineHeight(uiPx(16)).
 				TextColor(palette.textSecondary).SingleLine().Ellipsis("...")
 		})
 	})
@@ -842,7 +842,7 @@ func (a *app) accessChip(c *ui.Context) {
 	}
 	chip.Children(func() {
 		icon(c, iconName, composerChipIcon, palette.textTertiary)
-		ui.Text(c, label).FontSize(composerChipText).FixedLineHeight(16).
+		ui.Text(c, label).FontSize(uiPx(composerChipText)).FixedLineHeight(uiPx(16)).
 			TextColor(palette.textSecondary)
 	})
 	if chip.Clicked() {
@@ -870,10 +870,10 @@ func (a *app) accessChip(c *ui.Context) {
 							if selected {
 								weight = 600
 							}
-							ui.Text(c, optionLabel).FontSize(12.5).FontWeight(weight).
+							ui.Text(c, optionLabel).FontSize(uiPx(12.5)).FontWeight(weight).
 								TextColor(palette.text).SingleLine().Ellipsis("...")
-							ui.Text(c, accessDescription(option)).FontSize(11).
-								FixedLineHeight(15).TextColor(palette.textTertiary)
+							ui.Text(c, accessDescription(option)).FontSize(uiPx(11)).
+								FixedLineHeight(uiPx(15)).TextColor(palette.textTertiary)
 						})
 						if selected {
 							icon(c, "check", 12, palette.textTertiary)
@@ -946,7 +946,7 @@ func (a *app) interactionChip(c *ui.Context) {
 	}
 	chip.Children(func() {
 		icon(c, iconName, composerChipIcon, iconColor)
-		ui.Text(c, label).FontSize(composerChipText).FixedLineHeight(16).
+		ui.Text(c, label).FontSize(uiPx(composerChipText)).FixedLineHeight(uiPx(16)).
 			TextColor(textColor)
 	})
 	if chip.Clicked() && a.detail != nil {

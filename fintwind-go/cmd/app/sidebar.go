@@ -29,8 +29,10 @@ const (
 )
 
 func (a *app) sidebar(c *ui.Context) {
-	ui.Column(c).Width(a.sidebarWidth).FillHeight().Shrink(0).
-		Background(palette.sidebar).Clip().Children(func() {
+	side := ui.Column(c).Width(a.sidebarWidth).FillHeight().Shrink(0).
+		Background(palette.sidebar).Radius(workspaceRadius).Clip()
+	side = sidebarShadow(side)
+	side.Children(func() {
 		ui.Column(c.Key("sidebar-actions")).PaddingX(10).Gap(actionRowGap).Children(func() {
 			a.sidebarAction(c.Key("new-task"), "compose", tr("New task")).OnClick(func() {
 				a.newTab()
@@ -82,7 +84,7 @@ func (a *app) sidebarAction(c *ui.Context, glyph, label string) ui.Element {
 		ui.Row(c).Size(20, 20).Shrink(0).Center().Children(func() {
 			icon(c, glyph, 16, palette.textSecondary)
 		})
-		ui.Text(c, label).FontSize(13).TextColor(palette.textSecondary).SingleLine()
+		ui.Text(c, label).FontSize(uiPx(13)).TextColor(palette.textSecondary).SingleLine()
 	})
 	return b
 }
@@ -128,7 +130,7 @@ func (a *app) sidebarGroupHeader(c *ui.Context, project *model.Project) {
 				Padding(0, 4).Radius(6).Gap(5).Background(ui.Transparent)
 			toggle.Children(func() {
 				icon(c, "folder", 12, palette.textGhost)
-				ui.Text(c, name).Grow(1).MinWidth(0).FontSize(12.5).FontWeight(500).
+				ui.Text(c, name).Grow(1).MinWidth(0).FontSize(uiPx(12.5)).FontWeight(500).
 					TextColor(palette.textSecondary).SingleLine().Ellipsis("…")
 				glyph := "chevron-down"
 				if a.collapsed[id] {
@@ -194,7 +196,7 @@ func (a *app) sidebarSession(c *ui.Context, rows []sidebarRow, index int, sessio
 						if renaming {
 							a.sessionRenameCell(c)
 						} else {
-							ui.Text(c, sidebarSessionTitle(session)).Grow(1).MinWidth(0).FontSize(13.5).
+							ui.Text(c, sidebarSessionTitle(session)).Grow(1).MinWidth(0).FontSize(uiPx(13.5)).
 								TextColor(palette.text).SingleLine().Ellipsis("…")
 						}
 						switch session.Status {
@@ -234,12 +236,12 @@ func (a *app) sidebarSession(c *ui.Context, rows []sidebarRow, index int, sessio
 								if session.Busy() {
 									color = palette.textTertiary
 								}
-								ui.Text(c, label).FontSize(11).TextColor(color).Shrink(0).SingleLine()
+								ui.Text(c, label).FontSize(uiPx(11)).TextColor(color).Shrink(0).SingleLine()
 							}
 							if branch != "" {
 								ui.Row(c).Grow(1).MinWidth(0).Gap(5).AlignItems(ui.Center).Children(func() {
 									icon(c, "git-branch", 11, palette.textGhost)
-									ui.Text(c, branch).Grow(1).MinWidth(0).FontSize(11).
+									ui.Text(c, branch).Grow(1).MinWidth(0).FontSize(uiPx(11)).
 										TextColor(palette.textMuted).SingleLine().Ellipsis("…")
 								})
 							}
@@ -304,9 +306,9 @@ func (a *app) sidebarShowMore(c *ui.Context, project *model.Project, remaining i
 			Padding(0, 8).Radius(6).Gap(6)
 		b.Children(func() {
 			icon(c, "chevron-down", 11, palette.textGhost)
-			ui.Text(c, tr("Show more")).Grow(1).MinWidth(0).FontSize(12.5).
+			ui.Text(c, tr("Show more")).Grow(1).MinWidth(0).FontSize(uiPx(12.5)).
 				TextColor(palette.textSecondary).SingleLine()
-			ui.Text(c, strings.ReplaceAll(tr("%{count} hidden"), "%{count}", fmt.Sprint(remaining))).FontSize(11).
+			ui.Text(c, strings.ReplaceAll(tr("%{count} hidden"), "%{count}", fmt.Sprint(remaining))).FontSize(uiPx(11)).
 				TextColor(palette.textMuted).Shrink(0)
 		})
 		b.OnClick(func() {

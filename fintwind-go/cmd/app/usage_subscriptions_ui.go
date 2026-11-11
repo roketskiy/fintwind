@@ -14,8 +14,8 @@ func (a *app) usageSubscriptionsSection(c *ui.Context) {
 	s := &a.usage.Subscriptions
 	ui.Column(c).FillWidth().MinWidth(0).Gap(12).Children(func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, tr("Subscriptions & balances")).Grow(1).MinWidth(0).FontSize(13).FontWeight(500).TextColor(palette.text)
-			usageRefreshControl(c, "usage-subscriptions-refresh", "Refresh quotas", s.Status == "loading", func() {
+			ui.Text(c, tr("Subscriptions & balances")).Grow(1).MinWidth(0).FontSize(uiPx(13)).FontWeight(500).TextColor(palette.text)
+			usageRefreshControl(c, "usage-subscriptions-refresh", tr("Refresh quotas"), s.Status == "loading", func() {
 				a.refreshUsageSubscriptions(true)
 			})
 		})
@@ -25,20 +25,19 @@ func (a *app) usageSubscriptionsSection(c *ui.Context) {
 				title = tr("Quota refresh incomplete")
 			}
 			usageNotice(c, "alert", title, s.Error, palette.warningText)
-		} else if s.Status == "loading" {
-			usageNotice(c, "rotate-cw", "Updating quotas", usageUpdatedLabel(s.UpdatedAt), palette.textTertiary)
 		}
+		// No updating row: same flash-and-shove as the history one.
 		if len(s.Cards) == 0 {
-			usagePanel(c, "gauge", "Account quotas", "", func() {
+			usagePanel(c, "gauge", tr("Account quotas"), "", func() {
 				switch s.Status {
 				case "loading":
-					ui.Text(c, tr("Loading connected accounts...")).FontSize(12).TextColor(palette.textTertiary)
+					ui.Text(c, tr("Loading connected accounts...")).FontSize(uiPx(12)).TextColor(palette.textTertiary)
 				case "error":
-					ui.Text(c, tr("Quota data unavailable")).FontSize(12).TextColor(palette.textTertiary)
+					ui.Text(c, tr("Quota data unavailable")).FontSize(uiPx(12)).TextColor(palette.textTertiary)
 				case "idle":
-					ui.Text(c, tr("No workspace connected")).FontSize(12).TextColor(palette.textTertiary)
+					ui.Text(c, tr("No workspace connected")).FontSize(uiPx(12)).TextColor(palette.textTertiary)
 				default:
-					ui.Text(c, tr("Not connected")).FontSize(12).TextColor(palette.textTertiary)
+					ui.Text(c, tr("Not connected")).FontSize(uiPx(12)).TextColor(palette.textTertiary)
 				}
 			})
 			return
@@ -68,17 +67,16 @@ func usageSubscriptionCard(c *ui.Context, subscription usageSubscription) {
 				identity += account
 			}
 			if identity != "" {
-				ui.Text(c, identity).FillWidth().MinWidth(0).FontSize(11.5).TextColor(palette.textSecondary).Wrap()
+				ui.Text(c, identity).FillWidth().MinWidth(0).FontSize(uiPx(11.5)).TextColor(palette.textSecondary).Wrap()
 			}
 		}
-		if subscription.Status == "loading" {
-			usageNotice(c, "rotate-cw", "Refreshing...", "", palette.textTertiary)
-		} else if subscription.Status == "error" && (quota == nil || quota.Status == "ready") {
-			usageNotice(c, "alert", "Quota unavailable", subscription.Error, palette.warningText)
+		// Stale quotas stay put through a refresh; no flashing row.
+		if subscription.Status == "error" && (quota == nil || quota.Status == "ready") {
+			usageNotice(c, "alert", tr("Quota unavailable"), subscription.Error, palette.warningText)
 		}
 		if quota == nil {
 			if subscription.Status != "loading" && subscription.Status != "error" {
-				ui.Text(c, tr("No quota reported")).FontSize(12).TextColor(palette.textTertiary)
+				ui.Text(c, tr("No quota reported")).FontSize(uiPx(12)).TextColor(palette.textTertiary)
 			}
 			return
 		}
@@ -97,20 +95,21 @@ func usageSubscriptionCard(c *ui.Context, subscription usageSubscription) {
 				usageQuotaBalanceRow(c, balance)
 			}
 			if status == "ready" && len(quota.Windows) == 0 && len(quota.Balances) == 0 {
-				ui.Text(c, tr("No quota reported")).FontSize(12).TextColor(palette.textTertiary)
+				ui.Text(c, tr("No quota reported")).FontSize(uiPx(12)).TextColor(palette.textTertiary)
 			}
 		}
 		if quota.MeasuredAt != nil {
-			prefix := "Last measured "
+			measured := time.Unix(*quota.MeasuredAt, 0).Local().Format("Jan 2, 15:04")
+			prefix := trf("Last measured %s", measured)
 			if status != "ready" || subscription.Status == "error" || subscription.Expired {
-				prefix = "Previous reading "
+				prefix = trf("Previous reading %s", measured)
 			}
-			ui.Text(c, prefix+time.Unix(*quota.MeasuredAt, 0).Local().Format("Jan 2, 15:04")).
-				FontSize(10.5).TextColor(palette.textTertiary)
+			ui.Text(c, prefix).
+				FontSize(uiPx(10.5)).TextColor(palette.textTertiary)
 		}
 		if quota.RetryAt != nil && status != "ready" {
-			ui.Text(c, tr("Retry after ")+time.Unix(*quota.RetryAt, 0).Local().Format("Jan 2, 15:04")).
-				FontSize(10.5).TextColor(palette.textTertiary)
+			ui.Text(c, trf("Retry after %s", time.Unix(*quota.RetryAt, 0).Local().Format("Jan 2, 15:04"))).
+				FontSize(uiPx(10.5)).TextColor(palette.textTertiary)
 		}
 	}).Grow(1).Basis(370).MinWidth(0)
 }
@@ -120,13 +119,13 @@ func usageQuotaWindowCard(c *ui.Context, window usageQuotaWindow) {
 		value := "—"
 		percentKnown := window.UsedPercent != nil && !math.IsNaN(*window.UsedPercent) && !math.IsInf(*window.UsedPercent, 0)
 		if window.Unlimited {
-			value = "Unlimited"
+			value = tr("Unlimited")
 		} else if percentKnown {
-			value = usageQuotaPercent(*window.UsedPercent) + " used"
+			value = trf("%s used", usageQuotaPercent(*window.UsedPercent))
 		}
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, usageQuotaWindowLabel(window)).Grow(1).MinWidth(0).FontSize(12).TextColor(palette.textSecondary).Wrap()
-			kit.Numeric(c, value).FontFeatures("tnum").FontSize(12).TextColor(palette.text).Shrink(0)
+			ui.Text(c, usageQuotaWindowLabel(window)).Grow(1).MinWidth(0).FontSize(uiPx(12)).TextColor(palette.textSecondary).Wrap()
+			kit.Numeric(c, value).FontFeatures("tnum").FontSize(uiPx(12)).TextColor(palette.text).Shrink(0)
 		})
 		if percentKnown && !window.Unlimited {
 			percent := *window.UsedPercent
@@ -148,11 +147,11 @@ func usageQuotaWindowCard(c *ui.Context, window usageQuotaWindow) {
 				}
 				text += tr("Limit ") + limit
 			}
-			ui.Text(c, text).FontSize(11).TextColor(palette.textTertiary).Wrap()
+			ui.Text(c, text).FontSize(uiPx(11)).TextColor(palette.textTertiary).Wrap()
 		}
 		if window.ResetsAt != nil {
 			ui.Text(c, tr("Resets ")+time.Unix(*window.ResetsAt, 0).Local().Format("Jan 2, 15:04")).
-				FontSize(10.5).TextColor(palette.textTertiary)
+				FontSize(uiPx(10.5)).TextColor(palette.textTertiary)
 		}
 	})
 }
@@ -164,13 +163,13 @@ func usageQuotaBalanceRow(c *ui.Context, balance usageQuotaBalance) {
 	}
 	value := strings.TrimSpace(balance.Remaining)
 	if balance.Unlimited {
-		value = "Unlimited"
+		value = tr("Unlimited")
 	} else if value == "" {
 		value = "—"
 	}
 	ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, label).Grow(1).MinWidth(0).FontSize(12).TextColor(palette.textSecondary).Wrap()
-		kit.Numeric(c, value).FontFeatures("tnum").FontSize(14).TextColor(palette.text).Shrink(0)
+		ui.Text(c, label).Grow(1).MinWidth(0).FontSize(uiPx(12)).TextColor(palette.textSecondary).Wrap()
+		kit.Numeric(c, value).FontFeatures("tnum").FontSize(uiPx(14)).TextColor(palette.text).Shrink(0)
 	})
 }
 
@@ -211,41 +210,41 @@ func usageQuotaStatus(status string) string {
 func usageQuotaStatusLabel(status string) string {
 	switch status {
 	case "no_credential":
-		return "Not signed in"
+		return tr("Not signed in")
 	case "needs_auth":
-		return "Sign in again"
+		return tr("Sign in again")
 	case "access_denied":
-		return "Access denied"
+		return tr("Access denied")
 	case "rate_limited":
-		return "Rate limited"
+		return tr("Rate limited")
 	case "unavailable":
-		return "Service unavailable"
+		return tr("Service unavailable")
 	case "no_data":
-		return "No quota reported"
+		return tr("No quota reported")
 	case "unsupported":
-		return "Quota not supported"
+		return tr("Quota not supported")
 	default:
-		return "Quota unavailable"
+		return tr("Quota unavailable")
 	}
 }
 
 func usageQuotaWindowLabel(window usageQuotaWindow) string {
 	labels := map[string]string{
-		"rolling": "Rolling", "weekly": "Weekly", "monthly": "Monthly", "tool_calls": "Tool calls",
-		"chat": "Chat", "completions": "Completions", "premium": "Premium", "model": "Model", "extra_usage": "Extra usage",
+		"rolling": tr("Rolling"), "weekly": tr("Weekly"), "monthly": tr("Monthly"), "tool_calls": tr("Tool calls"),
+		"chat": tr("Chat"), "completions": tr("Completions"), "premium": tr("Premium"), "model": tr("Model"), "extra_usage": tr("Extra usage"),
 	}
 	label := labels[window.Kind]
 	if label == "" {
-		label = "Quota"
+		label = tr("Quota")
 	}
 	if window.Kind == "rolling" && window.SpanSeconds != nil {
 		seconds := *window.SpanSeconds
 		if seconds > 0 && seconds%3600 == 0 {
-			label += fmt.Sprintf(" · %dh", seconds/3600)
+			label += trf(" · %dh", seconds/3600)
 		} else if seconds > 0 && seconds%60 == 0 {
-			label += fmt.Sprintf(" · %dm", seconds/60)
+			label += trf(" · %dm", seconds/60)
 		} else if seconds > 0 {
-			label += fmt.Sprintf(" · %ds", seconds)
+			label += trf(" · %ds", seconds)
 		}
 	}
 	if model := usageOptionalText(window.Model); model != "" {

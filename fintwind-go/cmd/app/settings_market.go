@@ -87,7 +87,7 @@ func (a *app) settingsMarketList(c *ui.Context) {
 					key = "all"
 				}
 				chip := componentTextButton(c, "settings-market-cat-"+key, option.label, false).
-					Height(24).Padding(0, 8).Radius(7).FontSize(10.5).Border(0, ui.Transparent)
+					Height(24).Padding(0, 8).Radius(7).FontSize(uiPx(10.5)).Border(0, ui.Transparent)
 				if st.marketCat == option.value {
 					chip.Background(palette.sidebarItem).TextColor(palette.text).Label(option.label + tr(" selected"))
 				}
@@ -165,9 +165,9 @@ func (a *app) settingsMarketRow(c *ui.Context, entry settingsMarketEntry, select
 	row.Children(func() {
 		mailTile(c, entry.icon, selected)
 		ui.Column(c).Grow(1).MinWidth(0).Children(func() {
-			ui.Text(c, entry.name).FontSize(12.5).FontWeight(500).
+			ui.Text(c, entry.name).FontSize(uiPx(12.5)).FontWeight(500).
 				TextColor(palette.text).SingleLine().Ellipsis("...")
-			ui.Text(c, settingsMarketCatLabel(entry.category)).FontSize(10.5).
+			ui.Text(c, settingsMarketCatLabel(entry.category)).FontSize(uiPx(10.5)).
 				TextColor(palette.textTertiary).SingleLine().Ellipsis("...").Margin(1, 0, 0, 0)
 		})
 	})
@@ -181,7 +181,7 @@ func settingsMarketBadge(c *ui.Context, label string) {
 	badge := ui.Row(c).Padding(2, 7).Radius(7).AlignItems(ui.Center).
 		Background(palette.overlay)
 	badge.Children(func() {
-		ui.Text(c, label).FontSize(9.5).TextColor(palette.textTertiary)
+		ui.Text(c, label).FontSize(uiPx(9.5)).TextColor(palette.textTertiary)
 	})
 }
 
@@ -204,7 +204,7 @@ func (a *app) settingsMarketDetail(c *ui.Context) {
 			ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Start).Children(func() {
 				mailDetailTile(c, entry.icon, 17)
 				ui.Column(c).Grow(1).MinWidth(0).Gap(6).Children(func() {
-					ui.Text(c, entry.name).FontSize(15).FontWeight(500).
+					ui.Text(c, entry.name).FontSize(uiPx(15)).FontWeight(500).
 						TextColor(palette.text)
 					ui.Row(c).FillWidth().Wrap().Gap(6).AlignItems(ui.Center).Children(func() {
 						mailEnabledBadge(c, false, "Catalog entry")
@@ -219,23 +219,23 @@ func (a *app) settingsMarketDetail(c *ui.Context) {
 								Background(palette.overlay)
 							auth.Children(func() {
 								icon(c, "lock", 10, palette.textTertiary)
-								ui.Text(c, tr(" Needs auth")).FontSize(9.5).
+								ui.Text(c, tr(" Needs auth")).FontSize(uiPx(9.5)).
 									TextColor(palette.textTertiary)
 							})
 						}
 					})
 				})
 			})
-			ui.Text(c, entry.description).FontSize(13).FixedLineHeight(20).
+			ui.Text(c, entry.description).FontSize(uiPx(13)).FixedLineHeight(uiPx(20)).
 				TextColor(palette.textSecondary).Wrap().Margin(14, 0, 0, 0)
 			ui.Column(c).FillWidth().Gap(4).Margin(12, 0, 0, 0).Children(func() {
-				ui.Text(c, tr("SOURCE")).FontSize(9.5).FontWeight(600).
+				ui.Text(c, tr("SOURCE")).FontSize(uiPx(9.5)).FontWeight(600).
 					TextColor(palette.textTertiary)
 				ui.Column(c).FillWidth().Gap(2).Radius(7).Padding(8, 10).
 					Border(1, palette.border).Children(func() {
-					ui.Text(c, entry.sourceLabel).Font(monoFont()).FontSize(11.5).
+					ui.Text(c, entry.sourceLabel).Font(monoFont()).FontSize(uiPx(11.5)).
 						TextColor(palette.textSecondary).SingleLine().Ellipsis("...")
-					ui.Text(c, entry.url).Font(monoFont()).FontSize(11).
+					ui.Text(c, entry.url).Font(monoFont()).FontSize(uiPx(11)).
 						TextColor(palette.textTertiary).SingleLine().Ellipsis("...")
 				})
 			})
@@ -250,16 +250,16 @@ func (a *app) settingsMarketDetail(c *ui.Context) {
 					}
 				}
 				componentTextButton(c, "settings-market-install-"+entry.id, choice(installed, tr("Open server"), tr("Add")), false).
-					Height(28).Padding(0, 10).Radius(6).Disabled(!a.settings.backend.mcp.loaded || a.settings.backend.mcp.writing || a.settings.backend.mcp.uncertain).OnClick(func() { a.installSettingsMarket(*entry) })
+					Height(32).Padding(0, 10).Radius(6).Disabled(!a.settings.backend.mcp.loaded || a.settings.backend.mcp.writing || a.settings.backend.mcp.uncertain).OnClick(func() { a.installSettingsMarket(*entry) })
 				source := componentTextButton(c, "settings-market-source-"+entry.id, sourceLabel, false).
-					Height(28).Padding(0, 10).Radius(6)
+					Height(32).Padding(0, 10).Radius(6)
 				if source.Clicked() {
 					c.Services().OpenURL(entry.sourceURL)
 				}
 			})
 			settingsOperationStatus(c, a.settings.backend.mcp, "")
 			if entry.needsAuth {
-				ui.Text(c, tr("Authentication may require OAuth or provider headers. Configure them in MCP Servers.")).FontSize(11).TextColor(palette.textSecondary).Wrap()
+				ui.Text(c, tr("Authentication may require OAuth or provider headers. Configure them in MCP Servers.")).FontSize(uiPx(11)).TextColor(palette.textSecondary).Wrap()
 			}
 		})
 	})

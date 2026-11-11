@@ -319,7 +319,7 @@ func reviewSeparator(onHeaderClick func()) func(*ui.Context, ui.Element, *editor
 					b.Background(ct.Text.Alpha(0.06))
 				}
 				b.Children(func() {
-					ui.Text(c, label).FontSize(11).TextColor(t.TextMuted)
+					ui.Text(c, label).FontSize(uiPx(11)).TextColor(t.TextMuted)
 				})
 				if b.Clicked() {
 					expand(s.ExpandAll)
@@ -374,7 +374,8 @@ func reviewEditorTheme() *editor.Theme {
 // reviewApplyMetrics gives the viewer the app's code font and theme. It runs
 // in the render path, where the palette is safe to read.
 func reviewApplyMetrics(v *editor.DiffState) {
-	v.Font = ui.Font{Family: monoFont(), Size: codeMetric(12)}
+	v.Font = ui.Font{Family: monoFont(), Size: codePx(12)}
 	v.LineHeight = 20.0 / 12.0
 	v.Theme = reviewEditorTheme()
+	v.Wrap = true
 }

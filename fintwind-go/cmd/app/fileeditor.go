@@ -201,6 +201,7 @@ func (ed *nativeFileEditor) editorState() *editor.State {
 		ed.edState = &editor.State{
 			Buffer:      editor.NewBuffer(ed.text),
 			LineNumbers: editor.LineNumbersOn,
+			SoftWrap:    true,
 		}
 		if language := editor.LanguageFor(ed.relative); language != nil {
 			ed.edState.Buffer.SetLanguage(language)

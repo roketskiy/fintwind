@@ -209,7 +209,7 @@ func (a *app) paletteSearch(c *ui.Context, items []paletteEntry) {
 		icon(c, "search", paletteIconSize, palette.textSecondary)
 		ui.Row(c).Grow(1).MinWidth(0).Children(func() {
 			ui.TextInputBase(c, &a.paletteQuery).FillWidth().
-				FontSize(paletteSearchText).FixedLineHeight(20).
+				FontSize(uiPx(paletteSearchText)).FixedLineHeight(uiPx(20)).
 				TextColor(palette.text).Placeholder(tr("Type a command…")).
 				Label(tr("Command palette")).AutoFocus().
 				OnChange(func() { a.paletteIndex = 0 }).
@@ -244,9 +244,9 @@ func (a *app) paletteResults(c *ui.Context, items []paletteEntry) {
 	if len(items) == 0 {
 		ui.Column(c).FillWidth().MinHeight(180).Center().Gap(6).Children(func() {
 			icon(c, "search", 18, palette.textGhost)
-			ui.Text(c, tr("No matching tasks or commands")).FontSize(13).
+			ui.Text(c, tr("No matching tasks or commands")).FontSize(uiPx(13)).
 				TextColor(palette.textSecondary)
-			ui.Text(c, tr("Try a task title, project, setting, or command")).FontSize(11.5).
+			ui.Text(c, tr("Try a task title, project, setting, or command")).FontSize(uiPx(11.5)).
 				TextColor(palette.textTertiary)
 		})
 		return
@@ -283,11 +283,11 @@ func (a *app) paletteResults(c *ui.Context, items []paletteEntry) {
 				row.Children(func() {
 					icon(c, item.icon, paletteIconSize, palette.textSecondary)
 					ui.Column(c).Grow(1).MinWidth(0).Justify(ui.Center).Children(func() {
-						ui.Text(c, item.label).FontSize(paletteRowText).
+						ui.Text(c, item.label).FontSize(uiPx(paletteRowText)).
 							TextColor(choice(selected, palette.text, palette.textSecondary)).
 							SingleLine().Ellipsis("...")
 						if item.detail != "" {
-							ui.Text(c, item.detail).FontSize(11.5).
+							ui.Text(c, item.detail).FontSize(uiPx(11.5)).
 								TextColor(palette.textTertiary).
 								SingleLine().Ellipsis("...")
 						}

@@ -220,7 +220,7 @@ func usageE2ECheckUI(report *usageE2EReport, a *app, width int, now time.Time, f
 		report.check(prefix+"choose all time", "no error", err.Error())
 	}
 	report.check(prefix+"pointer filter chooses all time", "all", a.usage.Range)
-	report.check(prefix+"all-time exact fee coverage", true, tt.HasText("496") && tt.HasText("API estimate $2.50") && tt.HasText("2/4 sessions priced"))
+	report.check(prefix+"all-time hides fee estimate", true, tt.HasText("496") && !tt.HasText("API estimate") && !tt.HasText("sessions priced"))
 	day := now.Format("2006-01-02")
 	cell, found := tt.Access(day)
 	report.check(prefix+"heat day accessible direct/cached semantics", true, found && cell.Focusable && cell.Description == fmt.Sprintf("%s · 210 direct tokens · 250 cached tokens · 3 sessions", day))
@@ -258,10 +258,11 @@ func usageE2ECheckStates(report *usageE2EReport, a *app, tt *ui.Tester, prefix s
 	for _, state := range []struct {
 		status usageLoadStatus
 		label  string
-	}{{usageLoading, "Updating history"}, {usageError, "History unavailable"}, {usageIdle, "No usage available"}} {
+	}{{usageLoading, ""}, {usageError, "History unavailable"}, {usageIdle, "No usage available"}} {
 		a.usage.History = usageHistory{Status: state.status, Error: "Fixture history unavailable", attemptedAt: now}
 		tt.Frame()
-		report.check(prefix+string(state.status)+" is visible and not a zero metric", true, tt.HasText(state.label) && !tt.HasText("Total tokens"))
+		visible := state.label == "" || tt.HasText(state.label)
+		report.check(prefix+string(state.status)+" is visible and not a zero metric", true, visible && !tt.HasText("Total tokens") && !tt.HasText("Updating history"))
 	}
 	a.usage.Subscriptions = usageSubscriptions{Status: usageError, Error: "Fixture quota unavailable", attemptedAt: now}
 	tt.Frame()

@@ -21,7 +21,7 @@ func (a *app) currentProviderModelID() string {
 	return ""
 }
 
-// providerRefreshButton mirrors the settingsAction geometry (h28 px10 r6
+// providerRefreshButton mirrors the settingsAction geometry (h32 px10 r6
 // strong border) but is clickable: it re-runs the shared model probe and
 // reads the a.modelProbeLoad loading state. requestModelProbe is a
 // first-load guard (it returns while a probe exists), so Refresh clears the
@@ -32,7 +32,7 @@ func (a *app) providerRefreshButton(c *ui.Context) {
 		label = tr("Checking...")
 	}
 	button := componentTextButton(c, "settings-provider-refresh", label, false).
-		Height(28).Padding(0, 10).Radius(6).Disabled(a.modelProbeLoad)
+		Height(32).Padding(0, 10).Radius(6).Disabled(a.modelProbeLoad)
 	if button.Clicked() && !a.modelProbeLoad {
 		a.modelProbe = nil
 		resetModelProbeRetry()
@@ -57,7 +57,7 @@ func (a *app) providerModelSection(c *ui.Context) {
 		ui.Row(c).FillWidth().Margin(14, 0, 0, 0).Gap(8).
 			AlignItems(ui.Center).Children(func() {
 			icon(c, "info", 12, palette.textTertiary)
-			ui.Text(c, label).FontSize(10.5).FixedLineHeight(15).
+			ui.Text(c, label).FontSize(uiPx(10.5)).FixedLineHeight(uiPx(15)).
 				TextColor(palette.textTertiary).Wrap()
 		})
 		return
@@ -88,9 +88,9 @@ func (a *app) providerModelSection(c *ui.Context) {
 		}
 		row.Children(func() {
 			ui.Column(c).Grow(1).MinWidth(0).Children(func() {
-				ui.Text(c, m.Name).FontSize(13).FontWeight(600).
+				ui.Text(c, m.Name).FontSize(uiPx(13)).FontWeight(600).
 					TextColor(palette.text).SingleLine().Ellipsis("...")
-				ui.Text(c, m.ID).FontSize(11.5).FixedLineHeight(16).
+				ui.Text(c, m.ID).FontSize(uiPx(11.5)).FixedLineHeight(uiPx(16)).
 					TextColor(palette.textTertiary).SingleLine().
 					Ellipsis("...").Margin(2, 0, 0, 0)
 			})

@@ -47,6 +47,8 @@ type settingsState struct {
 	scheduledTools    bool
 	mermaidVisual     bool
 	keepAwake         bool
+	termCopySelect    bool
+	termEnv           string
 	autoCompact       bool
 	busySendSteer     bool
 	busySendSel       int // 0 queue, 1 steer; the bound Segmented model
@@ -65,8 +67,10 @@ type settingsState struct {
 
 // settingsSecondary is the settings column: search, then the page list.
 func (a *app) settingsSecondary(c *ui.Context) {
-	ui.Column(c).Width(settingsWidth).FillHeight().Shrink(0).
-		Background(palette.sidebar).Children(func() {
+	secondary := ui.Column(c).Width(a.settingsSecWidth).FillHeight().Shrink(0).
+		Background(palette.sidebar).Radius(workspaceRadius).Clip()
+	secondary = sidebarShadow(secondary)
+	secondary.Children(func() {
 		ui.Row(c).Padding(12, 12, 0, 12).Children(func() {
 			settingsSearchInput(c, "settings-search", tr("Search Settings"), &a.settings.query)
 		})
@@ -97,7 +101,7 @@ func (a *app) settingsSecondary(c *ui.Context) {
 						}
 						icon(c, page.icon, 16, color)
 						ui.Row(c).Grow(1).MinWidth(0).Children(func() {
-							ui.Text(c, tr(page.label)).FontSize(13.5).TextColor(text)
+							ui.Text(c, tr(page.label)).FontSize(uiPx(13.5)).TextColor(text)
 						})
 					})
 					if row.Clicked() {
@@ -105,10 +109,11 @@ func (a *app) settingsSecondary(c *ui.Context) {
 					}
 				}
 				if matches == 0 {
-					ui.Text(c, tr("No settings found")).FontSize(12).TextColor(palette.textMuted).Padding(10, 11)
+					ui.Text(c, tr("No settings found")).FontSize(uiPx(12)).TextColor(palette.textMuted).Padding(10, 11)
 				}
 			})
 		})
+		a.secondaryResizeHandle(c, &a.settingsSecWidth)
 	})
 }
 
@@ -117,8 +122,11 @@ func (a *app) settingsSecondary(c *ui.Context) {
 // mail-style split full-bleed — no title, no width cap, no card — matching
 // render_settings_content in settings.rs.
 func (a *app) settingsContent(c *ui.Context) {
-	ui.Column(c).Grow(1).MinWidth(0).FillHeight().Background(palette.surface).
-		BorderWidth(0, 0, 0, 1).BorderColor(palette.sidebarBorder).Children(func() {
+	content := ui.Column(c).Grow(1).MinWidth(0).FillHeight().Background(palette.surface).
+		BorderWidth(0, 0, 0, 1).BorderColor(palette.sidebarBorder).
+		Radius(workspaceRadius, 0, 0, workspaceRadius).Clip()
+	content = workspaceShadow(content)
+	content.Children(func() {
 		switch a.settings.page {
 		case "providers":
 			a.providersSettings(c)
@@ -137,7 +145,7 @@ func (a *app) settingsContent(c *ui.Context) {
 		ui.Scroll(c).TrackScroll(&a.settings.scroll).FillWidth().Grow(1).MinHeight(0).Children(func() {
 			ui.Column(c).FillWidth().Padding(0, 32, 48, 32).Children(func() {
 				ui.Column(c).FillWidth().MaxWidth(settingsMaxWidth).Margin(0, ui.Auto).Children(func() {
-					ui.Text(c, settingsPageTitle(a.settings.page)).FontSize(18).
+					ui.Text(c, settingsPageTitle(a.settings.page)).FontSize(uiPx(18)).
 						FontWeight(500).TextColor(palette.text).Padding(2, 0, 0, 0)
 					switch a.settings.page {
 					case "general":
@@ -185,7 +193,7 @@ func (a *app) appearanceSettings(c *ui.Context) {
 			a.settingsSeparator(c)
 			settingsRow(c, tr("Interface font"), tr("Choose the font used throughout the app interface"), func() {
 				current := a.uiFontValue()
-				a.settingsDropdown(c, "ui-font", "Interface font", settingsKeyUIFontFamily, current, 200, fontOptionsWithCurrent(current, uiFontOptions()))
+				a.settingsSearchDropdown(c, "ui-font", "Interface font", settingsKeyUIFontFamily, current, 200, fontOptionsWithCurrent(current, uiFontOptions()))
 			})
 			a.settingsSeparator(c)
 			settingsRow(c, tr("Code text size"), tr("Scale code in transcripts, tool output, diffs, and the file pane."), func() {
@@ -194,14 +202,46 @@ func (a *app) appearanceSettings(c *ui.Context) {
 			a.settingsSeparator(c)
 			settingsRow(c, tr("Code font"), tr("Choose the font used for code, diffs, the file pane, and the terminal."), func() {
 				current := a.codeFontValue()
-				a.settingsDropdown(c, "code-font", "Code font", settingsKeyCodeFontFamily, current, 200, fontOptionsWithCurrent(current, codeFontOptions()))
+				a.settingsSearchDropdown(c, "code-font", "Code font", settingsKeyCodeFontFamily, current, 200, fontOptionsWithCurrent(current, codeFontOptions()))
 			})
 			a.settingsSeparator(c)
 			settingsRow(c, tr("Transcript width"), tr("Set how wide messages and the composer can grow on large screens."), func() {
 				a.settingsDropdown(c, "transcript-width", "Transcript width", settingsKeyTranscriptWidth, a.transcriptWidthValue(), 116, transcriptWidthOptions())
 			})
 		})
+		a.settingsGroupCard(c, tr("Terminal"), func() {
+			settingsRow(c, tr("Shell"), tr("New terminals start here; open a new tab to apply"), func() {
+				current := a.terminalShellValue()
+				a.settingsDropdown(c, "terminal-shell", "Terminal shell", settingsKeyTerminalShell, current, 220, a.terminalShellOptions(current))
+			})
+			a.settingsSeparator(c)
+			settingsRow(c, tr("Environment"), tr("Extra KEY=value entries for new terminals, separated by semicolons"), func() {
+				settingsTextInput(c, "terminal-env", tr("Environment"), &a.settings.termEnv, 220, "KEY=value").
+					OnSubmit(a.saveTerminalEnv)
+				settingsButton(c, "settings-terminal-env-apply", tr("Apply")).OnClick(a.saveTerminalEnv)
+			})
+			a.settingsSeparator(c)
+			settingsRow(c, tr("Right-click"), tr("New terminals start here"), func() {
+				a.settingsDropdown(c, "terminal-right-click", "Right-click", settingsKeyTerminalRightClick, a.terminalRightClickValue(), 160, terminalRightClickOptions())
+			})
+			a.settingsSeparator(c)
+			settingsRow(c, tr("Copy on select"), tr("Copy selected text immediately"), func() {
+				c.Key("settings-toggle-terminal-copy-select")
+				lobechoice.Switch(c, &a.settings.termCopySelect, lobechoice.SwitchProps{Size: theme.Small}).Label(tr("Copy on select")).OnChange(func() {
+					a.savePreference(settingsKeyTerminalCopyOnSelect, a.settings.termCopySelect)
+				})
+			})
+			a.settingsSeparator(c)
+			settingsRow(c, tr("Scrollback"), tr("New terminals keep this much output"), func() {
+				a.settingsDropdown(c, "terminal-scrollback", "Scrollback", settingsKeyTerminalScrollback, a.terminalScrollbackValue(), 116, terminalScrollbackOptions())
+			})
+		})
 	})
+}
+
+// saveTerminalEnv writes the environment field to local preferences.
+func (a *app) saveTerminalEnv() {
+	a.savePreference(settingsKeyTerminalEnv, a.settings.termEnv)
 }
 
 // schemeSwatch resolves one scheme's palette preview for the appearance
@@ -218,9 +258,9 @@ func (a *app) settingsGroupCard(c *ui.Context, title string, rows func()) {
 		margin = 15
 	}
 	ui.Column(c).FillWidth().Margin(margin, 0, 0, 0).Radius(13).Clip().
-		Background(palette.raised).Shadow(0, 1, 2, 0, ui.RGBA(0, 0, 0, 0.05)).Children(func() {
+		Background(palette.raised).Border(1, palette.cardBorder).Shadow(0, 1, 2, 0, ui.RGBA(0, 0, 0, 0.05)).Children(func() {
 		if title != "" {
-			ui.Text(c, title).FontSize(settingsGroupTitle).FontWeight(500).
+			ui.Text(c, title).FontSize(uiPx(settingsGroupTitle)).FontWeight(500).
 				TextColor(palette.textSecondary).Padding(14, 20, 4, 20)
 		}
 		rows()
@@ -238,14 +278,14 @@ func settingsRow(c *ui.Context, title, description string, control func()) {
 		Gap(24).AlignItems(ui.Center)
 	row.Children(func() {
 		ui.Column(c).Grow(1).MinWidth(0).Children(func() {
-			ui.Text(c, title).FontSize(13.5).FontWeight(500).TextColor(palette.text)
+			ui.Text(c, title).FontSize(uiPx(13.5)).FontWeight(500).TextColor(palette.text)
 			if description != "" {
-				ui.Text(c, description).FontSize(12.5).FixedLineHeight(18).
+				ui.Text(c, description).FontSize(uiPx(12.5)).FixedLineHeight(uiPx(18)).
 					TextColor(palette.textSecondary).Wrap().Margin(5, 0, 0, 0)
 			}
 		})
 		if control != nil {
-			ui.Row(c).Shrink(0).AlignItems(ui.Center).Children(control)
+			ui.Row(c).Shrink(0).Gap(8).AlignItems(ui.Center).Children(control)
 		}
 	})
 }
@@ -254,7 +294,7 @@ func settingsRow(c *ui.Context, title, description string, control func()) {
 // the selection index; the preference follows the pick the frame it changes.
 func (a *app) settingsSegmented(c *ui.Context) {
 	options := []string{tr("Queue"), tr("Steer")}
-	action.Segmented(c, &a.settings.busySendSel, options, action.SegmentedProps{Size: theme.Small})
+	themeSegmented(c, &a.settings.busySendSel, options)
 	steer := a.settings.busySendSel == 1
 	if steer != a.settings.busySendSteer && !a.settings.backend.settingsWrite && !a.settings.backend.settingsUncertain {
 		a.settings.busySendSteer = steer
@@ -282,10 +322,11 @@ func (a *app) toggle(c *ui.Context, label string, value *bool) {
 	})
 }
 
-// settingsButton is a row's secondary action, the lobe Default button.
+// settingsButton is a row's secondary action, the lobe Default button at
+// h32 to match the settings inputs.
 func settingsButton(c *ui.Context, key, label string) ui.Element {
 	c.Key(key)
-	return action.Button(c, label, action.ButtonProps{Variant: action.Default, Size: theme.Small})
+	return action.Button(c, label, action.ButtonProps{Variant: action.Default, Size: theme.Small}).Height(32)
 }
 
 // generalSettings is render_general_settings: four groups of rows and the
@@ -413,7 +454,6 @@ func (a *app) generalSettings(c *ui.Context) {
 			a.settingsCleanupConfirmation(c)
 		})
 		settingsOperationStatus(c, a.settings.backend.general.operation, "")
-		settingsButton(c, "settings-general-reload", tr("Reload settings")).Disabled(a.settings.loading || a.settings.backend.settingsWrite).OnClick(a.reloadGeneralSettings)
 		a.settingsFooter(c)
 	})
 }
@@ -429,5 +469,5 @@ func (a *app) settingsFooter(c *ui.Context) {
 	if version == "" {
 		return
 	}
-	ui.Text(c, trf("fintwind %s", version)).FontSize(12).TextColor(palette.textTertiary).Padding(16, 20, 0, 20)
+	ui.Text(c, trf("fintwind %s", version)).FontSize(uiPx(12)).TextColor(palette.textTertiary).Padding(16, 20, 0, 20)
 }

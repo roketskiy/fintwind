@@ -64,7 +64,7 @@ func contextCard(c *ui.Context, title string, body func()) {
 	cardShadow(ui.Column(c).FillWidth().MinWidth(0).Padding(12).Gap(10).
 		Radius(cardRadius).Background(palette.raised).Border(1, palette.cardBorder)).Children(func() {
 		if title != "" {
-			ui.Text(c, tr(title)).FontSize(12).FontWeight(600).TextColor(palette.text)
+			ui.Text(c, tr(title)).FontSize(uiPx(12)).FontWeight(600).TextColor(palette.text)
 		}
 		body()
 	})
@@ -72,8 +72,8 @@ func contextCard(c *ui.Context, title string, body func()) {
 
 func contextInspector(c *ui.Context, label, value string) {
 	ui.Row(c).FillWidth().MinWidth(0).Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, tr(label)).FontSize(11.5).TextColor(palette.textSecondary).Shrink(0)
-		ui.Text(c, value).Grow(1).MinWidth(0).FontSize(11.5).TextColor(palette.text).
+		ui.Text(c, tr(label)).FontSize(uiPx(11.5)).TextColor(palette.textSecondary).Shrink(0)
+		ui.Text(c, value).Grow(1).MinWidth(0).FontSize(uiPx(11.5)).TextColor(palette.text).
 			SingleLine().Ellipsis("…").TextAlign(ui.End).Tooltip(value)
 	})
 }
@@ -87,8 +87,8 @@ func contextStatCard(c *ui.Context, key, title, value string) {
 		Radius(10).Background(palette.overlay).Border(1, palette.cardBorder).
 		Label(tr(title)).Description(value).Tooltip(tr(title) + " · " + value).
 		Children(func() {
-			ui.Text(c, tr(title)).FontSize(11).TextColor(palette.textSecondary).SingleLine().Ellipsis("…")
-			kit.Numeric(c, value).FontFeatures("tnum").FontSize(18).FontWeight(600).
+			ui.Text(c, tr(title)).FontSize(uiPx(11)).TextColor(palette.textSecondary).SingleLine().Ellipsis("…")
+			kit.Numeric(c, value).FontFeatures("tnum").FontSize(uiPx(18)).FontWeight(600).
 				TextColor(palette.text).SingleLine().Ellipsis("…")
 		})
 }
@@ -122,7 +122,7 @@ func (a *app) contextSurface(c *ui.Context) {
 								label = "Manual"
 							}
 						}
-						ui.Text(c, tr(label)).FontSize(12).TextColor(palette.textSecondary)
+						ui.Text(c, tr(label)).FontSize(uiPx(12)).TextColor(palette.textSecondary)
 						if a.contextPanel.summaryID != "" {
 							contextAction(c, "context-summary", "View summary").OnClick(a.revealContextSummary)
 						}
@@ -160,15 +160,15 @@ func (a *app) contextUsageCard(c *ui.Context) {
 	}
 	contextCard(c, "Used context", func() {
 		ui.Row(c).FillWidth().MinWidth(0).Gap(8).AlignItems(ui.Baseline).Wrap().Children(func() {
-			ui.Text(c, headline).FontSize(28).FontWeight(600).TextColor(palette.text)
-			ui.Text(c, capacity).FontSize(12).TextColor(palette.textSecondary)
-			ui.Text(c, tr(status)).FontSize(11).TextColor(color)
+			ui.Text(c, headline).FontSize(uiPx(28)).FontWeight(600).TextColor(palette.text)
+			ui.Text(c, capacity).FontSize(uiPx(12)).TextColor(palette.textSecondary)
+			ui.Text(c, tr(status)).FontSize(uiPx(11)).TextColor(color)
 		})
 		if measured {
-			ui.Text(c, formatPercent(percent)+" · "+tr(hint)).FontSize(11).TextColor(color).Wrap()
+			ui.Text(c, formatPercent(percent)+" · "+tr(hint)).FontSize(uiPx(11)).TextColor(color).Wrap()
 			usageProgress(c, float32(min(percent, 100)/100), usageFillColor(percent, true))
 		} else {
-			ui.Text(c, tr(hint)).FontSize(11).TextColor(palette.textTertiary).Wrap()
+			ui.Text(c, tr(hint)).FontSize(uiPx(11)).TextColor(palette.textTertiary).Wrap()
 		}
 		total, cache, first := "—", "—", "—"
 		if usage != nil {
@@ -231,7 +231,7 @@ func (a *app) contextWindowCard(c *ui.Context) {
 			for _, option := range model.ContextWindows {
 				options = append(options, field.SelectOption{Value: option.ID, Label: option.Label})
 			}
-			ui.Text(c, tr("Context size")).FontSize(11.5).TextColor(palette.textSecondary)
+			ui.Text(c, tr("Context size")).FontSize(uiPx(11.5)).TextColor(palette.textSecondary)
 			field.Select(c.Key("context-window-"+a.detail.ID+"-"+modelID), &state.windowValue,
 				field.SelectProps{Options: options, Size: theme.Small, Disabled: a.sessionActionBlocksInput(a.detail.ID)}).
 				FillWidth().Label(tr("Context size")).OnChange(func() { a.chooseContextWindow(state.windowValue) })
@@ -248,12 +248,12 @@ func (a *app) contextSessionCard(c *ui.Context) {
 	}
 	contextCard(c, "OpenCode session ID", func() {
 		if id == "" {
-			ui.Text(c, "—").FontSize(12).TextColor(palette.textTertiary)
+			ui.Text(c, "—").FontSize(uiPx(12)).TextColor(palette.textTertiary)
 			return
 		}
 		services := c.Services()
 		ui.Row(c).FillWidth().MinWidth(0).Gap(4).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, id).MinWidth(0).Shrink(1).FontSize(11.5).TextColor(palette.text).
+			ui.Text(c, id).MinWidth(0).Shrink(1).FontSize(uiPx(11.5)).TextColor(palette.text).
 				SingleLine().Ellipsis("…").Tooltip(id)
 			action.ActionIcon(c.Key("context-copy-session"), assets.SVG("copy"), action.ActionIconProps{
 				Size: theme.Small, Title: tr("Copy session ID"),

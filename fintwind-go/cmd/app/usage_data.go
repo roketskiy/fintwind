@@ -57,13 +57,13 @@ func (a *app) syncUsageRoute() bool {
 		u.root, u.client, u.identity = root, client, identity
 	}
 	if root == "" {
-		u.History.Status, u.History.Error = usageIdle, "No workspace selected"
-		u.Subscriptions.Status, u.Subscriptions.Error = usageIdle, "No workspace selected"
+		u.History.Status, u.History.Error = usageIdle, tr("No workspace selected")
+		u.Subscriptions.Status, u.Subscriptions.Error = usageIdle, tr("No workspace selected")
 		return false
 	}
 	if !online {
-		u.History.Status, u.History.Error = usageError, "Daemon is disconnected"
-		u.Subscriptions.Status, u.Subscriptions.Error = usageError, "Daemon is disconnected"
+		u.History.Status, u.History.Error = usageError, tr("Daemon is disconnected")
+		u.Subscriptions.Status, u.Subscriptions.Error = usageError, tr("Daemon is disconnected")
 		return false
 	}
 	return a.lifetime != nil && a.lifetime.Err() == nil
@@ -130,12 +130,12 @@ func (a *app) refreshUsageHistory(force bool) {
 			requestCancel()
 			force = false
 			if err != nil {
-				a.finishUsageHistoryError(root, client, identity, gen, "Could not load usage")
+				a.finishUsageHistoryError(root, client, identity, gen, tr("Could not load usage"))
 				return
 			}
 			stats := usageParseStats(payload)
 			if stats == nil {
-				a.finishUsageHistoryError(root, client, identity, gen, "Usage data is unavailable")
+				a.finishUsageHistoryError(root, client, identity, gen, tr("Usage data is unavailable"))
 				return
 			}
 			if stats.Refreshing && pollDeadline.IsZero() {
@@ -144,7 +144,7 @@ func (a *app) refreshUsageHistory(force bool) {
 			if stats.Refreshing && len(stats.Entries) == 0 && stats.RefreshError != nil {
 				a.post(func() {
 					if a.usageRouteMatches(root, client, identity) && a.usage.History.generation == gen {
-						a.usage.History.Error = "Could not update usage"
+						a.usage.History.Error = tr("Could not update usage")
 					}
 				})
 			}
@@ -163,7 +163,7 @@ func (a *app) refreshUsageHistory(force bool) {
 					}
 					h.Refreshing, h.Expired = stats.Refreshing, stats.Refreshing || stats.RefreshError != nil
 					if stats.RefreshError != nil {
-						h.Error = "Could not update usage"
+						h.Error = tr("Could not update usage")
 					} else {
 						h.Error = ""
 						h.UpdatedAt = now
@@ -176,13 +176,19 @@ func (a *app) refreshUsageHistory(force bool) {
 						h.attemptedAt = time.Now()
 						h.cancel = nil
 					}
+					// Opening the usage mode asks for a single day; select it
+					// now that the days exist.
+					if a.usage.UI.dayDefault {
+						a.usage.UI.dayDefault = false
+						a.applyDefaultUsageDay()
+					}
 				})
 			}
 			if !stats.Refreshing {
 				return
 			}
 			if !time.Now().Add(time.Second).Before(pollDeadline) {
-				a.finishUsageHistoryError(root, client, identity, gen, "Usage is still updating. Try again")
+				a.finishUsageHistoryError(root, client, identity, gen, tr("Usage is still updating. Try again"))
 				return
 			}
 			timer := time.NewTimer(time.Second)
@@ -237,7 +243,7 @@ func usageParseStats(payload json.RawMessage) *usageStats {
 		return nil
 	}
 	if body.Stats.RefreshError != nil {
-		message := "Could not update usage"
+		message := tr("Could not update usage")
 		body.Stats.RefreshError = &message
 	}
 	return body.Stats
@@ -245,8 +251,14 @@ func usageParseStats(payload json.RawMessage) *usageStats {
 
 func (a *app) setUsageRange(value string) {
 	switch value {
+	case "day":
+		a.usage.Range = value
+		a.usage.UI.dayDefault = false
+		a.usage.UI.chartIndex = -1
+		a.applyDefaultUsageDay()
 	case "7d", "30d", "90d", "all":
 		a.usage.Range, a.usage.SelectedDay = value, ""
+		a.usage.UI.dayDefault = false
 	}
 }
 

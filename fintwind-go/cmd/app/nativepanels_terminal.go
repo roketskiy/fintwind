@@ -6,6 +6,7 @@ import (
 	"fintwind-go/internal/model"
 
 	"github.com/egoist/mygo/plugins/terminal"
+	"github.com/egoist/mygo/ui"
 )
 
 // A nativeTerminalTab is one live shell behind a right-panel tab. Only
@@ -27,13 +28,19 @@ type nativeTerminalTab struct {
 	exited    bool
 	exitCode  int
 	gen       uint64
+	// findOpen holds kero's find bar over this tab; the query searches the
+	// screen and scrollback, newest match first.
+	findOpen  bool
+	findQuery string
+	findFocus bool
+	findInput ui.Handle
 }
 
 // Stable automation labels for the terminal surface.
 const (
 	nativeTerminalLabel      = "native-terminal"
-	nativeTerminalTitleLabel = "native-terminal-title"
 	nativeTerminalErrorLabel = "native-terminal-error"
+	nativeTerminalFindLabel  = "native-terminal-find"
 )
 
 // startNativeTerminal opens a tab and boots its shell off the render path.
@@ -63,24 +70,28 @@ func (a *app) startNativeTerminal(sessionID string) *nativeTerminalTab {
 		return tab
 	}
 	tab.starting = true
+	a.bootNativeTerminal(sessionID, tab)
+	return tab
+}
+
+// bootNativeTerminal creates the tab's shell off the render path with
+// kero's terminal options. Main thread only; the pty lands via post.
+func (a *app) bootNativeTerminal(sessionID string, tab *nativeTerminalTab) {
 	gen := tab.gen
 	tabID := tab.tabID
-	font := terminal.Font{Family: monoFont(), Size: codeMetric(13)}
-	go func() {
-		term, termErr := terminal.New(terminal.Options{
-			Dir:  cwd,
-			Font: font,
-			OnTitle: func(title string) {
-				a.post(func() {
-					a.applyNativeTerminalTitle(sessionID, tabID, gen, title)
-				})
-			},
-			OnExit: func(code int) {
-				a.post(func() {
-					a.applyNativeTerminalExit(sessionID, tabID, gen, code)
-				})
-			},
+	options := a.terminalOptions(tab.cwd)
+	options.OnTitle = func(title string) {
+		a.post(func() {
+			a.applyNativeTerminalTitle(sessionID, tabID, gen, title)
 		})
+	}
+	options.OnExit = func(code int) {
+		a.post(func() {
+			a.applyNativeTerminalExit(sessionID, tabID, gen, code)
+		})
+	}
+	go func() {
+		term, termErr := terminal.New(options)
 		a.postOrReleaseOrDrop(func() {
 			if term != nil {
 				_ = term.Close()
@@ -89,7 +100,6 @@ func (a *app) startNativeTerminal(sessionID string) *nativeTerminalTab {
 			a.finishNativeTerminalStart(sessionID, tabID, gen, term, termErr)
 		})
 	}()
-	return tab
 }
 
 // finishNativeTerminalStart adopts a booted shell or releases it when the tab
@@ -109,8 +119,28 @@ func (a *app) finishNativeTerminalStart(sessionID, tabID string, gen uint64, ter
 	}
 	tab.term = term
 	if term != nil {
-		term.SetFont(terminal.Font{Family: monoFont(), Size: codeMetric(13)})
+		term.SetFont(terminalFont())
 	}
+}
+
+// restartNativeTerminal boots a fresh shell in an exited tab, keeping its
+// place: kero's Restarted banner equivalent is the clean prompt.
+func (a *app) restartNativeTerminal(sessionID, tabID string) {
+	tab := a.lookupNativeTerminalTab(sessionID, tabID)
+	if tab == nil || tab.closed || tab.starting {
+		return
+	}
+	if tab.term != nil {
+		tab.term.EndSearch()
+		_ = tab.term.Close()
+		tab.term = nil
+	}
+	tab.exited, tab.exitCode = false, 0
+	tab.err = ""
+	tab.findOpen, tab.findQuery, tab.findFocus = false, "", false
+	tab.gen++
+	tab.starting = true
+	a.bootNativeTerminal(sessionID, tab)
 }
 
 // applyNativeTerminalTitle records a program-set title. Late arrivals after

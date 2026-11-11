@@ -79,14 +79,14 @@ func (a *app) settingsPathConfirmation(c *ui.Context, key string) {
 		return
 	}
 	ui.Column(c).FillWidth().Margin(12, 0, 0, 0).Gap(8).Children(func() {
-		ui.Text(c, choice(st.general.pendingKey == "general_workspace_path", tr("Use this directory for new general-workspace tasks? Existing files will not be moved."), tr("Use this executable for future OpenCode launches?"))).FontSize(12).TextColor(palette.text).Wrap()
-		ui.Text(c, st.general.pendingPath).Font(monoFont()).FontSize(11).TextColor(palette.textSecondary).Wrap()
+		ui.Text(c, choice(st.general.pendingKey == "general_workspace_path", tr("Use this directory for new general-workspace tasks? Existing files will not be moved."), tr("Use this executable for future OpenCode launches?"))).FontSize(uiPx(12)).TextColor(palette.text).Wrap()
+		ui.Text(c, st.general.pendingPath).Font(monoFont()).FontSize(uiPx(11)).TextColor(palette.textSecondary).Wrap()
 		ui.Row(c).Gap(8).Children(func() {
 			c.Key("settings-path-cancel")
-			cancel := action.Button(c, tr("Cancel"), action.ButtonProps{Variant: action.Text, Size: theme.Small})
+			cancel := action.Button(c, tr("Cancel"), action.ButtonProps{Variant: action.Text, Size: theme.Small}).Height(32)
 			cancel.Disabled(st.settingsWrite).OnClick(func() { st.general.pendingPath, st.general.pendingKey = "", "" })
 			c.Key("settings-path-confirm")
-			apply := action.Button(c, tr("Apply"), action.ButtonProps{Variant: action.Default, Size: theme.Small})
+			apply := action.Button(c, tr("Apply"), action.ButtonProps{Variant: action.Default, Size: theme.Small}).Height(32)
 			apply.Disabled(st.settingsWrite || st.settingsUncertain).OnClick(func() { a.saveDaemonSetting(st.general.pendingKey, st.general.pendingPath) })
 		})
 	})
@@ -309,15 +309,15 @@ func (a *app) settingsCleanupConfirmation(c *ui.Context) {
 	}
 	preview := st.cleanupPreview
 	ui.Column(c).FillWidth().Margin(10, 20, 14, 20).Gap(8).Children(func() {
-		ui.Text(c, fmt.Sprintf(tr("Permanently remove these %d eligible conversations and their history?"), len(preview.SessionIDs))).FontSize(12).TextColor(palette.text).Wrap()
+		ui.Text(c, fmt.Sprintf(tr("Permanently remove these %d eligible conversations and their history?"), len(preview.SessionIDs))).FontSize(uiPx(12)).TextColor(palette.text).Wrap()
 		if progress := a.settingsCleanupProgress(); progress != "" {
-			ui.Text(c, progress).FontSize(12).TextColor(palette.textSecondary)
+			ui.Text(c, progress).FontSize(uiPx(12)).TextColor(palette.textSecondary)
 		}
 		tk := theme.TokensOf(c)
 		ui.Row(c).Gap(8).Children(func() {
-			cancel := action.Button(c, tr("Cancel"), action.ButtonProps{Variant: action.Text, Size: theme.Small})
+			cancel := action.Button(c, tr("Cancel"), action.ButtonProps{Variant: action.Text, Size: theme.Small}).Height(32)
 			cancel.OnClick(func() { st.cleanupPreview = nil })
-			del := action.Button(c, tr("Delete conversations"), action.ButtonProps{Variant: action.Primary, Size: theme.Small}).
+			del := action.Button(c, tr("Delete conversations"), action.ButtonProps{Variant: action.Primary, Size: theme.Small}).Height(32).
 				Disabled(len(preview.SessionIDs) == 0 || st.operation.writing)
 			del.Background(tk.Error)
 			if del.Hovered() {

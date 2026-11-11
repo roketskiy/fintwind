@@ -71,7 +71,7 @@ func (a *app) refreshUsageSubscriptions(force bool) {
 					return
 				}
 				s := &a.usage.Subscriptions
-				s.Status, s.Error, s.Expired = usageError, "Could not load connected services", len(s.Cards) > 0
+				s.Status, s.Error, s.Expired = usageError, tr("Could not load connected services"), len(s.Cards) > 0
 				s.attemptedAt, s.cancel = time.Now(), nil
 			})
 			return
@@ -94,7 +94,7 @@ func (a *app) refreshUsageSubscriptions(force bool) {
 			}
 			card.Error, card.Expired = "", card.Quota != nil
 			if integration.NeedsAuth {
-				card.Status, card.Error, card.Expired = usageError, "Authorization required", false
+				card.Status, card.Error, card.Expired = usageError, tr("Authorization required"), false
 				card.Quota = &usageQuota{Status: "needs_auth"}
 			} else if integration.Connected {
 				card.Status = usageLoading
@@ -155,7 +155,7 @@ func (a *app) publishUsageQuota(root string, client *daemon.Client, identity dae
 				continue
 			}
 			if quota == nil {
-				card.Status, card.Error = usageError, "Could not update quota"
+				card.Status, card.Error = usageError, tr("Could not update quota")
 				card.Expired = card.Quota != nil
 			} else {
 				card.Quota, card.Error = quota, usageQuotaError(quota.Status)
@@ -174,7 +174,7 @@ func (a *app) publishUsageQuota(root string, client *daemon.Client, identity dae
 			s.Status, s.Error, s.Expired = usageReady, "", false
 			for _, card := range s.Cards {
 				if card.Status == usageError {
-					s.Status, s.Error = usageError, "Some quotas could not be updated"
+					s.Status, s.Error = usageError, tr("Some quotas could not be updated")
 				}
 				s.Expired = s.Expired || card.Expired
 			}
@@ -224,17 +224,17 @@ func usageQuotaError(status string) string {
 	case "ready":
 		return ""
 	case "needs_auth", "no_credential":
-		return "Authorization required"
+		return tr("Authorization required")
 	case "access_denied":
-		return "Quota access denied"
+		return tr("Quota access denied")
 	case "rate_limited":
-		return "Quota refresh is rate limited"
+		return tr("Quota refresh is rate limited")
 	case "unsupported":
-		return "Quota is not supported"
+		return tr("Quota is not supported")
 	case "no_data":
-		return "No quota data available"
+		return tr("No quota data available")
 	default:
-		return "Quota is unavailable"
+		return tr("Quota is unavailable")
 	}
 }
 

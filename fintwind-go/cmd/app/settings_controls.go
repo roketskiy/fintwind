@@ -1,6 +1,8 @@
 package main
 
 import (
+	"strings"
+
 	"github.com/egoist/mygo/ui"
 	"github.com/lobehub/lobe-mygo/pkg/theme"
 )
@@ -8,6 +10,10 @@ import (
 type settingsChoiceState struct {
 	value, source string
 	open          bool
+	// searchable menus (font pickers) filter their rows by this text.
+	searchable bool
+	search     string
+	wasOpen    bool
 }
 
 func (a *app) openSettingsPage(page string) {
@@ -34,6 +40,9 @@ func (a *app) openSettingsPage(page string) {
 		if !general.operation.loaded && !general.operation.writing {
 			a.manageSettingsOpenCode("check")
 		}
+	}
+	if page == "appearance" {
+		a.detectSettingsShells()
 	}
 	if page == "providers" && a.modelProbe == nil && !a.modelProbeLoad {
 		a.requestModelProbe()
@@ -70,7 +79,7 @@ func settingsTextInput(c *ui.Context, key, label string, value *string, width fl
 	field.Children(func() {
 		c.Key(key)
 		input = ui.TextInputBase(c, value).Label(label).Placeholder(placeholder).
-			FillWidth().MinWidth(0).FontSize(12.5).FixedLineHeight(17).TextColor(palette.text)
+			FillWidth().MinWidth(0).FontSize(uiPx(12.5)).FixedLineHeight(uiPx(17)).TextColor(palette.text)
 		if input.Focused() {
 			field.Border(1, palette.accent)
 		}
@@ -86,7 +95,7 @@ func settingsSearchInput(c *ui.Context, key, placeholder string, value *string) 
 		icon(c, "search", 13, palette.textTertiary)
 		c.Key(key)
 		ui.TextInputBase(c, value).Label(placeholder).Placeholder(placeholder).
-			Grow(1).MinWidth(0).FontSize(12.5).FixedLineHeight(17).TextColor(palette.text).
+			Grow(1).MinWidth(0).FontSize(uiPx(12.5)).FixedLineHeight(uiPx(17)).TextColor(palette.text).
 			OnTextKey(func(k ui.TextKey) bool {
 				if k.Key != ui.KeyEscape || k.Text() == "" {
 					return false
@@ -100,6 +109,49 @@ func settingsSearchInput(c *ui.Context, key, placeholder string, value *string) 
 			}
 		}
 	})
+}
+
+// settingsSearchDropdown mirrors settingsDropdown for long font menus: the
+// popup carries a filter field over the rows.
+func (a *app) settingsSearchDropdown(c *ui.Context, id, label, key, current string, width float32, options []settingsOption) {
+	a.settingsSearchChoice(c, id, tr(label), current, width, options, func(option settingsOption) {
+		if option.value == current {
+			return
+		}
+		a.savePreference(key, option.raw)
+	})
+}
+
+// settingsSearchChoice mirrors settingsChoice with a row filter. Only the
+// font pickers use it; every other menu keeps the plain popup.
+func (a *app) settingsSearchChoice(c *ui.Context, id, label, current string, width float32, options []settingsOption, onSelect func(settingsOption)) ui.Element {
+	if a.settings.menus == nil {
+		a.settings.menus = map[string]*settingsChoiceState{}
+	}
+	menu := a.settings.menus[id]
+	if menu == nil {
+		menu = &settingsChoiceState{value: current, source: current}
+		a.settings.menus[id] = menu
+	}
+	menu.searchable = true
+	return a.settingsChoice(c, id, label, current, width, options, onSelect)
+}
+
+// filterSettingsOptions keeps rows whose label or value contains the query,
+// case-insensitive. An empty query keeps every row.
+func filterSettingsOptions(options []settingsOption, query string) []settingsOption {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return options
+	}
+	var out []settingsOption
+	for _, option := range options {
+		if strings.Contains(strings.ToLower(option.label), q) ||
+			strings.Contains(strings.ToLower(option.value), q) {
+			out = append(out, option)
+		}
+	}
+	return out
 }
 
 // settingsChoice is one settings dropdown, assembled on ui.SelectBaseOpen so
@@ -124,6 +176,12 @@ func (a *app) settingsChoiceSwatched(c *ui.Context, id, label, current string, w
 	} else if menu.source != current {
 		menu.value, menu.source = current, current
 	}
+	if menu.open != menu.wasOpen {
+		menu.wasOpen = menu.open
+		if !menu.open {
+			menu.search = ""
+		}
+	}
 	c.Key("settings-choice-" + id)
 	selectParts := ui.SelectBaseOpen(c, &menu.value, &menu.open)
 	trigger := selectParts.Trigger.Label(label).Height(32).Padding(0, 10).Radius(tk.BorderRadiusSM).
@@ -135,7 +193,7 @@ func (a *app) settingsChoiceSwatched(c *ui.Context, id, label, current string, w
 		trigger.Background(tk.FillTertiary)
 	}
 	trigger.Children(func() {
-		ui.Text(c, settingsOptionLabel(menu.value, options)).FontSize(12.5).TextColor(tk.TextSecondary).
+		ui.Text(c, settingsOptionLabel(menu.value, options)).FontSize(uiPx(12.5)).TextColor(tk.TextSecondary).
 			Grow(1).MinWidth(0).SingleLine().Ellipsis("...")
 		icon(c, "chevrons-up-down", 12, tk.TextTertiary)
 	})
@@ -144,9 +202,33 @@ func (a *app) settingsChoiceSwatched(c *ui.Context, id, label, current string, w
 		panel.Background(tk.BgElevated).Radius(tk.BorderRadius).
 			Padding(4).Width(panelWidth)
 		tk.Elevate(panel, theme.BoxShadowSecondary)
+		rows := options
+		if menu.searchable {
+			c.Key("settings-choice-search-" + id)
+			ui.Row(c).FillWidth().Height(32).Padding(0, 9).Gap(7).AlignItems(ui.Center).Children(func() {
+				icon(c, "search", 13, tk.TextTertiary)
+				c.Key("settings-choice-search-field-" + id)
+				ui.TextInputBase(c, &menu.search).Label(tr("Search fonts…")).Placeholder(tr("Search fonts…")).
+					Grow(1).MinWidth(0).FontSize(uiPx(12.5)).TextColor(tk.TextSecondary).
+					OnTextKey(func(k ui.TextKey) bool {
+						if k.Key != ui.KeyEscape || k.Text() == "" {
+							return false
+						}
+						k.SetText("")
+						return true
+					})
+			})
+			rows = filterSettingsOptions(options, menu.search)
+		}
+		if len(rows) == 0 {
+			ui.Row(c).FillWidth().Padding(8).Children(func() {
+				ui.Text(c, tr("No matching items")).FontSize(uiPx(12)).TextColor(tk.TextTertiary)
+			})
+			return
+		}
 		ui.Scroll(c).FillWidth().MaxHeight(300).Children(func() {
 			ui.Column(c).FillWidth().Children(func() {
-				for _, option := range options {
+				for _, option := range rows {
 					c.Key(option.value)
 					item := selectParts.Item(option.value).Label(tr(option.label)).FillWidth().Height(28).
 						Padding(0, 8).Radius(tk.BorderRadiusSM).Gap(10).AlignItems(ui.Center)
@@ -175,7 +257,7 @@ func (a *app) settingsChoiceSwatched(c *ui.Context, id, label, current string, w
 						if selected {
 							weight = 500
 						}
-						ui.Text(c, tr(option.label)).FontSize(12.5).FontWeight(weight).TextColor(text).
+						ui.Text(c, tr(option.label)).FontSize(uiPx(12.5)).FontWeight(weight).TextColor(text).
 							Grow(1).MinWidth(0).SingleLine().Ellipsis("...")
 						if selected {
 							icon(c, "check", 12, tk.TextTertiary)

@@ -38,7 +38,7 @@ func usageE2ECheckEdgeCases(ctx context.Context, report *usageE2EReport, client 
 		last := a.usage.History.Heat[len(a.usage.History.Heat)-1]
 		report.check(sample.name+" keeps zero heat intensity with a session", map[string]any{"tokens": 0, "direct": 0, "sessions": 1}, map[string]any{"tokens": last.Total, "direct": last.Direct, "sessions": last.Sessions})
 		tt := ui.NewTesterWith(a.usageView, 932, 2000, ui.TesterOptions{Preferences: ui.Preferences{ReduceMotion: true}, Dark: true})
-		report.check(sample.name+" displays known price presence honestly", sample.cost != nil, tt.HasText("API estimate"))
+		report.check(sample.name+" hides price estimate notice", sample.cost != nil, !tt.HasText("API estimate"))
 		date := now.Format("2006-01-02")
 		if err := tt.Click(date); err != nil {
 			report.check(sample.name+" selects zero-usage day", "no error", err.Error())
@@ -58,7 +58,7 @@ func usageE2ECheckEdgeCases(ctx context.Context, report *usageE2EReport, client 
 	}
 	a := usageE2EInstallSnapshot(ctx, client, stats, now)
 	tt := ui.NewTesterWith(a.usageView, 932, 2000, ui.TesterOptions{Preferences: ui.Preferences{ReduceMotion: true}, Dark: true})
-	report.check("partial price coverage does not round up to complete coverage", true, a.currentUsageView().Totals.sessions == 1000 && a.currentUsageView().Totals.costedSessions == 999 && tt.HasText("999/1000 sessions priced") && tt.HasText("API estimate $2.50") && !tt.HasText("100% session coverage"))
+	report.check("partial price coverage hides fee notice", true, a.currentUsageView().Totals.sessions == 1000 && a.currentUsageView().Totals.costedSessions == 999 && !tt.HasText("sessions priced") && !tt.HasText("API estimate") && !tt.HasText("100% session coverage"))
 }
 
 func usageE2EDecodeEntries(report *usageE2EReport, name string, entries []usageEntry) *usageStats {

@@ -617,32 +617,32 @@ func (a *app) renderAutocompleteList(c *ui.Context, trigger *autocompleteTrigger
 					}
 					if trigger.command || row.skill {
 						ui.Row(c).MaxWidth(260).Children(func() {
-							ui.Text(c, row.title).FontSize(12).FontWeight(500).
+							ui.Text(c, row.title).FontSize(uiPx(12)).FontWeight(500).
 								TextColor(palette.text).SingleLine().Ellipsis("...")
 						})
 						if row.hint != "" {
-							ui.Text(c, row.hint).FontSize(11).
+							ui.Text(c, row.hint).FontSize(uiPx(11)).
 								TextColor(palette.textMuted).SingleLine().Ellipsis("...")
 						}
 						ui.Row(c).Grow(1).MinWidth(0).Children(func() {
-							ui.Text(c, row.detail).FontSize(11).
+							ui.Text(c, row.detail).FontSize(uiPx(11)).
 								TextColor(palette.textTertiary).SingleLine().Ellipsis("...")
 						})
 						if row.scope != "" {
 							ui.Row(c).Height(16).Padding(0, 5).Radius(4).
 								Border(1, palette.border).AlignItems(ui.Center).Children(func() {
-								ui.Text(c, row.scope).FontSize(9).FontWeight(600).
+								ui.Text(c, row.scope).FontSize(uiPx(9)).FontWeight(600).
 									TextColor(palette.textTertiary)
 							})
 						}
 					} else {
 						ui.Row(c).MaxWidth(300).Children(func() {
-							ui.Text(c, row.title).FontSize(12).
+							ui.Text(c, row.title).FontSize(uiPx(12)).
 								TextColor(palette.text).SingleLine().Ellipsis("...")
 						})
 						if row.detail != "" {
 							ui.Row(c).Grow(1).MinWidth(0).Children(func() {
-								ui.Text(c, row.detail).FontSize(11).
+								ui.Text(c, row.detail).FontSize(uiPx(11)).
 									TextColor(palette.textGhost).SingleLine().Ellipsis("...")
 							})
 						}

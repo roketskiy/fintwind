@@ -124,7 +124,7 @@ func (a *app) refreshSettingsIntegrations() {
 func (a *app) settingsBuiltinIntegrations(c *ui.Context) {
 	st := &a.settings.backend
 	ui.Row(c).FillWidth().Gap(8).Margin(16, 0, 0, 0).Children(func() {
-		ui.Text(c, tr("Provider accounts")).Grow(1).FontSize(12).TextColor(palette.text)
+		ui.Text(c, tr("Provider accounts")).Grow(1).FontSize(uiPx(12)).TextColor(palette.text)
 		componentTextButton(c, "integrations-load", tr("Load accounts"), false).Disabled(st.integration.loading).OnClick(a.loadSettingsIntegrations)
 	})
 	settingsOperationStatus(c, st.integration, "")
@@ -133,7 +133,7 @@ func (a *app) settingsBuiltinIntegrations(c *ui.Context) {
 		c.Key("integration-" + integration.ID)
 		ui.Column(c).FillWidth().Padding(10, 0).Gap(7).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
 			ui.Row(c).FillWidth().Gap(8).Children(func() {
-				ui.Text(c, integration.Name).Grow(1).FontSize(12.5).TextColor(palette.text)
+				ui.Text(c, integration.Name).Grow(1).FontSize(uiPx(12.5)).TextColor(palette.text)
 				status := tr("Disconnected")
 				if integration.Connected {
 					status = tr("Connected")
@@ -150,7 +150,7 @@ func (a *app) settingsBuiltinIntegrations(c *ui.Context) {
 					label += tr(" · Active")
 				}
 				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, label).Grow(1).FontSize(11).TextColor(palette.textSecondary)
+					ui.Text(c, label).Grow(1).FontSize(uiPx(11)).TextColor(palette.textSecondary)
 					if !account.Active {
 						componentTextButton(c, "integration-account-select-"+integration.ID+"-"+account.ID, tr("Select"), false).Disabled(st.auth.busy || st.integration.uncertain).OnClick(func() {
 							a.cancelSettingsOAuthForm()
@@ -246,7 +246,7 @@ func (a *app) settingsOAuthForm(c *ui.Context, form *settingsOAuthFormState) {
 	}
 	activeFields := settingsOAuthActiveFields(method.Form, form.answers)
 	ui.Column(c).FillWidth().Padding(10, 0).Gap(8).Children(func() {
-		ui.Text(c, method.Label).FontSize(12.5).FontWeight(500).TextColor(palette.text)
+		ui.Text(c, method.Label).FontSize(uiPx(12.5)).FontWeight(500).TextColor(palette.text)
 		for _, field := range method.Form {
 			if field.Hidden || !activeFields[field.Key] {
 				continue
@@ -257,7 +257,7 @@ func (a *app) settingsOAuthForm(c *ui.Context, form *settingsOAuthFormState) {
 				label = field.Key
 			}
 			if len(field.Options) > 0 {
-				ui.Text(c, label).FontSize(11).FontWeight(500).TextColor(palette.text)
+				ui.Text(c, label).FontSize(uiPx(11)).FontWeight(500).TextColor(palette.text)
 				for _, option := range field.Options {
 					option := option
 					componentTextButton(c, "oauth-choice-"+field.Key+"-"+option.Value, option.Label, form.answers[field.Key] == option.Value).OnClick(func() { form.answers[field.Key] = option.Value; *form.inputs[field.Key] = option.Value })
@@ -268,7 +268,7 @@ func (a *app) settingsOAuthForm(c *ui.Context, form *settingsOAuthFormState) {
 				settingsFormField(c, "oauth-field-"+field.Key, label, form.inputs[field.Key], field.Placeholder)
 			}
 			if field.Description != "" {
-				ui.Text(c, field.Description).FontSize(10.5).TextColor(palette.textSecondary).Wrap()
+				ui.Text(c, field.Description).FontSize(uiPx(10.5)).TextColor(palette.textSecondary).Wrap()
 			}
 		}
 		ui.Row(c).Gap(8).Children(func() {
@@ -485,7 +485,7 @@ func (a *app) settingsMcpAuth(c *ui.Context, server settingsMcpServer) {
 	if server.OAuth.Mode != "disabled" {
 		componentTextButton(c, "mcp-sign-in", tr("Sign in with OAuth"), false).Disabled(st.auth.busy || st.auth.attemptID != "" || st.mcp.writing).OnClick(func() { a.startSettingsOAuth("mcp", server.Name, "") })
 	} else {
-		ui.Text(c, tr("Headers-only authentication")).FontSize(11).TextColor(palette.textSecondary)
+		ui.Text(c, tr("Headers-only authentication")).FontSize(uiPx(11)).TextColor(palette.textSecondary)
 	}
 	if st.auth.kind == "mcp" && st.auth.name == server.Name {
 		a.settingsOAuthControls(c)
@@ -574,10 +574,10 @@ func (a *app) startSettingsOAuthWithAnswers(kind, id, method string, answers map
 func (a *app) settingsOAuthControls(c *ui.Context) {
 	st := &a.settings.backend
 	if st.auth.status != "" {
-		ui.Text(c, st.auth.status).FontSize(11).TextColor(palette.textSecondary).Wrap()
+		ui.Text(c, st.auth.status).FontSize(uiPx(11)).TextColor(palette.textSecondary).Wrap()
 	}
 	if st.auth.instructions != "" {
-		ui.Text(c, st.auth.instructions).FontSize(11).TextColor(palette.textSecondary).Wrap()
+		ui.Text(c, st.auth.instructions).FontSize(uiPx(11)).TextColor(palette.textSecondary).Wrap()
 	}
 	if st.auth.attemptID == "" {
 		return

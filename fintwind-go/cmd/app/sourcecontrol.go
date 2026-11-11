@@ -33,9 +33,15 @@ func (a *app) sourceControlView(c *ui.Context) {
 			return
 		}
 		ui.Row(c).FillWidth().Grow(1).MinWidth(0).FillHeight().Children(func() {
-			ui.Column(c).Width(scSecondaryWidth).FillHeight().Shrink(0).Background(palette.sidebar).Children(func() {
-				a.scSecondary(c)
-			})
+			if a.sidebarOpen {
+				secondary := ui.Column(c).Width(a.scSecWidth).FillHeight().Shrink(0).
+					Background(palette.sidebar).Radius(workspaceRadius).Clip()
+				secondary = sidebarShadow(secondary)
+				secondary.Children(func() {
+					a.scSecondary(c)
+					a.secondaryResizeHandle(c, &a.scSecWidth)
+				})
+			}
 			a.scMain(c)
 		})
 	})
@@ -50,7 +56,7 @@ func (a *app) scSecondary(c *ui.Context) {
 	// Workspace block: project directory + branch row, like
 	// render_source_control_workspace_block.
 	ui.Column(c).FillWidth().Padding(12, 12, 10, 12).Gap(4).Children(func() {
-		ui.Text(c, projectBaseName(st.Root)).FontSize(12.5).TextColor(palette.textSecondary).SingleLine().Ellipsis("...").Tooltip(st.Root)
+		ui.Text(c, projectBaseName(st.Root)).FontSize(uiPx(12.5)).TextColor(palette.textSecondary).SingleLine().Ellipsis("...").Tooltip(st.Root)
 		if st.Loading && st.Root == "" {
 			reviewNote(c, tr("Reading Git status…"), false)
 		}
@@ -76,7 +82,7 @@ func (a *app) scSecondary(c *ui.Context) {
 		a.scDiscardDialog(c)
 	}
 	ui.Column(c).FillWidth().Padding(4, 12).Children(func() {
-		field.SearchBar(c, &st.Filter, field.SearchBarProps{Placeholder: tr("Filter files"), Size: theme.Small})
+		sidebarFilterSearch(c, "sc-files", tr("Filter files"), &st.Filter)
 		if st.Filter != st.AppliedFilter {
 			st.rebuildRows()
 		}
@@ -118,7 +124,7 @@ func (a *app) scBranchRow(c *ui.Context) {
 		}
 		chip.Children(func() {
 			icon(c, "git-branch", 12, palette.textTertiary)
-			ui.Text(c, branchLabel).FontSize(11.5).TextColor(palette.textSecondary).Grow(1).MinWidth(0).SingleLine().Ellipsis("...")
+			ui.Text(c, branchLabel).FontSize(uiPx(11.5)).TextColor(palette.textSecondary).Grow(1).MinWidth(0).SingleLine().Ellipsis("...")
 			icon(c, "chevron-down", 10, palette.textGhost)
 		})
 		if chip.Clicked() && st.writable() {
@@ -148,7 +154,7 @@ func (a *app) scBranchPopover(c *ui.Context, chip ui.Element) {
 	ui.PopoverBase(c, chip, &open, func(panel ui.Element) {
 		panel.Background(palette.raised).Border(1, palette.borderStrong).Radius(10).
 			Width(250).Padding(8).Gap(6).Shadow(0, 2, 8, 0, ui.RGBA(0, 0, 0, 0.28)).Children(func() {
-			field.SearchBar(c, &st.BranchFilter, field.SearchBarProps{Placeholder: tr("Filter branches"), Size: theme.Small})
+			sidebarFilterSearch(c, "sc-branches", tr("Filter branches"), &st.BranchFilter)
 			c.Key("sc-branch-create")
 			create := field.Input(c, &st.BranchCreate, field.InputProps{Placeholder: tr("New branch name…"), Size: theme.Small})
 			create.Label(tr("Create branch"))
@@ -190,7 +196,7 @@ func (a *app) scBranchPopover(c *ui.Context, chip ui.Element) {
 				}
 				entry.Children(func() {
 					icon(c, "git-branch", 12, palette.textGhost)
-					ui.Text(c, branch.Name).FontSize(12).TextColor(palette.text).Grow(1).MinWidth(0).SingleLine().Ellipsis("...")
+					ui.Text(c, branch.Name).FontSize(uiPx(12)).TextColor(palette.text).Grow(1).MinWidth(0).SingleLine().Ellipsis("...")
 					if branch.Name == st.Branch {
 						icon(c, "check", 12, palette.successText)
 					}
@@ -279,7 +285,7 @@ func (a *app) scCommitBox(c *ui.Context) {
 				}
 				primary.Children(func() {
 					icon(c, primaryIcon, 13, palette.onAccent)
-					ui.Text(c, primaryLabel).FontSize(12.5)
+					ui.Text(c, primaryLabel).FontSize(uiPx(12.5))
 				})
 				a.scCommitMore(c, writable, canCommit, canStageCommit)
 			})
@@ -436,11 +442,13 @@ func (st *sourceControlState) buildListRows() {
 			continue
 		}
 		st.ListRows = append(st.ListRows, scListRow{Kind: 'g', Group: group, Count: len(files)})
-		root := &scTreeDir{dirs: map[string]*scTreeDir{}}
-		for _, f := range files {
-			scTreeAdd(root, f)
+		if forced || !st.CollapsedGroups[group] {
+			root := &scTreeDir{dirs: map[string]*scTreeDir{}}
+			for _, f := range files {
+				scTreeAdd(root, f)
+			}
+			scTreeEmit(group, root, "", 0, forced, st.CollapsedDirs, &st.ListRows)
 		}
-		scTreeEmit(group, root, "", 0, forced, st.CollapsedDirs, &st.ListRows)
 	}
 	if st.IgnoredOpen && st.Root != "" {
 		st.ListRows = append(st.ListRows, scListRow{Kind: 'i'})
@@ -472,7 +480,28 @@ func (a *app) scListRowView(c *ui.Context, row scListRow) {
 		c.Key(row.key())
 		writable := st.writable()
 		ui.Row(c).FillWidth().MinHeight(scRowHeight).Padding(5, 12, 5, 8).Gap(6).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, fmt.Sprintf(tr("%s (%d)"), scGroupLabel(row.Group), row.Count)).FontSize(11).TextColor(palette.textTertiary)
+			fold := ui.ButtonBase(c).Label(scGroupLabel(row.Group)).Size(20, 20).Radius(5).Center()
+			if fold.Hovered() {
+				fold.Background(palette.overlay)
+			}
+			fold.Children(func() {
+				if st.CollapsedGroups[row.Group] {
+					icon(c, "chevron-right", 10, palette.textGhost)
+				} else {
+					icon(c, "chevron-down", 10, palette.textGhost)
+				}
+			})
+			// OnClick, not Clicked: rebuilding the rows must wait until the
+			// frame ends, or the list still iterating them reads past the
+			// shortened slice and panics.
+			fold.OnClick(func() {
+				if st.CollapsedGroups == nil {
+					st.CollapsedGroups = map[string]bool{}
+				}
+				st.CollapsedGroups[row.Group] = !st.CollapsedGroups[row.Group]
+				st.buildListRows()
+			})
+			ui.Text(c, fmt.Sprintf(tr("%s (%d)"), scGroupLabel(row.Group), row.Count)).FontSize(uiPx(11)).TextColor(scGroupColor(row.Group))
 			ui.Row(c).Grow(1).Children(func() {})
 			if writable {
 				if row.Group == "staged" {
@@ -501,7 +530,7 @@ func (a *app) scListRowView(c *ui.Context, row scListRow) {
 				icon(c, "chevron-right", 10, palette.textGhost)
 			}
 			icon(c, "folder", 13, palette.textGhost)
-			ui.Text(c, row.Name).FontSize(11.5).TextColor(palette.textTertiary).Grow(1).MinWidth(0).SingleLine().Ellipsis("...")
+			ui.Text(c, row.Name).FontSize(uiPx(11.5)).TextColor(palette.textTertiary).Grow(1).MinWidth(0).SingleLine().Ellipsis("...")
 		})
 		entry.OnClick(func() {
 			st.CollapsedDirs[key] = open
@@ -519,9 +548,9 @@ func (a *app) scListRowView(c *ui.Context, row scListRow) {
 			} else {
 				icon(c, "chevron-right", 10, palette.textGhost)
 			}
-			ui.Text(c, tr("Ignored")).FontSize(11).TextColor(palette.textTertiary)
+			ui.Text(c, tr("Ignored")).FontSize(uiPx(11)).TextColor(palette.textTertiary)
 			if st.IgnoredLoading {
-				ui.Text(c, tr("Loading…")).FontSize(11).TextColor(palette.textTertiary)
+				ui.Text(c, tr("Loading…")).FontSize(uiPx(11)).TextColor(palette.textTertiary)
 			}
 		})
 		entry.OnClick(func() {
@@ -541,7 +570,7 @@ func (a *app) scListRowView(c *ui.Context, row scListRow) {
 			if index := strings.LastIndex(file.Path, "/"); index >= 0 {
 				name = file.Path[index+1:]
 			}
-			ui.Text(c, name).FontSize(11.5).TextColor(palette.textTertiary).Grow(1).MinWidth(0).SingleLine().Ellipsis("...").Tooltip(file.Path)
+			ui.Text(c, name).FontSize(uiPx(11.5)).TextColor(palette.textTertiary).Grow(1).MinWidth(0).SingleLine().Ellipsis("...").Tooltip(file.Path)
 		})
 	default:
 		a.scFileRow(c, row.File, row.Depth)
@@ -593,8 +622,21 @@ func (a *app) scFileRow(c *ui.Context, file scFile, depth int) {
 		if index := strings.LastIndex(file.Path, "/"); index >= 0 {
 			name = file.Path[index+1:]
 		}
-		ui.Text(c, name).FontSize(11.5).TextColor(palette.textSecondary).Grow(1).MinWidth(0).SingleLine().Ellipsis("...")
-		ui.Text(c, file.Letter).FontSize(10.5).TextColor(scLetterColor(file.Letter))
+		ui.Text(c, name).FontSize(uiPx(11.5)).TextColor(palette.textSecondary).Grow(1).MinWidth(0).SingleLine().Ellipsis("...")
+		ui.Text(c, file.Letter).FontSize(uiPx(10.5)).TextColor(scLetterColor(file.Letter))
+		if st.writable() {
+			f := file
+			stageLabel := tr("Stage")
+			if f.Group == "staged" {
+				stageLabel = tr("Unstage")
+			}
+			stage := reviewMutedButton(c, stageLabel)
+			stage.OnClick(func() { a.scStage(f, f.Group == "staged") })
+			if f.Group != "staged" {
+				discard := reviewMutedButton(c, tr("Discard…"))
+				discard.OnClick(func() { st.Discard = &f })
+			}
+		}
 	})
 	entry.OnClick(func() {
 		if st.Selected != file.key() {
@@ -636,8 +678,10 @@ func (a *app) scDiscardDialog(c *ui.Context) {
 }
 
 func (a *app) scMain(c *ui.Context) {
-	ui.Column(c).Grow(1).MinWidth(0).FillHeight().Background(palette.surface).
-		BorderWidth(0, 0, 0, 1).BorderColor(palette.sidebarBorder).Radius(workspaceRadius, 0, 0, workspaceRadius).Clip().Children(func() {
+	main := ui.Column(c).Grow(1).MinWidth(0).FillHeight().Background(palette.surface).
+		BorderWidth(0, 0, 0, 1).BorderColor(palette.sidebarBorder).Radius(workspaceRadius, 0, 0, workspaceRadius).Clip()
+	main = workspaceShadow(main)
+	main.Children(func() {
 		a.scToolbar(c)
 		st := &a.sourceControl
 		if st.Error != "" {
@@ -666,7 +710,7 @@ func (a *app) scToolbar(c *ui.Context) {
 		BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
 		a.reviewSourcePill(c, false)
 		if st.Stats.Truncated {
-			ui.Text(c, tr("Truncated")).FontSize(10.5).TextColor(palette.warningText)
+			ui.Text(c, tr("Truncated")).FontSize(uiPx(10.5)).TextColor(palette.warningText)
 		}
 		ui.Row(c).Grow(1).Children(func() {})
 		a.reviewFileNav(c, total, current, a.scStepFile)

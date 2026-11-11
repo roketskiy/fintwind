@@ -74,9 +74,13 @@ type app struct {
 	sidebarWidth         float32
 	rightPanelWidthValue float32
 	fileTreeWidth        float32
-	mode                 mode
-	collapsed            map[string]bool
-	visible              map[string]int
+	// Every secondary column stretches and collapses like the sessions
+	// sidebar; each keeps its own width.
+	settingsSecWidth float32
+	scSecWidth       float32
+	mode             mode
+	collapsed        map[string]bool
+	visible          map[string]int
 
 	sidebarList    ui.ListState
 	messageList    ui.ListState
@@ -277,6 +281,8 @@ func main() {
 		sidebarWidth:         layout.sidebar,
 		rightPanelWidthValue: layout.rightPanel,
 		fileTreeWidth:        layout.fileTree,
+		settingsSecWidth:     settingsWidth,
+		scSecWidth:           scSecondaryWidth,
 		loading:              true,
 		mode:                 modeSessions,
 		treeExpanded:         map[string]bool{},
@@ -295,17 +301,19 @@ func main() {
 	a.initPreferences(layout)
 	mygo.App.WhenReady(func() {
 		a.win = mygo.NewWindow(mygo.WindowOptions{
-			Title:           "fintwind",
-			Width:           1440,
-			Height:          900,
-			MinWidth:        980,
-			MinHeight:       620,
-			TitleBarStyle:   mygo.TitleBarHidden,
-			TitleBarHeight:  topbarHeight,
-			BackgroundColor: "#141414",
-			Content:         ui.View(a.view),
+			Title:          "fintwind",
+			Width:          1440,
+			Height:         900,
+			MinWidth:       980,
+			MinHeight:      620,
+			TitleBarStyle:  mygo.TitleBarHidden,
+			TitleBarHeight: topbarHeight,
+			// The framework caption is hidden: the top bar draws its own
+			// minimize/maximize/close with full color control.
+			HideWindowButtons: true,
+			BackgroundColor:   "#141414",
+			Content:           ui.View(a.view),
 		})
-		a.win.SetWindowButtonsTheme(mygo.ThemeDark)
 		a.win.OnClosed(func() {
 			a.closePreferences()
 			a.flushSnapshotsOnClose()
@@ -675,7 +683,6 @@ func (a *app) view(c *ui.Context) {
 		a.toggleContextPanel()
 	}
 	a.applyAppearance()
-	c.SetZoom(activeAppearance.textScale)
 	c.SetTheme(uiText(c))
 	if a.mode != modeUsage {
 		a.usage.UI.rangeMenu = false
@@ -706,7 +713,9 @@ func (a *app) view(c *ui.Context) {
 					a.rightPanel(c)
 				}
 			case modeSettings:
-				a.settingsSecondary(c)
+				if a.sidebarOpen {
+					a.settingsSecondary(c)
+				}
 				a.settingsContent(c)
 			default:
 				a.mainArea(c)
@@ -736,11 +745,11 @@ func (a *app) placeholder(c *ui.Context, title, iconName string) {
 	ui.Column(c).Grow(1).MinWidth(0).FillHeight().Background(palette.surface).
 		Radius(workspaceRadius, 0, 0, workspaceRadius).Clip().Children(func() {
 		ui.Row(c).FillWidth().Height(44).Padding(0, 16, 0, 16).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, title).FontSize(14).Bold().TextColor(palette.text)
+			ui.Text(c, title).FontSize(uiPx(14)).Bold().TextColor(palette.text)
 		})
 		ui.Column(c).FillWidth().Grow(1).Center().Gap(10).Children(func() {
 			icon(c, iconName, 28, palette.textGhost)
-			ui.Text(c, tr("Not ported yet")).FontSize(13).TextColor(palette.textMuted)
+			ui.Text(c, tr("Not ported yet")).FontSize(uiPx(13)).TextColor(palette.textMuted)
 		})
 	})
 }

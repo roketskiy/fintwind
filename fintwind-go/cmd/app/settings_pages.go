@@ -21,7 +21,7 @@ func (a *app) mailRoot(c *ui.Context, left, right func()) {
 
 // mailPaneHeader is the 13px medium title at pt14 px16.
 func mailPaneHeader(c *ui.Context, title string) {
-	ui.Text(c, title).FontSize(13).FontWeight(500).TextColor(palette.text).
+	ui.Text(c, title).FontSize(uiPx(13)).FontWeight(500).TextColor(palette.text).
 		Margin(14, 16, 0, 16)
 }
 
@@ -32,7 +32,7 @@ func mailSectionLabel(c *ui.Context, label string, first bool) {
 	if first {
 		top = 2
 	}
-	ui.Text(c, strings.ToUpper(label)).FontSize(9.5).FontWeight(600).
+	ui.Text(c, strings.ToUpper(label)).FontSize(uiPx(9.5)).FontWeight(600).
 		TextColor(palette.textTertiary).Margin(top, 9, 4, 9)
 }
 
@@ -67,7 +67,7 @@ func (a *app) mailRow(c *ui.Context, label string, selected bool, onClick func()
 		if tile != nil {
 			tile()
 		}
-		ui.Text(c, label).FontSize(12.5).FontWeight(500).
+		ui.Text(c, label).FontSize(uiPx(12.5)).FontWeight(500).
 			TextColor(palette.text).SingleLine().Ellipsis("...")
 		if tail != nil {
 			tail()
@@ -104,7 +104,7 @@ func mailAddRow(c *ui.Context, label string, adding bool) bool {
 			textColor = palette.text
 		}
 		icon(c, "plus", 13, iconColor)
-		ui.Text(c, label).FontSize(12.5).TextColor(textColor)
+		ui.Text(c, label).FontSize(uiPx(12.5)).TextColor(textColor)
 	})
 	if !adding {
 		if row.Hovered() {
@@ -126,14 +126,14 @@ func mailFooter(c *ui.Context, caption string, centered bool) {
 		footer.Justify(ui.Center)
 	}
 	footer.Children(func() {
-		ui.Text(c, caption).FontSize(9.5).TextColor(palette.textMuted)
+		ui.Text(c, caption).FontSize(uiPx(9.5)).TextColor(palette.textMuted)
 	})
 }
 
 // mailStatusRow is the fixed px18 py16 11px tertiary line used for
 // page-level states (offline, scanning, empty roster).
 func mailStatusRow(c *ui.Context, message string) {
-	ui.Text(c, message).FontSize(11).TextColor(palette.textTertiary).
+	ui.Text(c, message).FontSize(uiPx(11)).TextColor(palette.textTertiary).
 		Margin(16, 18, 0, 18)
 }
 
@@ -143,7 +143,7 @@ func mailDetailPlaceholder(c *ui.Context, iconName, caption string) {
 	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Justify(ui.Center).
 		AlignItems(ui.Center).Gap(8).Children(func() {
 		icon(c, iconName, 22, palette.textGhost)
-		ui.Text(c, caption).FontSize(11).TextColor(palette.textMuted)
+		ui.Text(c, caption).FontSize(uiPx(11)).TextColor(palette.textMuted)
 	})
 }
 
@@ -161,7 +161,7 @@ func mailEnabledBadge(c *ui.Context, enabled bool, label string) {
 		if enabled {
 			color = palette.accent
 		}
-		ui.Text(c, label).FontSize(9.5).TextColor(color)
+		ui.Text(c, label).FontSize(uiPx(9.5)).TextColor(color)
 	})
 }
 

@@ -22,7 +22,7 @@ func (a *app) tabRow(c *ui.Context) {
 	ui.Row(c).FillWidth().Height(tabRowHeight).AlignItems(ui.Center).
 		Children(func() {
 			newTab := ui.ButtonBase(c).Label(tr("New task")).Size(28, 28).Radius(7).Center().
-				Margin(0, 4, 0, 0).Background(palette.overlay)
+				Margin(0, 4, 0, 8).Background(palette.overlay)
 			if newTab.Hovered() {
 				newTab.Background(palette.overlayStrong)
 			}
@@ -127,7 +127,7 @@ func (a *app) sessionTab(c *ui.Context, sessionID string) {
 			titleColor = palette.text
 		}
 		ui.Row(c).Grow(1).MinWidth(0).Children(func() {
-			ui.Text(c, title).FontSize(12).TextColor(titleColor).
+			ui.Text(c, title).FontSize(uiPx(12)).TextColor(titleColor).
 				SingleLine().Ellipsis("...")
 		})
 		closeTab = ui.ButtonBase(c).Label(tr("Close")).Size(18, 18).Radius(5).Center().

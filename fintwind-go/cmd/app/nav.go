@@ -109,7 +109,7 @@ func navPreviewSnippet(content string, maxGraphemes int) string {
 }
 
 // navigationRail draws the right-hand turn ticks when the viewport leaves room
-// for the rail beside the 736 px transcript column.
+// for the rail beside the transcript column.
 func (a *app) navigationRail(c *ui.Context) {
 	if a.detail == nil {
 		return
@@ -242,12 +242,12 @@ func (a *app) navPreview(c *ui.Context, turn navTurn, index int, railHeight floa
 		Gap(7).Justify(ui.Start)
 	card = cardShadow(card)
 	card.Children(func() {
-		ui.Text(c, turn.Prompt).FontSize(14).FixedLineHeight(20).FontWeight(600).
+		ui.Text(c, turn.Prompt).FontSize(uiPx(14)).FixedLineHeight(uiPx(20)).FontWeight(600).
 			TextColor(palette.text).SingleLine().Ellipsis("…")
 		if turn.Response != "" {
 			ui.Row(c).MaxHeight(60).Clip().Children(func() {
 				ui.Column(c).Children(func() {
-					ui.Text(c, turn.Response).FontSize(13).FixedLineHeight(20).
+					ui.Text(c, turn.Response).FontSize(uiPx(13)).FixedLineHeight(uiPx(20)).
 						TextColor(palette.textTertiary)
 				})
 			})

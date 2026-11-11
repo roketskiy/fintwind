@@ -105,7 +105,7 @@ func (a *app) surfaceTab(c *ui.Context, index int, kind string) {
 	tab.Children(func() {
 		icon(c, surfaceIcon(kind), 13, palette.textSecondary)
 		ui.Row(c).Grow(1).MinWidth(0).Children(func() {
-			ui.Text(c, title).FontSize(12).
+			ui.Text(c, title).FontSize(uiPx(12)).
 				TextColor(choice(active, palette.text, palette.textSecondary)).
 				SingleLine().Ellipsis("...")
 		})
@@ -173,7 +173,7 @@ func (a *app) addSurfaceButton(c *ui.Context) {
 					row.Children(func() {
 						icon(c, surfaceIcon(kind), 15, palette.textTertiary)
 						ui.Row(c).Grow(1).MinWidth(0).Children(func() {
-							ui.Text(c, surfaceLabel(kind)).FontSize(12.5).
+							ui.Text(c, surfaceLabel(kind)).FontSize(uiPx(12.5)).
 								TextColor(palette.text).SingleLine().Ellipsis("...")
 						})
 						if alreadyOpen {
@@ -195,8 +195,8 @@ func (a *app) surfaceChooser(c *ui.Context) {
 	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Center().Padding(0, 20, 32, 20).
 		Children(func() {
 			ui.Column(c).FillWidth().MaxWidth(420).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, tr("Open a surface")).FontSize(13).FontWeight(500).TextColor(palette.text)
-				ui.Text(c, tr("Choose what to show in the right panel")).FontSize(11).
+				ui.Text(c, tr("Open a surface")).FontSize(uiPx(13)).FontWeight(500).TextColor(palette.text)
+				ui.Text(c, tr("Choose what to show in the right panel")).FontSize(uiPx(11)).
 					TextColor(palette.textTertiary).Margin(5, 0, 0, 0)
 				ui.Row(c).FillWidth().Gap(8).Margin(18, 0, 0, 0).Children(func() {
 					a.surfaceCard(c, rightPanelBrowser, "Open a local app or URL")
@@ -222,9 +222,9 @@ func (a *app) surfaceCard(c *ui.Context, kind, description string) {
 		ui.Column(c).FillWidth().Grow(1).MinHeight(0).AlignItems(ui.Start).
 			Justify(ui.Start).Children(func() {
 			icon(c, surfaceIcon(kind), 18, palette.textSecondary)
-			ui.Text(c, surfaceLabel(kind)).FontSize(12.5).FontWeight(500).
+			ui.Text(c, surfaceLabel(kind)).FontSize(uiPx(12.5)).FontWeight(500).
 				TextColor(palette.text).Margin(12, 0, 0, 0)
-			ui.Text(c, description).FontSize(10.5).FixedLineHeight(15).
+			ui.Text(c, description).FontSize(uiPx(10.5)).FixedLineHeight(uiPx(15)).
 				TextColor(palette.textTertiary).Wrap().MaxHeight(30).Clip().
 				Margin(4, 0, 0, 0)
 		})
@@ -236,8 +236,8 @@ func (a *app) surfaceCard(c *ui.Context, kind, description string) {
 
 func (a *app) surfacePlaceholder(c *ui.Context, title, description string) {
 	ui.Column(c).FillWidth().Grow(1).Center().Padding(0, 20, 32, 20).Children(func() {
-		ui.Text(c, title).FontSize(13).FontWeight(500).TextColor(palette.text)
-		ui.Text(c, description).FontSize(11).FixedLineHeight(17).
+		ui.Text(c, title).FontSize(uiPx(13)).FontWeight(500).TextColor(palette.text)
+		ui.Text(c, description).FontSize(uiPx(11)).FixedLineHeight(uiPx(17)).
 			TextColor(palette.textTertiary).MaxWidth(300).TextAlign(ui.Center).
 			Margin(6, 0, 0, 0)
 	})
@@ -427,6 +427,7 @@ func (a *app) openSurface(kind string) {
 		kind = browserTabPrefix + tab.tabID
 	case rightPanelTerminal:
 		if a.selectedID == "" {
+			a.status = tr("Select a task before opening a terminal.")
 			return
 		}
 		tab := a.startNativeTerminal(a.selectedID)
@@ -534,7 +535,7 @@ func (a *app) filesSurface(c *ui.Context) {
 		header.Children(func() {
 			icon(c, "folder", 13, palette.textTertiary)
 			ui.Row(c).Grow(1).MinWidth(0).Children(func() {
-				ui.Text(c, project.Name).FontSize(11.5).FontWeight(500).
+				ui.Text(c, project.Name).FontSize(uiPx(11.5)).FontWeight(500).
 					TextColor(palette.textSecondary).SingleLine().Ellipsis("...")
 			})
 		})
@@ -635,15 +636,15 @@ func (a *app) openTreeEntry(path string) *treeRow {
 
 func (a *app) rightPanelFilesEmpty(c *ui.Context) {
 	ui.Column(c).FillWidth().Grow(1).Center().Padding(0, 0, 32, 0).Children(func() {
-		ui.Text(c, tr("No project open")).FontSize(13).FontWeight(500).TextColor(palette.text)
-		ui.Text(c, tr("Open a project to browse its files.")).FontSize(11).
-			FixedLineHeight(17).TextColor(palette.textTertiary).MaxWidth(300).TextAlign(ui.Center)
+		ui.Text(c, tr("No project open")).FontSize(uiPx(13)).FontWeight(500).TextColor(palette.text)
+		ui.Text(c, tr("Open a project to browse its files.")).FontSize(uiPx(11)).
+			FixedLineHeight(uiPx(17)).TextColor(palette.textTertiary).MaxWidth(300).TextAlign(ui.Center)
 	})
 }
 
 func (a *app) rightPanelEmpty(c *ui.Context) {
 	ui.Column(c).FillWidth().Grow(1).Center().Children(func() {
-		ui.Text(c, tr("Not ported yet")).FontSize(13).TextColor(palette.textMuted)
+		ui.Text(c, tr("Not ported yet")).FontSize(uiPx(13)).TextColor(palette.textMuted)
 	})
 }
 
@@ -677,7 +678,7 @@ func (a *app) treeRow(c *ui.Context, entry *treeRow) {
 			}
 		}
 		ui.Row(c).Grow(1).MinWidth(0).Children(func() {
-			ui.Text(c, entry.Name).FontSize(11.5).
+			ui.Text(c, entry.Name).FontSize(uiPx(11.5)).
 				TextColor(choice(highlighted, palette.text, palette.textSecondary)).
 				SingleLine().Ellipsis("...")
 		})

@@ -15,7 +15,9 @@ import (
 func (a *app) sessionsView(c *ui.Context) {
 	// Window-level overlay, so position in the tree does not matter.
 	a.addProjectDialog(c)
-	root := ui.Column(c).Grow(1).MinWidth(0).FillHeight().Background(palette.surface)
+	root := ui.Column(c).Grow(1).MinWidth(0).FillHeight().Background(palette.surface).
+		Radius(workspaceRadius, 0, 0, workspaceRadius).Clip()
+	root = workspaceShadow(root)
 	if a.sidebarOpen {
 		root.BorderWidth(1, 0, 0, 0).BorderColor(palette.sidebarBorder)
 	}
@@ -101,10 +103,10 @@ func (a *app) emptyState(c *ui.Context, centered bool) {
 	if project == nil {
 		ui.Column(c).FillWidth().Center().Padding(0, 32, padBottom, 32).Children(func() {
 			icon(c, "sparkle", 24, palette.accent)
-			ui.Text(c, tr("Open a project to begin")).FontSize(20).FontWeight(500).
+			ui.Text(c, tr("Open a project to begin")).FontSize(uiPx(20)).FontWeight(500).
 				TextColor(palette.text).Margin(16, 0, 0, 0)
 			ui.Text(c, tr("fintwind runs coding agents in folders you choose. Your code, sessions, and history stay on this computer")).
-				FontSize(12.5).FixedLineHeight(19).TextColor(palette.textTertiary).
+				FontSize(uiPx(12.5)).FixedLineHeight(uiPx(19)).TextColor(palette.textTertiary).
 				MaxWidth(380).TextAlign(ui.Center).Margin(8, 0, 0, 0)
 			ui.Column(c).AlignItems(ui.Center).Gap(8).Margin(20, 0, 0, 0).Children(func() {
 				openButton := ui.ButtonBase(c).Label(tr("Open project folder")).Height(32).
@@ -116,7 +118,7 @@ func (a *app) emptyState(c *ui.Context, centered bool) {
 					openButton.Opacity(0.8)
 				}
 				openButton.Children(func() {
-					ui.Text(c, tr("Open project folder")).FontSize(12.5).FontWeight(600).
+					ui.Text(c, tr("Open project folder")).FontSize(uiPx(12.5)).FontWeight(600).
 						TextColor(palette.onInverse)
 				})
 				if openButton.Clicked() {
@@ -132,7 +134,7 @@ func (a *app) emptyState(c *ui.Context, centered bool) {
 				}
 				noProject.Children(func() {
 					icon(c, "x", 11, palette.textTertiary)
-					ui.Text(c, tr("Don't work in a project")).FontSize(12).
+					ui.Text(c, tr("Don't work in a project")).FontSize(uiPx(12)).
 						TextColor(palette.textSecondary)
 				})
 				if noProject.Clicked() {
@@ -144,15 +146,15 @@ func (a *app) emptyState(c *ui.Context, centered bool) {
 	}
 	ui.Column(c).FillWidth().Center().Padding(0, 32, padBottom, 32).Children(func() {
 		if project.Name == "No project" {
-			ui.Text(c, tr("What should we build?")).FontSize(20).FontWeight(500).
+			ui.Text(c, tr("What should we build?")).FontSize(uiPx(20)).FontWeight(500).
 				TextColor(palette.text)
 			return
 		}
 		ui.Row(c).AlignItems(ui.Baseline).Gap(4).Children(func() {
-			ui.Text(c, tr("What should we build in")).FontSize(20).FontWeight(500).
+			ui.Text(c, tr("What should we build in")).FontSize(uiPx(20)).FontWeight(500).
 				TextColor(palette.text)
 			a.emptyProjectSelector(c, project)
-			ui.Text(c, tr("?")).FontSize(20).FontWeight(500).TextColor(palette.text)
+			ui.Text(c, tr("?")).FontSize(uiPx(20)).FontWeight(500).TextColor(palette.text)
 		})
 	})
 }
@@ -162,7 +164,7 @@ func (a *app) emptyState(c *ui.Context, centered bool) {
 func (a *app) emptyProjectSelector(c *ui.Context, project *model.Project) {
 	selector := ui.ButtonBase(c).Label(project.Name).Children(func() {
 		ui.Column(c).Children(func() {
-			ui.Text(c, project.Name).FontSize(20).FontWeight(500).TextColor(palette.text)
+			ui.Text(c, project.Name).FontSize(uiPx(20)).FontWeight(500).TextColor(palette.text)
 			underline := palette.textTertiary
 			if a.emptyProjectMenuOpen {
 				underline = palette.textSecondary
@@ -195,7 +197,7 @@ func (a *app) emptyProjectSelector(c *ui.Context, project *model.Project) {
 				}
 				newProject.Children(func() {
 					icon(c, "folder-plus", 14, palette.textSecondary)
-					ui.Text(c, tr("New project")).FontSize(12.5).TextColor(palette.text)
+					ui.Text(c, tr("New project")).FontSize(uiPx(12.5)).TextColor(palette.text)
 				})
 				if newProject.Clicked() {
 					a.emptyProjectMenuOpen = false
@@ -208,7 +210,7 @@ func (a *app) emptyProjectSelector(c *ui.Context, project *model.Project) {
 				}
 				noProject.Children(func() {
 					icon(c, "x", 14, palette.textSecondary)
-					ui.Text(c, tr("Don't work in a project")).FontSize(12.5).TextColor(palette.text)
+					ui.Text(c, tr("Don't work in a project")).FontSize(uiPx(12.5)).TextColor(palette.text)
 				})
 				if noProject.Clicked() {
 					a.emptyProjectMenuOpen = false
@@ -220,7 +222,7 @@ func (a *app) emptyProjectSelector(c *ui.Context, project *model.Project) {
 
 func (a *app) centerNote(c *ui.Context, text string, isError bool) {
 	ui.Column(c).FillWidth().Grow(1).Center().Padding(0, 32).Children(func() {
-		ui.Text(c, text).FontSize(13).
+		ui.Text(c, text).FontSize(uiPx(13)).
 			TextColor(choice(isError, palette.danger, palette.textMuted))
 	})
 }
@@ -244,7 +246,7 @@ func (a *app) transcriptRowView(c *ui.Context, index int) {
 		bottom = 22
 	}
 	ui.Row(c).FillWidth().Justify(ui.Center).Padding(top, 20, bottom, 20).Children(func() {
-		ui.Column(c).FillWidth().MaxWidth(736).MinWidth(0).Children(func() {
+		ui.Column(c).FillWidth().MaxWidth(transcriptWidth).MinWidth(0).Children(func() {
 			switch row.Kind {
 			case transcriptMessage:
 				if row.MessageIndex >= 0 && row.MessageIndex < len(a.detail.Messages) {
@@ -309,7 +311,7 @@ func (a *app) turnFoldRow(c *ui.Context, turnID string) {
 			if button.Hovered() || button.Pressed() {
 				color = palette.text
 			}
-			ui.Text(c, label).FontSize(12.5).FixedLineHeight(17).FontWeight(500).
+			ui.Text(c, label).FontSize(uiPx(12.5)).FixedLineHeight(uiPx(17)).FontWeight(500).
 				TextColor(color)
 			chevron := "chevron-right"
 			if expanded {
@@ -342,8 +344,8 @@ func (a *app) workingRow(c *ui.Context) {
 				ui.Row(c).Size(4, 4).Radius(2).Background(palette.textTertiary)
 			}
 		})
-		ui.Text(c, tr("Working for ")+formatWorkingElapsed(elapsed)).FontSize(11.5).
-			FixedLineHeight(16).FontWeight(500).TextColor(palette.textTertiary)
+		ui.Text(c, tr("Working for ")+formatWorkingElapsed(elapsed)).FontSize(uiPx(11.5)).
+			FixedLineHeight(uiPx(16)).FontWeight(500).TextColor(palette.textTertiary)
 	})
 }
 
@@ -356,7 +358,7 @@ func (a *app) compactingRow(c *ui.Context) {
 				ui.Row(c).Size(4, 4).Radius(2).Background(palette.textTertiary)
 			}
 		})
-		ui.Text(c, tr("Compacting context…")).FontSize(11.5).FixedLineHeight(16).
+		ui.Text(c, tr("Compacting context…")).FontSize(uiPx(11.5)).FixedLineHeight(uiPx(16)).
 			FontWeight(500).TextColor(palette.textTertiary)
 	})
 }
@@ -448,7 +450,7 @@ func (a *app) messageView(c *ui.Context, messageIndex int) {
 							if !collapsed {
 								label = tr("Show less")
 							}
-							ui.Text(c, label).FontSize(11.5).FontWeight(500).TextColor(color)
+							ui.Text(c, label).FontSize(uiPx(11.5)).FontWeight(500).TextColor(color)
 						})
 						if toggle.Clicked() {
 							a.expandedUserMessages[m.ID] = collapsed
@@ -477,7 +479,7 @@ func (a *app) messageView(c *ui.Context, messageIndex int) {
 				row.Children(func() {
 					if stats := a.assistantTurnStats(messageIndex); stats != "" {
 						ui.Row(c).Grow(1).MinWidth(0).Children(func() {
-							ui.Text(c, stats).FontSize(11.5).FixedLineHeight(16).
+							ui.Text(c, stats).FontSize(uiPx(11.5)).FixedLineHeight(uiPx(16)).
 								TextColor(palette.textTertiary).SingleLine().Ellipsis("...")
 						})
 					}
@@ -504,7 +506,7 @@ func (a *app) messageView(c *ui.Context, messageIndex int) {
 		a.compactionMessage(c, m.ID, text)
 	default:
 		if text != "" {
-			ui.Text(c, text).FontSize(13.5).FixedLineHeight(21).TextColor(palette.text)
+			ui.Text(c, text).FontSize(uiPx(13.5)).FixedLineHeight(uiPx(21)).TextColor(palette.text)
 		}
 	}
 }
@@ -808,7 +810,7 @@ func (a *app) showCopied(messageID string) {
 }
 
 func (a *app) messageTime(c *ui.Context, at uint64) {
-	ui.Text(c, formatMessageTime(at)).FontSize(11.5).FixedLineHeight(14).
+	ui.Text(c, formatMessageTime(at)).FontSize(uiPx(11.5)).FixedLineHeight(uiPx(14)).
 		TextColor(palette.textMuted).Height(27).Padding(0, 4).Shrink(0)
 }
 
@@ -822,7 +824,7 @@ func (a *app) systemMessage(c *ui.Context, text string) {
 				icon(c, "alert", 13, palette.danger)
 			})
 			ui.Row(c).Grow(1).MinWidth(0).Children(func() {
-				ui.Text(c, text).FontSize(11.5).FixedLineHeight(16).
+				ui.Text(c, text).FontSize(uiPx(11.5)).FixedLineHeight(uiPx(16)).
 					TextColor(palette.text).Wrap()
 			})
 		})
@@ -852,11 +854,11 @@ func (a *app) compactionMessage(c *ui.Context, messageID, text string) {
 			} else if row.Pressed() {
 				color = palette.textMuted
 			}
-			ui.Text(c, tr("Compaction")).FontSize(12.5).FixedLineHeight(17).
+			ui.Text(c, tr("Compaction")).FontSize(uiPx(12.5)).FixedLineHeight(uiPx(17)).
 				FontWeight(500).TextColor(color).Shrink(0)
 			if !expanded && preview != "" {
 				ui.Row(c).Grow(1).MinWidth(0).Children(func() {
-					ui.Text(c, preview).FontSize(12.5).FixedLineHeight(17).
+					ui.Text(c, preview).FontSize(uiPx(12.5)).FixedLineHeight(uiPx(17)).
 						TextColor(palette.textTertiary).SingleLine().Ellipsis("...")
 				})
 			} else {
@@ -924,13 +926,13 @@ func (a *app) changedFilesCard(c *ui.Context, turnID string, inline bool) {
 				if len(files) == 1 {
 					title = tr("Changed 1 file")
 				}
-				ui.Text(c, title).FontSize(12.5).FontWeight(500).TextColor(palette.text).
+				ui.Text(c, title).FontSize(uiPx(12.5)).FontWeight(500).TextColor(palette.text).
 					SingleLine().Ellipsis("...")
 				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, fmt.Sprintf(tr("+%d"), additions)).FontSize(11).
-						FixedLineHeight(14).TextColor(palette.successText)
-					ui.Text(c, fmt.Sprintf("-%d", deletions)).FontSize(11).
-						FixedLineHeight(14).TextColor(palette.dangerText)
+					ui.Text(c, fmt.Sprintf(tr("+%d"), additions)).FontSize(uiPx(11)).
+						FixedLineHeight(uiPx(14)).TextColor(palette.successText)
+					ui.Text(c, fmt.Sprintf("-%d", deletions)).FontSize(uiPx(11)).
+						FixedLineHeight(uiPx(14)).TextColor(palette.dangerText)
 				})
 			})
 			review := ui.ButtonBase(c).Label(tr("Review")).Height(32).Padding(0, 11).
@@ -942,7 +944,7 @@ func (a *app) changedFilesCard(c *ui.Context, turnID string, inline bool) {
 			}
 			review.Children(func() {
 				icon(c, "file-diff", 13, palette.textTertiary)
-				ui.Text(c, tr("Review")).FontSize(12.5).FontWeight(500).
+				ui.Text(c, tr("Review")).FontSize(uiPx(12.5)).FontWeight(500).
 					TextColor(palette.textSecondary)
 			})
 			if review.Clicked() {
@@ -957,12 +959,12 @@ func (a *app) changedFilesCard(c *ui.Context, turnID string, inline bool) {
 				ui.Row(c).FillWidth().Height(31).Padding(0, 12).Gap(8).
 					AlignItems(ui.Center).Children(func() {
 					ui.Row(c).Grow(1).MinWidth(0).Children(func() {
-						ui.Text(c, file.Path).FontSize(11.5).TextColor(palette.textSecondary).
+						ui.Text(c, file.Path).FontSize(uiPx(11.5)).TextColor(palette.textSecondary).
 							SingleLine().Ellipsis("...")
 					})
-					ui.Text(c, fmt.Sprintf(tr("+%d"), file.Additions)).FontSize(10.5).
+					ui.Text(c, fmt.Sprintf(tr("+%d"), file.Additions)).FontSize(uiPx(10.5)).
 						TextColor(palette.successText).Shrink(0)
-					ui.Text(c, fmt.Sprintf("-%d", file.Deletions)).FontSize(10.5).
+					ui.Text(c, fmt.Sprintf("-%d", file.Deletions)).FontSize(uiPx(10.5)).
 						TextColor(palette.dangerText).Shrink(0)
 				})
 			}
@@ -981,11 +983,11 @@ func (a *app) changedFilesCard(c *ui.Context, turnID string, inline bool) {
 				toggle.Background(palette.overlay)
 			}
 			toggle.Children(func() {
-				ui.Text(c, label).FontSize(12.5).FontWeight(500).
+				ui.Text(c, label).FontSize(uiPx(12.5)).FontWeight(500).
 					TextColor(palette.textSecondary).Shrink(0)
 				if expanded && len(files) > changedFilesExpandedLimit {
 					ui.Text(c, fmt.Sprintf(tr("Showing first %d of %d"), changedFilesExpandedLimit, len(files))).
-						FontSize(12.5).TextColor(palette.textMuted).
+						FontSize(uiPx(12.5)).TextColor(palette.textMuted).
 						SingleLine().Ellipsis("...")
 				}
 				ui.Row(c).Grow(1)
@@ -1020,7 +1022,7 @@ func (a *app) attachmentChip(c *ui.Context, attachment model.Attachment) {
 		ui.Column(c).FillWidth().Grow(1).Padding(0, 7, 0, 7).Center().
 			Gap(7).Children(func() {
 			icon(c, "file", 18, palette.textSecondary)
-			ui.Text(c, attachment.Name).FontSize(9.5).TextColor(palette.textSecondary).
+			ui.Text(c, attachment.Name).FontSize(uiPx(9.5)).TextColor(palette.textSecondary).
 				TextAlign(ui.Center).SingleLine().Ellipsis("...")
 		})
 	})
@@ -1074,7 +1076,7 @@ func (a *app) projectFooterChip(c *ui.Context, project *model.Project, enabled b
 	chip.Children(func() {
 		icon(c, "folder", 12, palette.textTertiary)
 		ui.Row(c).MinWidth(0).MaxWidth(190).Children(func() {
-			ui.Text(c, label).FontSize(12.5).FixedLineHeight(16).
+			ui.Text(c, label).FontSize(uiPx(12.5)).FixedLineHeight(uiPx(16)).
 				TextColor(palette.textSecondary).SingleLine().Ellipsis("...")
 		})
 	})
@@ -1106,7 +1108,7 @@ func (a *app) projectFooterChip(c *ui.Context, project *model.Project, enabled b
 				}
 				newProject.Children(func() {
 					icon(c, "folder-plus", 14, palette.textSecondary)
-					ui.Text(c, tr("New project")).FontSize(12.5).TextColor(palette.text)
+					ui.Text(c, tr("New project")).FontSize(uiPx(12.5)).TextColor(palette.text)
 				})
 				if newProject.Clicked() {
 					a.projectMenuOpen = false
@@ -1119,7 +1121,7 @@ func (a *app) projectFooterChip(c *ui.Context, project *model.Project, enabled b
 				}
 				noProject.Children(func() {
 					icon(c, "x", 14, palette.textSecondary)
-					ui.Text(c, tr("No project")).FontSize(12.5).TextColor(palette.text)
+					ui.Text(c, tr("No project")).FontSize(uiPx(12.5)).TextColor(palette.text)
 				})
 				if noProject.Clicked() {
 					a.projectMenuOpen = false
@@ -1138,7 +1140,7 @@ func (a *app) projectMenuItem(c *ui.Context, project *model.Project, selected bo
 	item.Children(func() {
 		icon(c, "folder", 14, palette.textTertiary)
 		ui.Row(c).Grow(1).MinWidth(0).Children(func() {
-			ui.Text(c, project.Name).FontSize(12.5).TextColor(palette.text).
+			ui.Text(c, project.Name).FontSize(uiPx(12.5)).TextColor(palette.text).
 				SingleLine().Ellipsis("...")
 		})
 		if selected {
@@ -1173,7 +1175,7 @@ func (a *app) footerChip(c *ui.Context, iconName, label string, disabled bool) {
 	chip.Children(func() {
 		icon(c, iconName, 12, palette.textTertiary)
 		ui.Row(c).MinWidth(0).MaxWidth(limit).Children(func() {
-			ui.Text(c, label).FontSize(12.5).FixedLineHeight(16).
+			ui.Text(c, label).FontSize(uiPx(12.5)).FixedLineHeight(uiPx(16)).
 				TextColor(palette.textSecondary).SingleLine().Ellipsis("...")
 		})
 	})

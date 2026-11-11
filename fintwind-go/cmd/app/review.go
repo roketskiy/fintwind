@@ -37,13 +37,15 @@ type reviewState struct {
 	Files, Rows  []scFile
 	// Chunks hold each file's patch text, sharing the snapshot's bytes;
 	// hunks are parsed into Patches only when a file is shown.
-	Chunks         map[string]string
-	Patches        map[string]editor.FilePatch
-	Complete       bool
-	Truncated      bool
-	Selected       string
-	Filter         string
-	AppliedFilter  string
+	Chunks        map[string]string
+	Patches       map[string]editor.FilePatch
+	Complete      bool
+	Truncated     bool
+	Selected      string
+	Filter        string
+	AppliedFilter string
+	// FilesCollapsed folds the whole file group in the secondary column.
+	FilesCollapsed bool
 	FileList       ui.ListState
 	FileIndex      int
 	Reader         reviewReader

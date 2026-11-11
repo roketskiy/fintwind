@@ -26,14 +26,14 @@ func mcpKindOptions() []settingsOption {
 // The value lives in *value only; nothing is logged.
 func formSecretField(c *ui.Context, key, label string, value *string, show *bool) {
 	ui.Column(c).FillWidth().Gap(6).Children(func() {
-		ui.Text(c, label).FontSize(11).FontWeight(500).TextColor(palette.text)
-		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, label).FontSize(uiPx(11)).FontWeight(500).TextColor(palette.text)
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Row(c).Grow(1).MinWidth(0).Height(32).Padding(0, 9).Radius(7).
 				Border(1, palette.borderStrong).Background(palette.composer).
 				AlignItems(ui.Center).Children(func() {
 				c.Key(key)
-				input := ui.TextInputBase(c, value).FillWidth().FontSize(12.5).
-					FixedLineHeight(17).TextColor(palette.text).Label(label)
+				input := ui.TextInputBase(c, value).FillWidth().FontSize(uiPx(12.5)).
+					FixedLineHeight(uiPx(17)).TextColor(palette.text).Label(label)
 				if !*show {
 					input.Password()
 				}
@@ -73,13 +73,13 @@ func deviceChip(c *ui.Context, label string, selected bool) {
 		if selected {
 			color = palette.text
 		}
-		ui.Text(c, label).FontSize(11.5).TextColor(color)
+		ui.Text(c, label).FontSize(uiPx(11.5)).TextColor(color)
 	})
 }
 
 // formTitle is the 15px medium detail title used by both add forms.
 func formTitle(c *ui.Context, title string) {
-	ui.Text(c, title).FontSize(15).FontWeight(500).TextColor(palette.text)
+	ui.Text(c, title).FontSize(uiPx(15)).FontWeight(500).TextColor(palette.text)
 }
 
 // providersDetail reads the Built-in detail or the custom add form.
@@ -95,7 +95,7 @@ func (a *app) providersDetail(c *ui.Context) {
 	}
 	ui.Row(c).FillWidth().Padding(14, 24, 0, 24).Gap(6).
 		AlignItems(ui.Center).Children(func() {
-		ui.Text(c, tr("Device")).FontSize(11).FontWeight(500).
+		ui.Text(c, tr("Device")).FontSize(uiPx(11)).FontWeight(500).
 			TextColor(palette.textSecondary)
 		deviceChip(c, "This computer", true)
 	})
@@ -104,10 +104,10 @@ func (a *app) providersDetail(c *ui.Context) {
 			ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
 				mailDetailTile(c, "bot", 17)
 				ui.Column(c).Grow(1).MinWidth(0).Children(func() {
-					ui.Text(c, tr("OpenCode")).FontSize(15).FontWeight(500).
+					ui.Text(c, tr("OpenCode")).FontSize(uiPx(15)).FontWeight(500).
 						TextColor(palette.text)
 					ui.Text(c, tr("Built-in · managed by the OpenCode CLI")).
-						FontSize(10.5).TextColor(palette.textTertiary).
+						FontSize(uiPx(10.5)).TextColor(palette.textTertiary).
 						SingleLine().Ellipsis("...")
 				})
 				status := tr("Not checked")
@@ -139,7 +139,7 @@ func (a *app) providerAddForm(c *ui.Context) {
 			settingsFormField(c, "provider-form-url", tr("Base URL"), &st.pfBaseURL, "https://api.example.com/v1")
 			formSecretField(c, "provider-form-key", tr("API key"), &st.pfAPIKey, &st.pfShowKey)
 			ui.Column(c).FillWidth().Gap(6).Children(func() {
-				ui.Text(c, tr("API format")).FontSize(11).FontWeight(500).TextColor(palette.text)
+				ui.Text(c, tr("API format")).FontSize(uiPx(11)).FontWeight(500).TextColor(palette.text)
 				a.settingsChoice(c, "provider-form-format", tr("API format"), st.pfFormat, formPickerWidth, providerFormatOptions(), func(option settingsOption) {
 					st.pfFormat = option.value
 					a.settings.backend.providerFormatTouched = true
@@ -177,7 +177,7 @@ func (a *app) mcpAddForm(c *ui.Context) {
 			formTitle(c, choice(a.settings.backend.mcpEditing != "", tr("Edit server"), tr("Add server")))
 			settingsFormField(c, "mcp-form-name", tr("Name"), &st.mfName, "my-server")
 			ui.Column(c).FillWidth().Gap(6).Children(func() {
-				ui.Text(c, tr("Type")).FontSize(11).FontWeight(500).TextColor(palette.text)
+				ui.Text(c, tr("Type")).FontSize(uiPx(11)).FontWeight(500).TextColor(palette.text)
 				a.settingsChoice(c, "mcp-form-kind", tr("Server type"), st.mfKind, formPickerWidth, mcpKindOptions(), func(option settingsOption) {
 					st.mfKind = option.value
 				})
@@ -214,7 +214,7 @@ func (a *app) marketDetail(c *ui.Context) {
 func settingsFormField(c *ui.Context, key, label string, value *string, placeholder string) {
 	c.Key(key + "-field")
 	ui.Column(c).FillWidth().Gap(6).Children(func() {
-		ui.Text(c, label).FontSize(11).FontWeight(500).TextColor(palette.text)
+		ui.Text(c, label).FontSize(uiPx(11)).FontWeight(500).TextColor(palette.text)
 		settingsTextInput(c, key, label, value, 0, placeholder)
 	})
 }

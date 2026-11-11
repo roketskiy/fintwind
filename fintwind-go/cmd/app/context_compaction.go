@@ -50,11 +50,11 @@ func (a *app) contextCompactControl(c *ui.Context) {
 		}
 	}
 	if message != "" {
-		ui.Text(c, message).FontSize(11).TextColor(palette.warningText).Wrap()
+		ui.Text(c, message).FontSize(uiPx(11)).TextColor(palette.warningText).Wrap()
 	}
 	contextAction(c, "context-compact", label).Disabled(!a.canCompactContext()).OnClick(a.requestContextCompaction)
 	if a.runtimes[a.detail.ID] == "" {
-		ui.Text(c, tr("Compaction unavailable")).FontSize(11).TextColor(palette.textTertiary)
+		ui.Text(c, tr("Compaction unavailable")).FontSize(uiPx(11)).TextColor(palette.textTertiary)
 	}
 }
 

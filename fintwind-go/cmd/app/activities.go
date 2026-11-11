@@ -64,7 +64,7 @@ func (a *app) activityCluster(c *ui.Context, blockIndex int, liveTurn bool, late
 				color = palette.text
 			}
 			ui.Row(c).MinWidth(0).Grow(1).Children(func() {
-				ui.Text(c, headerTitle).FontSize(13).FixedLineHeight(17).
+				ui.Text(c, headerTitle).FontSize(uiPx(13)).FixedLineHeight(uiPx(17)).
 					FontWeight(500).TextColor(color).SingleLine().Ellipsis("...")
 			})
 			chevron := "chevron-right"
@@ -123,7 +123,7 @@ func (a *app) activityCluster(c *ui.Context, blockIndex int, liveTurn bool, late
 					if more.Hovered() || more.Pressed() {
 						color = palette.text
 					}
-					ui.Text(c, label).FontSize(12).TextColor(color)
+					ui.Text(c, label).FontSize(uiPx(12)).TextColor(color)
 				})
 				if more.Clicked() {
 					if showingAll {
@@ -335,20 +335,20 @@ func (a *app) activityCard(c *ui.Context, merged mergedActivity) {
 			}
 		}
 		row.Children(func() {
-			ui.Text(c, label).FontSize(12.5).FixedLineHeight(17).
+			ui.Text(c, label).FontSize(uiPx(12.5)).FixedLineHeight(uiPx(17)).
 				FontWeight(600).TextColor(palette.textSecondary).Shrink(0)
 			if rowDetail != "" {
 				ui.Row(c).Grow(1).MinWidth(0).Children(func() {
-					ui.Text(c, rowDetail).FontSize(12.5).FixedLineHeight(17).
+					ui.Text(c, rowDetail).FontSize(uiPx(12.5)).FixedLineHeight(uiPx(17)).
 						TextColor(palette.textSecondary).SingleLine().Ellipsis("...")
 				})
 			} else {
 				ui.Row(c).Grow(1)
 			}
 			if hasStats {
-				ui.Text(c, fmt.Sprintf(tr("+%d"), statsAdditions)).FontSize(12.5).
+				ui.Text(c, fmt.Sprintf(tr("+%d"), statsAdditions)).FontSize(uiPx(12.5)).
 					TextColor(palette.successText).Shrink(0)
-				ui.Text(c, fmt.Sprintf("-%d", statsDeletions)).FontSize(12.5).
+				ui.Text(c, fmt.Sprintf("-%d", statsDeletions)).FontSize(uiPx(12.5)).
 					TextColor(palette.dangerText).Shrink(0)
 			}
 			if hasDetail {
@@ -392,8 +392,8 @@ func (a *app) activityCard(c *ui.Context, merged mergedActivity) {
 									header := ui.Row(c).Height(24).FillWidth().
 										Justify(ui.SpaceBetween).AlignItems(ui.Center)
 									header.Children(func() {
-										ui.Text(c, section.Label).FontSize(10.5).
-											FixedLineHeight(16).FontWeight(500).
+										ui.Text(c, section.Label).FontSize(uiPx(10.5)).
+											FixedLineHeight(uiPx(16)).FontWeight(500).
 											TextColor(palette.textSecondary)
 									})
 									if section.Content != "" {
@@ -413,13 +413,13 @@ func (a *app) activityCard(c *ui.Context, merged mergedActivity) {
 									}
 								}
 								if section.Content != "" {
-									ui.Text(c, section.Content).FontSize(10.5).FixedLineHeight(16).
+									ui.Text(c, section.Content).FontSize(codePx(10.5)).FixedLineHeight(codePx(16)).
 										Font(monoFont()).TextColor(palette.textSecondary).Wrap()
 								}
 							})
 						}
 						for _, imageURL := range activity.ImageURLs {
-							ui.Text(c, imageURL).FontSize(10.5).TextColor(palette.textTertiary).
+							ui.Text(c, imageURL).FontSize(uiPx(10.5)).TextColor(palette.textTertiary).
 								SingleLine().Ellipsis("...")
 						}
 					})
@@ -448,16 +448,16 @@ func (a *app) activityDiff(c *ui.Context, activity *model.ActivityItem) {
 							BorderWidth(0, 0, 1, 0).BorderColor(palette.border)
 						header.Children(func() {
 							ui.Row(c).Grow(1).MinWidth(0).Children(func() {
-								ui.Text(c, change.Path).FontSize(10.5).FixedLineHeight(16).
+								ui.Text(c, change.Path).FontSize(codePx(10.5)).FixedLineHeight(codePx(16)).
 									Font(monoFont()).FontWeight(500).
 									TextColor(palette.textSecondary).SingleLine().Ellipsis("...")
 							})
 							if change.Additions != nil {
-								ui.Text(c, fmt.Sprintf(tr("+%d"), *change.Additions)).FontSize(10.5).
+								ui.Text(c, fmt.Sprintf(tr("+%d"), *change.Additions)).FontSize(uiPx(10.5)).
 									TextColor(palette.successText)
 							}
 							if change.Deletions != nil {
-								ui.Text(c, fmt.Sprintf("-%d", *change.Deletions)).FontSize(10.5).
+								ui.Text(c, fmt.Sprintf("-%d", *change.Deletions)).FontSize(uiPx(10.5)).
 									TextColor(palette.dangerText)
 							}
 						})
@@ -528,11 +528,11 @@ func renderUnifiedDiff(c *ui.Context, patch string) {
 			ui.Row(c).FillWidth().Height(20).Background(palette.overlay).
 				AlignItems(ui.Center).Children(func() {
 				ui.Row(c).Width(width + 28).Shrink(0).Center().Children(func() {
-					ui.Text(c, "...").FontSize(10.5).FixedLineHeight(16).
+					ui.Text(c, "...").FontSize(codePx(10.5)).FixedLineHeight(codePx(16)).
 						Font(monoFont()).TextColor(palette.textMuted)
 				})
 				ui.Row(c).Grow(1).MinWidth(0).Children(func() {
-					ui.Text(c, line.Content).FontSize(10.5).FixedLineHeight(16).
+					ui.Text(c, line.Content).FontSize(codePx(10.5)).FixedLineHeight(codePx(16)).
 						Font(monoFont()).TextColor(palette.textMuted).
 						SingleLine().Ellipsis("...")
 				})
@@ -555,17 +555,17 @@ func renderUnifiedDiff(c *ui.Context, patch string) {
 		ui.Row(c).FillWidth().MinWidth(0).Height(20).AlignItems(ui.Center).
 			Background(background).Children(func() {
 			ui.Row(c).Width(width).Shrink(0).Padding(0, 8).Children(func() {
-				ui.Text(c, fmt.Sprintf(tr("%d"), line.Number)).FontSize(10.5).
-					FixedLineHeight(20).Font(monoFont()).TextAlign(ui.End).
+				ui.Text(c, fmt.Sprintf(tr("%d"), line.Number)).FontSize(codePx(10.5)).
+					FixedLineHeight(codePx(20)).Font(monoFont()).TextAlign(ui.End).
 					TextColor(palette.textTertiary)
 			})
 			ui.Row(c).Grow(1).MinWidth(0).Children(func() {
 				ui.Row(c).Width(10).Shrink(0).Children(func() {
-					ui.Text(c, sign).FontSize(10.5).FixedLineHeight(20).
+					ui.Text(c, sign).FontSize(codePx(10.5)).FixedLineHeight(codePx(20)).
 						Font(monoFont()).TextColor(signColor)
 				})
 				ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10, 0, 2).Children(func() {
-					ui.Text(c, line.Content).FontSize(10.5).FixedLineHeight(20).
+					ui.Text(c, line.Content).FontSize(codePx(10.5)).FixedLineHeight(codePx(20)).
 						Font(monoFont()).TextColor(palette.textSecondary).Wrap()
 				})
 			})
@@ -577,7 +577,7 @@ func renderUnifiedDiff(c *ui.Context, patch string) {
 			note = "1 more line · open Review to read the whole change"
 		}
 		ui.Row(c).FillWidth().MinWidth(0).Padding(4, 12).Children(func() {
-			ui.Text(c, note).FontSize(10.5).FixedLineHeight(16).
+			ui.Text(c, note).FontSize(uiPx(10.5)).FixedLineHeight(uiPx(16)).
 				Font(monoFont()).TextColor(palette.textTertiary).Wrap()
 		})
 	}

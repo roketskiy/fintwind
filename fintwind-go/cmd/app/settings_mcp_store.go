@@ -229,13 +229,13 @@ func (a *app) settingsMcpDetail(c *ui.Context) {
 		ui.Column(c).FillWidth().Padding(18, 24).Gap(14).Children(func() {
 			formTitle(c, server.Name)
 			mailEnabledBadge(c, server.Enabled, choice(server.Enabled, "Enabled", "Disabled"))
-			ui.Text(c, statusText).FontSize(12).TextColor(palette.textSecondary).Wrap()
+			ui.Text(c, statusText).FontSize(uiPx(12)).TextColor(palette.textSecondary).Wrap()
 			endpoint := server.URL
 			if server.Kind == "local" {
 				data, _ := json.Marshal(server.Command)
 				endpoint = string(data)
 			}
-			ui.Text(c, endpoint).Font(monoFont()).FontSize(11.5).TextColor(palette.textSecondary).Wrap()
+			ui.Text(c, endpoint).Font(monoFont()).FontSize(uiPx(11.5)).TextColor(palette.textSecondary).Wrap()
 			ui.Row(c).Gap(8).Children(func() {
 				componentTextButton(c, "mcp-edit", tr("Edit"), false).Disabled(st.mcp.writing).OnClick(func() { a.beginSettingsMcp(&server) })
 				componentTextButton(c, "mcp-toggle", choice(server.Enabled, tr("Disable"), tr("Enable")), false).Disabled(st.mcp.writing || st.mcp.uncertain).OnClick(func() {
@@ -250,7 +250,7 @@ func (a *app) settingsMcpDetail(c *ui.Context) {
 				componentTextButton(c, "mcp-remove", tr("Remove"), false).Disabled(st.mcp.writing || st.mcp.uncertain).OnClick(func() { st.removeConfirm = "mcp:" + server.Name })
 			})
 			if st.removeConfirm == "mcp:"+server.Name {
-				ui.Text(c, tr("Remove this MCP server configuration?")).FontSize(12).TextColor(palette.text)
+				ui.Text(c, tr("Remove this MCP server configuration?")).FontSize(uiPx(12)).TextColor(palette.text)
 				ui.Row(c).Gap(8).Children(func() {
 					componentTextButton(c, "mcp-remove-cancel", tr("Cancel"), false).OnClick(func() { st.removeConfirm = "" })
 					componentTextButton(c, "mcp-remove-confirm", tr("Remove server"), true).Disabled(st.mcp.writing).OnClick(func() {
@@ -269,7 +269,7 @@ func (a *app) settingsMcpDetail(c *ui.Context) {
 			}
 			settingsOperationStatus(c, st.mcp, "")
 			if st.mcpStatusError != "" {
-				ui.Text(c, st.mcpStatusError).FontSize(11).TextColor(palette.textSecondary).Wrap()
+				ui.Text(c, st.mcpStatusError).FontSize(uiPx(11)).TextColor(palette.textSecondary).Wrap()
 			}
 		})
 	})

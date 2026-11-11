@@ -151,8 +151,8 @@ func (a *app) messageEditCard(c *ui.Context, message *model.Message) {
 		blocked := operation != nil && operation.kind == "history-edit"
 		ui.Row(c).FillWidth().Padding(0, 12).Children(func() {
 			ui.TextAreaBase(c, &a.editDraft).FillWidth().Lines(1, 10).
-				MinHeight(46).FixedLineHeight(22).AutoFocus().
-				Label(tr("Edit message")).FontSize(14).TextColor(palette.text).Disabled(blocked).
+				MinHeight(46).FixedLineHeight(uiPx(22)).AutoFocus().
+				Label(tr("Edit message")).FontSize(uiPx(14)).TextColor(palette.text).Disabled(blocked).
 				OnTextKey(func(k ui.TextKey) bool {
 					if k.Key == ui.KeyEscape {
 						a.cancelMessageEdit()
@@ -166,7 +166,7 @@ func (a *app) messageEditCard(c *ui.Context, message *model.Message) {
 				})
 		})
 		if blocked {
-			ui.Text(c, operation.message).FontSize(12).TextColor(palette.textSecondary).Wrap().Padding(8, 12)
+			ui.Text(c, operation.message).FontSize(uiPx(12)).TextColor(palette.textSecondary).Wrap().Padding(8, 12)
 			if operation.phase == "unknown" {
 				componentTextButton(c, "history-reconcile", tr("Reload history"), false).OnClick(func() { a.reconcileMessageEdit(operation) })
 			} else if operation.phase == "draining" {
@@ -175,7 +175,7 @@ func (a *app) messageEditCard(c *ui.Context, message *model.Message) {
 			return
 		}
 		if a.editMessage != nil && a.editMessage.Confirm {
-			ui.Text(c, tr("Revert this turn and all later turns, including their file changes, then send the edited message?")).FontSize(12).TextColor(palette.warningText).Wrap().Padding(8, 12)
+			ui.Text(c, tr("Revert this turn and all later turns, including their file changes, then send the edited message?")).FontSize(uiPx(12)).TextColor(palette.warningText).Wrap().Padding(8, 12)
 			ui.Row(c).Gap(6).Padding(0, 12).Children(func() {
 				componentTextButton(c, "history-confirm-cancel", tr("Keep editing"), false).OnClick(func() { a.editMessage.Confirm = false })
 				componentTextButton(c, "history-confirm-send", tr("Revert and send"), true).OnClick(a.confirmMessageEdit)

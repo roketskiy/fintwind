@@ -401,7 +401,7 @@ func settingsOperationStatus(c *ui.Context, op settingsOperation, empty string) 
 		text = op.message
 	}
 	if text != "" {
-		ui.Text(c, text).FontSize(11).TextColor(palette.textSecondary).Wrap()
+		ui.Text(c, text).FontSize(uiPx(11)).TextColor(palette.textSecondary).Wrap()
 	}
 }
 

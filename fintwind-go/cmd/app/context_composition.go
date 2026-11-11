@@ -15,9 +15,9 @@ type contextComponent struct {
 }
 
 func contextComposition(c *ui.Context, usage *model.ContextUsage) {
-	ui.Text(c, tr("Composition (estimated)")).FontSize(11.5).TextColor(palette.textSecondary)
+	ui.Text(c, tr("Composition (estimated)")).FontSize(uiPx(11.5)).TextColor(palette.textSecondary)
 	if usage == nil || usage.Composition == nil || usage.Composition.Version != 2 {
-		ui.Text(c, tr("Composition not reported yet")).FontSize(11).TextColor(palette.textTertiary).Wrap()
+		ui.Text(c, tr("Composition not reported yet")).FontSize(uiPx(11)).TextColor(palette.textTertiary).Wrap()
 		return
 	}
 	composition := usage.Composition
@@ -88,6 +88,6 @@ func contextComposition(c *ui.Context, usage *model.ContextUsage) {
 		})
 	}
 	if composition.Incomplete {
-		ui.Text(c, tr("Partial estimate")).FontSize(11).TextColor(palette.textTertiary)
+		ui.Text(c, tr("Partial estimate")).FontSize(uiPx(11)).TextColor(palette.textTertiary)
 	}
 }

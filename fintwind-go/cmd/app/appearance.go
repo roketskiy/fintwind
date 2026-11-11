@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/plugins/terminal"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -53,26 +52,10 @@ func (a *app) applyAppearance() {
 		}
 	}
 	a.mdReady = false
-	a.post(func() {
-		if a.appearance != next {
-			return
-		}
-		for _, session := range a.native.sessions {
-			for _, tab := range session.terminals {
-				if tab.term != nil && !tab.closed {
-					tab.term.SetFont(terminal.Font{Family: next.codeFont, Size: 13 * next.codeScale / next.textScale})
-				}
-			}
-		}
-	})
+	a.retuneNativeTerminals()
 	if a.win != nil {
 		mygo.Theme.SetSource(choice(dark, mygo.ThemeDark, mygo.ThemeLight))
-		a.win.SetWindowButtonsTheme(choice(dark, mygo.ThemeDark, mygo.ThemeLight))
 	}
-}
-
-func codeMetric(value float32) float32 {
-	return value * activeAppearance.codeScale / activeAppearance.textScale
 }
 
 // schemeSwatchColors resolves one scheme's three swatch colors (canvas,
@@ -108,11 +91,14 @@ const (
 	lightBaseCanvas = 0xF7F7F7
 	lightBaseRaised = 0xF4F4F4
 	lightBaseAccent = 0xB25A39
+	// lightSidebar keeps every sidebar (sessions, settings, rail) one
+	// whiter white so they read as a single chrome.
+	lightSidebar = 0xF8F8F8
 )
 
 func applyLightPalette() {
 	palette.canvas, palette.surface = hex(lightBaseCanvas), hex(lightBaseCanvas)
-	palette.sidebar, palette.rail = hex(0xF3F3F3), hex(0xEAEAEA)
+	palette.sidebar, palette.rail = hex(lightSidebar), hex(lightSidebar)
 	palette.raised, palette.composer = hex(lightBaseRaised), hex(0xFAFAFA)
 	palette.inset, palette.terminal = hex(0xEFEFEF), hex(0xFFFFFF)
 	palette.border, palette.borderStrong = ui.RGBA(31, 31, 31, 0.12), ui.RGBA(31, 31, 31, 0.18)

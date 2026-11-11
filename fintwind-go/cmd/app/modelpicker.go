@@ -501,7 +501,7 @@ func (a *app) modelPickerMenu(c *ui.Context) {
 					icon(c, "search", modelPickerSearchIcon, palette.textSecondary)
 					ui.Row(c).Grow(1).MinWidth(0).Children(func() {
 						input := ui.TextAreaBase(c, &a.modelQuery).FillWidth().Lines(1, 1).
-							FontSize(modelPickerQueryText).FixedLineHeight(modelPickerQueryLine).
+							FontSize(uiPx(modelPickerQueryText)).FixedLineHeight(uiPx(modelPickerQueryLine)).
 							TextColor(palette.text).Placeholder(tr("Search models"))
 						// The filter keeps focus while open so typing always
 						// narrows; rows stay pointer-only.
@@ -666,7 +666,7 @@ func (a *app) modelPickerEmpty(c *ui.Context, searching bool) {
 		label = tr("Loading…")
 	}
 	ui.Row(c).FillWidth().MinHeight(modelPickerRowH).Center().Children(func() {
-		ui.Text(c, label).FontSize(modelPickerSubText).TextColor(palette.textMuted)
+		ui.Text(c, label).FontSize(uiPx(modelPickerSubText)).TextColor(palette.textMuted)
 	})
 }
 
@@ -701,9 +701,9 @@ func (a *app) modelPickerRow(c *ui.Context, id, name, secondary string, selected
 		}
 		choose.Children(func() {
 			ui.Column(c).Grow(1).MinWidth(0).Children(func() {
-				ui.Text(c, name).FontSize(modelPickerNameText).FontWeight(600).
+				ui.Text(c, name).FontSize(uiPx(modelPickerNameText)).FontWeight(600).
 					TextColor(palette.text).SingleLine().Ellipsis("...")
-				ui.Text(c, secondary).FontSize(modelPickerSubText).FixedLineHeight(16).
+				ui.Text(c, secondary).FontSize(uiPx(modelPickerSubText)).FixedLineHeight(uiPx(16)).
 					TextColor(palette.textTertiary).SingleLine().Ellipsis("...").Margin(4, 0, 0, 0)
 			})
 			if selected {
@@ -882,7 +882,7 @@ func (a *app) modelOptionChip(c *ui.Context, id, label string, options []provide
 		chip.Background(palette.overlayStrong)
 	}
 	chip.Children(func() {
-		ui.Text(c, label).FontSize(composerChipText).FixedLineHeight(16).
+		ui.Text(c, label).FontSize(uiPx(composerChipText)).FixedLineHeight(uiPx(16)).
 			TextColor(palette.textSecondary).SingleLine().Ellipsis("...")
 	})
 	if chip.Clicked() {
@@ -923,7 +923,7 @@ func (a *app) modelOptionChip(c *ui.Context, id, label string, options []provide
 							color = palette.text
 						}
 						ui.Row(c).Grow(1).MinWidth(0).Children(func() {
-							text := ui.Text(c, tr("Default")).FontSize(12.5).TextColor(color)
+							text := ui.Text(c, tr("Default")).FontSize(uiPx(12.5)).TextColor(color)
 							if defaultSelected {
 								text.FontWeight(500)
 							}
@@ -955,7 +955,7 @@ func (a *app) modelOptionChip(c *ui.Context, id, label string, options []provide
 							color = palette.text
 						}
 						ui.Row(c).Grow(1).MinWidth(0).Children(func() {
-							text := ui.Text(c, option.Label).FontSize(12.5).TextColor(color)
+							text := ui.Text(c, option.Label).FontSize(uiPx(12.5)).TextColor(color)
 							if selected {
 								text.FontWeight(500)
 							}

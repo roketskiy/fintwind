@@ -74,7 +74,7 @@ func (a *app) persistRenamedSession(id, title string, updatedAt uint64) {
 func (a *app) sessionRenameCell(c *ui.Context) {
 	ui.Row(c.Key("session-rename:" + a.renamingSession)).Grow(1).MinWidth(0).Children(func() {
 		input := field.Input(c, &a.renameDraft, field.InputProps{Size: theme.Small}).
-			Label(tr("Rename session")).FontSize(13.5).TextColor(palette.text).
+			Label(tr("Rename session")).FontSize(uiPx(13.5)).TextColor(palette.text).
 			AutoFocus().OnSubmit(a.commitSessionRename).
 			OnShortcut(0, ui.KeyEscape, a.cancelSessionRename)
 		if a.renameSelectAll {
@@ -271,7 +271,7 @@ func (a *app) projectRemoveConfirmBar(c *ui.Context, project *model.Project) {
 	strip.OnShortcut(0, ui.KeyEscape, func() { a.projectRemoveConfirm = "" })
 	strip.Children(func() {
 		ui.Text(c, tr("Remove “")+project.Name+tr("” from the app?")).
-			FontSize(12.5).FontWeight(600).TextColor(palette.text).Wrap()
+			FontSize(uiPx(12.5)).FontWeight(600).TextColor(palette.text).Wrap()
 		ui.Row(c).FillWidth().Gap(6).Justify(ui.End).Children(func() {
 			action.Button(c.Key("cancel"), tr("Cancel"), action.ButtonProps{Variant: action.Text, Size: theme.Small}).
 				OnClick(func() { a.projectRemoveConfirm = "" })

@@ -179,6 +179,6 @@ func (a *app) usageMeter(c *ui.Context) {
 			}
 			ui.Row(c).Width(w).Height(4).Radius(2).Background(fill)
 		})
-		ui.Text(c, label).FontSize(11.5).TextColor(palette.textSecondary)
+		ui.Text(c, label).FontSize(uiPx(11.5)).TextColor(palette.textSecondary)
 	})
 }

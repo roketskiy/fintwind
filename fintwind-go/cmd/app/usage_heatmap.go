@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -14,16 +13,14 @@ const (
 
 func (a *app) usageHeatmap(c *ui.Context) {
 	c.Key("usage-activity")
-	usagePanel(c, "history", "Activity", "26 weeks · Direct tokens", func() {
+	usagePanel(c, "history", tr("Activity"), tr("26 weeks · Direct tokens"), func() {
 		heat := a.usage.History.Heat
 		if len(heat) == 0 {
 			label := tr("No activity available")
-			if a.usage.History.Status == "loading" {
-				label = tr("Loading activity...")
-			} else if a.usage.History.Status == "error" {
+			if a.usage.History.Status == "error" {
 				label = tr("Activity unavailable")
 			}
-			ui.Text(c, label).FontSize(12).TextColor(palette.textTertiary)
+			ui.Text(c, label).FontSize(uiPx(12)).TextColor(palette.textTertiary)
 			return
 		}
 		if len(heat) > 182 {
@@ -52,7 +49,7 @@ func (a *app) usageHeatmap(c *ui.Context) {
 						label = tr("Fri")
 					}
 					ui.Row(c).Height(usageHeatCell).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, label).FontSize(10).TextColor(palette.textTertiary).SingleLine()
+						ui.Text(c, label).FontSize(uiPx(10)).TextColor(palette.textTertiary).SingleLine()
 					})
 				}
 			})
@@ -65,7 +62,7 @@ func (a *app) usageHeatmap(c *ui.Context) {
 						if week == 0 || monday.Month() != monday.AddDate(0, 0, -7).Month() {
 							month = monday.Format("Jan")
 						}
-						ui.Text(c, month).Height(16).FontSize(9.5).TextColor(palette.textTertiary).SingleLine().Shrink(0)
+						ui.Text(c, month).Height(16).FontSize(uiPx(9.5)).TextColor(palette.textTertiary).SingleLine().Shrink(0)
 						for weekday := 0; weekday < 7; weekday++ {
 							date := monday.AddDate(0, 0, weekday)
 							key := date.Format("2006-01-02")
@@ -83,16 +80,16 @@ func (a *app) usageHeatmap(c *ui.Context) {
 		})
 		ui.Row(c).FillWidth().Wrap().Gap(12).AlignItems(ui.Center).Children(func() {
 			if selected := a.usage.SelectedDay; selected != "" {
-				ui.Text(c, selected+tr(" selected")).Grow(1).MinWidth(0).FontSize(11).TextColor(palette.textSecondary)
+				ui.Text(c, selected+tr(" selected")).Grow(1).MinWidth(0).FontSize(uiPx(11)).TextColor(palette.textSecondary)
 			} else {
-				ui.Text(c, tr("Input + generated, excluding cache")).Grow(1).MinWidth(0).FontSize(10.5).TextColor(palette.textTertiary)
+				ui.Text(c, tr("Input + generated, excluding cache")).Grow(1).MinWidth(0).FontSize(uiPx(10.5)).TextColor(palette.textTertiary)
 			}
 			ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, tr("Less")).FontSize(10).TextColor(palette.textTertiary).Margin(0, 4, 0, 0)
+				ui.Text(c, tr("Less")).FontSize(uiPx(10)).TextColor(palette.textTertiary).Margin(0, 4, 0, 0)
 				for level := 0; level < 5; level++ {
 					ui.Box(c).Size(10, 10).Radius(2).Background(usageHeatColor(level)).Border(1, palette.border)
 				}
-				ui.Text(c, tr("More")).FontSize(10).TextColor(palette.textTertiary).Margin(0, 0, 0, 4)
+				ui.Text(c, tr("More")).FontSize(uiPx(10)).TextColor(palette.textTertiary).Margin(0, 0, 0, 4)
 			})
 		})
 	})
@@ -104,7 +101,7 @@ func (a *app) usageHeatCell(c *ui.Context, day usageHeatDay, maximum uint64) {
 	if day.Direct > 0 && maximum > 0 {
 		level = 1 + min(3, int(float64(day.Direct)/float64(maximum)*4))
 	}
-	tooltip := fmt.Sprintf("%s · %d direct tokens · %d cached tokens · %d sessions", key, day.Direct, day.Total-min(day.Total, day.Direct), day.Sessions)
+	tooltip := trf("%s · %d direct tokens · %d cached tokens · %d sessions", key, day.Direct, day.Total-min(day.Total, day.Direct), day.Sessions)
 	c.Key("usage-day-" + key)
 	cell := ui.ButtonBase(c).Label(key).Description(tooltip).Tooltip(tooltip).
 		Size(usageHeatCell, usageHeatCell).Radius(4).Background(usageHeatColor(level)).Border(1, palette.border)
@@ -116,7 +113,11 @@ func (a *app) usageHeatCell(c *ui.Context, day usageHeatDay, maximum uint64) {
 	cell.OnClick(func() {
 		a.usage.UI.chartIndex = -1
 		if a.usage.SelectedDay == key {
-			a.selectUsageDay("")
+			if a.usage.Range == "day" {
+				a.setUsageRange("30d")
+			} else {
+				a.selectUsageDay("")
+			}
 		} else {
 			a.selectUsageDay(key)
 		}

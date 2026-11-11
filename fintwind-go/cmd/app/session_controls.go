@@ -94,7 +94,7 @@ func sessionResponseNotice(c *ui.Context, response sessionReplyState) {
 	if response.Phase == "unknown" {
 		color = palette.warningText
 	}
-	ui.Text(c, response.Message).FontSize(11.5).TextColor(color).Wrap().Margin(8, 0, 0, 0)
+	ui.Text(c, response.Message).FontSize(uiPx(11.5)).TextColor(color).Wrap().Margin(8, 0, 0, 0)
 }
 
 func (a *app) sendSessionOptions(session *model.Session, state *sessionOptionsSync) {

@@ -64,6 +64,8 @@ func (a *app) initPreferences(layout layoutDefaults) {
 	}
 	a.settings.keepAwake, _ = prefs.values["keep_screen_awake"].(bool)
 	a.settings.mermaidVisual = settingsBool(prefs.values, "mermaid_visualization_enabled", false)
+	a.settings.termCopySelect = settingsBool(prefs.values, settingsKeyTerminalCopyOnSelect, false)
+	a.settings.termEnv, _ = prefs.values[settingsKeyTerminalEnv].(string)
 	a.settings.busySendSteer = a.preferenceString("busy_send_mode", "queue") == "steer"
 	SetLanguage(a.preferenceString(settingsKeyLanguage, languageValueSystem))
 	if prefs.loadError != "" {
@@ -161,6 +163,16 @@ func (a *app) savePreference(key string, value any) {
 				a.closeSettingsMenus()
 			}
 		}
+		switch key {
+		case settingsKeyUIFontFamily, settingsKeyCodeFontFamily, settingsKeyUITextScale, settingsKeyCodeTextScale:
+			// Rust applies font and size picks immediately; without this
+			// the minute appearance watcher would leave the UI stale.
+			a.applyAppearance()
+		case settingsKeyTerminalCopyOnSelect:
+			// Copy-on-select has a live setter; shell/env/right-click and
+			// scrollback take on new tabs.
+			a.retuneNativeTerminals()
+		}
 		if key == "keep_screen_awake" {
 			if enabled, ok := value.(bool); ok {
 				a.setPreferenceAwake(enabled)
@@ -176,7 +188,7 @@ func localPreferenceKey(key string) bool {
 		return true
 	}
 	switch key {
-	case settingsKeyTheme, settingsKeyThemeScheme, settingsKeyLanguage, settingsKeyUITextScale, settingsKeyCodeTextScale, settingsKeyUIFontFamily, settingsKeyCodeFontFamily, settingsKeyTranscriptWidth, "busy_send_mode", "mermaid_visualization_enabled", "keep_screen_awake":
+	case settingsKeyTheme, settingsKeyThemeScheme, settingsKeyLanguage, settingsKeyUITextScale, settingsKeyCodeTextScale, settingsKeyUIFontFamily, settingsKeyCodeFontFamily, settingsKeyTranscriptWidth, settingsKeyTerminalShell, settingsKeyTerminalEnv, settingsKeyTerminalRightClick, settingsKeyTerminalCopyOnSelect, settingsKeyTerminalScrollback, "busy_send_mode", "mermaid_visualization_enabled", "keep_screen_awake":
 		return true
 	}
 	return false

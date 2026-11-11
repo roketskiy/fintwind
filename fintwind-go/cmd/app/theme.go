@@ -123,12 +123,51 @@ func monoFont() string {
 	return activeAppearance.codeFont
 }
 
+// snapPx snaps a scaled size to quarter pixels so scaled text neither blurs
+// nor makes layout jitter, mirroring Rust ui_px/code_px.
+func snapPx(value float32) float32 {
+	return float32(math.Round(float64(value)*4) / 4)
+}
+
+// uiPx scales a UI text measurement by the interface scale, mirroring Rust
+// ui_px. At the default scale it returns the size unchanged.
+func uiPx(size float32) float32 {
+	scale := activeAppearance.textScale
+	if scale == 1 {
+		return size
+	}
+	return snapPx(size * scale)
+}
+
+// codePx scales a code text measurement by the code scale, mirroring Rust
+// code_px. It is independent of the interface scale: code stays put while
+// UI text grows. At the default scale it returns the size unchanged.
+func codePx(size float32) float32 {
+	scale := activeAppearance.codeScale
+	if scale == 1 {
+		return size
+	}
+	return snapPx(size * scale)
+}
+
+// terminalFontStack appends the generic monospace fallback to a coding
+// font: on machines without the configured font, shaping substitutes
+// per-glyph with wild advances that blow out the terminal's fixed grid
+// into huge letter spacing. The editor is unaffected (proportional runs),
+// only the grid measurement breaks.
+func terminalFontStack(family string) string {
+	if family == "" {
+		return "monospace"
+	}
+	return family + ", monospace"
+}
+
 // newMarkdownOptions builds the transcript's markdown metrics: body, user
-// bubble, or compact tool detail.
+// bubble, or compact tool detail. Font sizes follow the appearance scales
+// like Rust ui_px/code_px so markdown keeps working when SetZoom is gone.
 func newMarkdownOptions(c *ui.Context, fontSize, lineHeight, codeSize, codeLineHeight float32) markdown.Options {
-	codeScale := activeAppearance.codeScale / activeAppearance.textScale
-	codeSize *= codeScale
-	codeLineHeight *= codeScale
+	fontSize, lineHeight = uiPx(fontSize), uiPx(lineHeight)
+	codeSize, codeLineHeight = codePx(codeSize), codePx(codeLineHeight)
 	base := markdown.DefaultTheme(c.Theme())
 	theme := *base
 	theme.FontSize = fontSize
@@ -151,12 +190,43 @@ func newMarkdownOptions(c *ui.Context, fontSize, lineHeight, codeSize, codeLineH
 	return markdown.Options{Theme: &theme, Reveal: &markdown.Reveal{Unit: markdown.AtOnce, Fade: -1}}
 }
 
-// cardShadow is Fintwind's three outer lift layers: contact, mid, ambient.
+// cardShadow is Fintwind's lift for generic cards, mirroring Rust
+// card_shadow's geometry with a weaker hand: the bottom ambient layer is
+// pulled in (12/28 -> 8/20) and every alpha stepped down, especially the
+// bottom one. Alphas follow the appearance like Rust's dark/light split;
+// the old fixed dark alphas were heavy in light mode all day.
 func cardShadow(el ui.Element) ui.Element {
+	if activeAppearance.dark {
+		return el.
+			Shadow(0, 1, 1, 0, ui.RGBA(0, 0, 0, 0.22)).
+			Shadow(0, 2, 8, 0, ui.RGBA(0, 0, 0, 0.12)).
+			Shadow(0, 8, 20, 0, ui.RGBA(0, 0, 0, 0.07))
+	}
 	return el.
-		Shadow(0, 1, 1, 0, ui.RGBA(0, 0, 0, 0.30)).
-		Shadow(0, 2, 8, 0, ui.RGBA(0, 0, 0, 0.18)).
-		Shadow(0, 12, 28, 0, ui.RGBA(0, 0, 0, 0.12))
+		Shadow(0, 1, 1, 0, ui.RGBA(0, 0, 0, 0.05)).
+		Shadow(0, 2, 6, 0, ui.RGBA(0, 0, 0, 0.035)).
+		Shadow(0, 8, 20, 0, ui.RGBA(0, 0, 0, 0.045))
+}
+
+// sidebarShadow is Rust sidebar_shadow: one soft layer on the panel edge.
+func sidebarShadow(el ui.Element) ui.Element {
+	if activeAppearance.dark {
+		return el.Shadow(-1, 0, 5, 0, ui.RGBA(0, 0, 0, 0.18))
+	}
+	return el.Shadow(-1, 0, 5, 0, ui.RGBA(0, 0, 0, 0.06))
+}
+
+// workspaceShadow is Rust workspace_shadow: contact plus ambient layers
+// lifting the workspace over the sidebar.
+func workspaceShadow(el ui.Element) ui.Element {
+	if activeAppearance.dark {
+		return el.
+			Shadow(-1, 0, 2, 0, ui.RGBA(0, 0, 0, 0.032)).
+			Shadow(-2, 0, 4, 0, ui.RGBA(0, 0, 0, 0.02))
+	}
+	return el.
+		Shadow(-1, 0, 2, 0, ui.RGBA(0, 0, 0, 0.064)).
+		Shadow(-2, 0, 8, 0, ui.RGBA(0, 0, 0, 0.036))
 }
 
 func uiText(c *ui.Context) *ui.Theme {
@@ -184,7 +254,7 @@ func uiText(c *ui.Context) *ui.Theme {
 	t.Success = palette.success
 	t.Selection = palette.selection
 	t.Font = activeAppearance.font
-	t.FontSize = 13.5
+	t.FontSize = uiPx(13.5)
 	t.Radius = 8
 	return componentTheme(t)
 }

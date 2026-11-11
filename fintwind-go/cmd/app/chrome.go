@@ -61,7 +61,6 @@ func revealButton(c *ui.Context, enabled bool, tip string) bool {
 }
 
 func (a *app) topBar(c *ui.Context) {
-	bar := c.TitleBar()
 	ui.Row(c).FillWidth().Height(topbarHeight).Background(palette.rail).AlignItems(ui.Center).Children(func() {
 		ui.Row(c).Width(modeRailWidth).Height(topbarHeight).Justify(ui.Center).AlignItems(ui.Center).
 			DragWindow().Children(func() {
@@ -89,7 +88,7 @@ func (a *app) topBar(c *ui.Context) {
 			}
 		})
 		ui.Row(c).Grow(1).FillHeight().DragWindow()
-		ui.Row(c).Height(topbarHeight).Gap(0).Padding(0, bar.Right, 0, 0).
+		ui.Row(c).Height(topbarHeight).Gap(2).Padding(0, 8, 0, 0).
 			AlignItems(ui.Center).Children(func() {
 			rightEnabled := a.mode == modeSessions
 			rightTip := "Toggle right panel"
@@ -114,8 +113,46 @@ func (a *app) topBar(c *ui.Context) {
 			if rightEnabled && toggle.Clicked() {
 				a.rightOpen = !a.rightOpen
 			}
+			// Self-drawn window controls: the framework caption is hidden
+			// (HideWindowButtons), so these Lucide glyphs carry the color
+			// in every appearance, active or not.
+			if a.win != nil {
+				a.captionButton(c, "minus", tr("Minimize"), false, func() { a.win.Minimize() })
+				if a.win.IsMaximized() {
+					a.captionButton(c, "copy", tr("Restore"), false, func() { a.win.Unmaximize() })
+				} else {
+					a.captionButton(c, "square", tr("Maximize"), false, func() { a.win.Maximize() })
+				}
+				a.captionButton(c, "x", tr("Close"), true, func() { a.win.Close() })
+			}
 		})
 	})
+}
+
+// captionButton is one self-drawn window control: 28 square like the
+// other top bar buttons, textSecondary glyph, red hover for close.
+func (a *app) captionButton(c *ui.Context, name, tip string, danger bool, onClick func()) {
+	el := ui.ButtonBase(c).Label(tip).Tooltip(tip).Size(28, 28).Center().Radius(7)
+	hot := el.Hovered() || el.Pressed()
+	switch {
+	case danger && hot:
+		el.Background(hex(0xE81123))
+	case hot:
+		el.Background(palette.overlay)
+	}
+	if el.Pressed() && !danger {
+		el.Background(palette.overlayStrong)
+	}
+	glyph := palette.textSecondary
+	if danger && hot {
+		glyph = hex(0xFFFFFF)
+	}
+	el.Children(func() {
+		icon(c, name, 14, glyph)
+	})
+	if el.Clicked() {
+		onClick()
+	}
 }
 
 func (a *app) modeRail(c *ui.Context) {
@@ -139,15 +176,21 @@ func (a *app) modeRail(c *ui.Context) {
 				} else {
 					a.mode = entry.m
 				}
+				if entry.m == modeUsage {
+					a.defaultUsageDay()
+				}
 				a.cancelProviderAdd()
 			})
 		}
 		ui.Row(c).Grow(1)
 		services := c.Services()
+		// Bottom utilities never take the active ink: the secondary panel
+		// already shows where the user is, and a lone black glyph next to
+		// gray siblings reads as a wrong color.
 		a.railEntry(c, "info", "Help", false, func() {
 			services.OpenURL("https://github.com/roketskiy/fintwind#readme")
 		})
-		a.railEntry(c, "settings", "Settings", a.mode == modeSettings, func() {
+		a.railEntry(c, "settings", "Settings", false, func() {
 			a.openSettingsPage(a.settings.page)
 		})
 		ui.Row(c).Height(4)

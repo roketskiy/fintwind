@@ -18,15 +18,21 @@ const (
 	resizeHandleHitWidth = 8.0
 )
 
+// secondaryResizeHandle is the shared right-edge drag for every sidebar:
+// sessions, settings, source control and review all stretch the same way.
+func (a *app) secondaryResizeHandle(c *ui.Context, width *float32) {
+	handle := ui.Row(c).Absolute().Top(0).Right(0).Width(resizeHandleHitWidth).
+		FillHeight().Cursor(ui.CursorResizeEW)
+	if dx, _, ok := handle.Dragged(); ok && dx != 0 {
+		*width = min(max(*width+dx, sidebarMinWidth), sidebarMaxWidth)
+	}
+}
+
 // sidebarResizeHandle is the Sidebar target's edge: the sidebar's right
 // border. Dragging right widens it, like resize_panel_mouse_move's
 // start_width + delta.
 func (a *app) sidebarResizeHandle(c *ui.Context) {
-	handle := ui.Row(c).Absolute().Top(0).Right(0).Width(resizeHandleHitWidth).
-		FillHeight().Cursor(ui.CursorResizeEW)
-	if dx, _, ok := handle.Dragged(); ok && dx != 0 {
-		a.sidebarWidth = min(max(a.sidebarWidth+dx, sidebarMinWidth), sidebarMaxWidth)
-	}
+	a.secondaryResizeHandle(c, &a.sidebarWidth)
 }
 
 // rightPanelResizeHandle is the RightPanel target's edge: the panel's left

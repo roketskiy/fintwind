@@ -164,7 +164,7 @@ func (a *app) addProjectDialog(c *ui.Context) {
 				AlignItems(ui.Center).Children(func() {
 				icon(c, "folder-plus", 15, palette.text)
 				ui.Row(c).Grow(1).MinWidth(0).Children(func() {
-					ui.Text(c, tr("Add project")).FontSize(14).FontWeight(500).
+					ui.Text(c, tr("Add project")).FontSize(uiPx(14)).FontWeight(500).
 						TextColor(palette.text).SingleLine().Ellipsis("...")
 				})
 				close := ui.ButtonBase(c).Label(tr("Close")).Size(28, 28).
@@ -190,7 +190,7 @@ func (a *app) addProjectDialog(c *ui.Context) {
 				a.addProjectNameField(c, "Project name", &addProjectName, true)
 				a.addProjectTargetRow(c)
 				if addProjectErr != "" {
-					ui.Text(c, addProjectErr).FontSize(12).FixedLineHeight(17).
+					ui.Text(c, addProjectErr).FontSize(uiPx(12)).FixedLineHeight(uiPx(17)).
 						TextColor(palette.dangerText).Wrap()
 				}
 				a.addProjectFooter(c)
@@ -208,12 +208,12 @@ func (a *app) addProjectDialog(c *ui.Context) {
 // footer's Local chip). No remote tabs are ported.
 func (a *app) addProjectLocationRow(c *ui.Context) {
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, tr("Location")).FontSize(12).FontWeight(500).
+		ui.Text(c, tr("Location")).FontSize(uiPx(12)).FontWeight(500).
 			TextColor(palette.textSecondary)
 		ui.Row(c).Height(28).Padding(0, 10).Radius(7).Gap(7).
 			AlignItems(ui.Center).Background(palette.overlay).Children(func() {
 			icon(c, "laptop", 12, palette.textTertiary)
-			ui.Text(c, tr("This machine")).FontSize(12.5).
+			ui.Text(c, tr("This machine")).FontSize(uiPx(12.5)).
 				TextColor(palette.textSecondary)
 		})
 	})
@@ -228,7 +228,7 @@ func (a *app) addProjectPathRow(c *ui.Context) {
 			AlignItems(ui.Center)
 		field.Children(func() {
 			ui.TextInputBase(c, &addProjectPath).FillWidth().Font(monoFontFamily).
-				FontSize(12.5).FixedLineHeight(17).TextColor(palette.text).
+				FontSize(uiPx(12.5)).FixedLineHeight(uiPx(17)).TextColor(palette.text).
 				Placeholder(tr("Enter a path, or Browse for a folder")).
 				Label(tr("Project folder")).AutoFocus().OnTextKey(func(k ui.TextKey) bool {
 				if k.Key == ui.KeyEscape {
@@ -255,7 +255,7 @@ func (a *app) addProjectPathRow(c *ui.Context) {
 			}
 		}
 		browse.Children(func() {
-			ui.Text(c, tr("Browse")).FontSize(12.5).TextColor(palette.textSecondary)
+			ui.Text(c, tr("Browse")).FontSize(uiPx(12.5)).TextColor(palette.textSecondary)
 		})
 		if browse.Clicked() {
 			a.browseAddProjectFolder()
@@ -267,14 +267,14 @@ func (a *app) addProjectPathRow(c *ui.Context) {
 // directory base name. Any hand edit stops the Browse autofill.
 func (a *app) addProjectNameField(c *ui.Context, label string, value *string, markTouched bool) {
 	ui.Column(c).FillWidth().Gap(4).Children(func() {
-		ui.Text(c, label).FontSize(12).FontWeight(500).
+		ui.Text(c, label).FontSize(uiPx(12)).FontWeight(500).
 			TextColor(palette.textSecondary)
 		field := ui.Row(c).FillWidth().Height(32).Padding(0, 9).Radius(7).
 			Border(1, palette.borderStrong).Background(palette.inset).
 			AlignItems(ui.Center)
 		field.Children(func() {
-			ui.TextInputBase(c, value).FillWidth().FontSize(12.5).
-				FixedLineHeight(17).TextColor(palette.text).
+			ui.TextInputBase(c, value).FillWidth().FontSize(uiPx(12.5)).
+				FixedLineHeight(uiPx(17)).TextColor(palette.text).
 				Placeholder(tr("Project name")).Label(label).
 				OnTextKey(func(k ui.TextKey) bool {
 					if k.Key == ui.KeyEscape {
@@ -299,14 +299,14 @@ func (a *app) addProjectNameField(c *ui.Context, label string, value *string, ma
 func (a *app) addProjectTargetRow(c *ui.Context) {
 	target := strings.TrimSpace(addProjectPath)
 	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, tr("Add")).FontSize(12).TextColor(palette.textSecondary).Shrink(0)
+		ui.Text(c, tr("Add")).FontSize(uiPx(12)).TextColor(palette.textSecondary).Shrink(0)
 		ui.Row(c).Grow(1).MinWidth(0).Children(func() {
 			if target == "" {
-				ui.Text(c, tr("No folder selected")).FontSize(12).
+				ui.Text(c, tr("No folder selected")).FontSize(uiPx(12)).
 					TextColor(palette.textTertiary).SingleLine().Ellipsis("...")
 				return
 			}
-			ui.Text(c, target).FontSize(12).Font(monoFontFamily).
+			ui.Text(c, target).FontSize(uiPx(12)).Font(monoFontFamily).
 				TextColor(palette.text).SingleLine().Ellipsis("...")
 		})
 	})
@@ -331,7 +331,7 @@ func (a *app) addProjectFooter(c *ui.Context) {
 				}
 			}
 			cancel.Children(func() {
-				ui.Text(c, tr("Cancel")).FontSize(12.5).TextColor(palette.textSecondary)
+				ui.Text(c, tr("Cancel")).FontSize(uiPx(12.5)).TextColor(palette.textSecondary)
 			})
 			if cancel.Clicked() {
 				a.closeAddProject()
@@ -363,7 +363,7 @@ func (a *app) addProjectFooter(c *ui.Context) {
 				if addProjectBusy {
 					label = tr("Adding…")
 				}
-				ui.Text(c, label).FontSize(12.5).FontWeight(600).TextColor(color)
+				ui.Text(c, label).FontSize(uiPx(12.5)).FontWeight(600).TextColor(color)
 			})
 			if create.Clicked() {
 				a.submitAddProject()

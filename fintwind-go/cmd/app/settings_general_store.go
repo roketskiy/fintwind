@@ -25,6 +25,7 @@ func (a *app) applyDaemonSettings(values map[string]any) {
 	a.settings.busySendSteer = a.preferenceString("busy_send_mode", "queue") == "steer"
 	a.settings.busySendSel = choice(a.settings.busySendSteer, 1, 0)
 	a.settings.mermaidVisual = settingsBool(a.settings.preferences.values, "mermaid_visualization_enabled", false)
+	a.settings.termCopySelect = settingsBool(a.settings.preferences.values, settingsKeyTerminalCopyOnSelect, false)
 }
 
 type runtimeSettingsPreferences struct {
@@ -154,13 +155,4 @@ func (a *app) saveSettingsThreshold() {
 		return
 	}
 	a.saveDaemonSetting("auto_compact_threshold_tokens", value)
-}
-
-func (a *app) reloadGeneralSettings() {
-	if a.settings.backend.settingsWrite {
-		return
-	}
-	a.settingsLoaded = false
-	a.settings.backend.settingsUncertain = false
-	a.ensureSettingsLoaded()
 }

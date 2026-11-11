@@ -36,7 +36,6 @@ func wiringPreferences(ctx context.Context, r *wiringReport, round string) {
 	var markdownFonts []string
 	tt := ui.NewTester(func(c *ui.Context) {
 		a.applyAppearance()
-		c.SetZoom(activeAppearance.textScale)
 		c.SetTheme(uiText(c))
 		zoom = c.Zoom()
 		md := newMarkdownOptions(c, 13.5, 21, 11.5, 17.5)
@@ -69,9 +68,10 @@ func wiringPreferences(ctx context.Context, r *wiringReport, round string) {
 		return string(saved[settingsKeyTranscriptWidth]) == "960" && string(saved[settingsKeyUIFontFamily]) == `"Arial"` && string(saved[settingsKeyCodeFontFamily]) == `"Consolas"`
 	}))
 	tt.Frame()
-	r.check("interface scale drives native zoom", float32(1.25), zoom)
+	r.check("interface scale leaves native zoom alone", float32(1), zoom)
+	r.check("interface scale grows ui text", float32(15), uiPx(12))
 	r.check("interface and code fonts consumed", []string{"Arial", "Consolas"}, []string{activeAppearance.font, monoFont()})
-	r.check("independent code scale compensates interface zoom", float32(14.4), codeMetric(12))
+	r.check("code scale ignores interface scale", float32(18), codePx(12))
 	r.check("transcript width is applied", float32(960), transcriptWidth)
 	r.check("markdown consumes chosen families", []string{"Arial", "Consolas"}, markdownFonts)
 	restored := loadLocalSettings(directory)

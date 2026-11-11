@@ -269,7 +269,7 @@ func (a *app) pendingAttachmentChips(c *ui.Context) {
 					brandIcon(c, fileTypeIcon(attachment.Name), 12)
 				}
 				ui.Row(c).MinWidth(0).MaxWidth(180).Children(func() {
-					ui.Text(c, attachment.Name).FontSize(12).FixedLineHeight(16).
+					ui.Text(c, attachment.Name).FontSize(uiPx(12)).FixedLineHeight(uiPx(16)).
 						TextColor(palette.textSecondary).SingleLine().Ellipsis("...")
 				})
 				remove := ui.ButtonBase(c).Label(tr("Remove attachment")).Tooltip(tr("Remove")).
@@ -307,7 +307,7 @@ func (a *app) composerUploadNotice(c *ui.Context) {
 	}
 	ui.Row(c).FillWidth().Padding(0, 14, 6, 14).Gap(6).AlignItems(ui.Center).Children(func() {
 		icon(c, "loader-circle", 12, palette.textTertiary)
-		ui.Text(c, tr("Importing attachments…")).FontSize(11.5).TextColor(palette.textMuted)
+		ui.Text(c, tr("Importing attachments…")).FontSize(uiPx(11.5)).TextColor(palette.textMuted)
 	})
 }
 

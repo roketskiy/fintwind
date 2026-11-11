@@ -22,9 +22,9 @@ func (a *app) sessionDeleteConfirmLayer(c *ui.Context) {
 	}
 	c.Key("session-delete-dialog")
 	ui.Modal(c, &confirmation.open, func() {
-		ui.Text(c, tr("Delete task?")).FontSize(17).FontWeight(600).TextColor(palette.text)
-		ui.Text(c, confirmation.title).FontSize(13).TextColor(palette.text).Wrap()
-		ui.Text(c, tr("This also deletes its linked provider conversation. Project files are kept.")).FontSize(12).TextColor(palette.textSecondary).Wrap()
+		ui.Text(c, tr("Delete task?")).FontSize(uiPx(17)).FontWeight(600).TextColor(palette.text)
+		ui.Text(c, confirmation.title).FontSize(uiPx(13)).TextColor(palette.text).Wrap()
+		ui.Text(c, tr("This also deletes its linked provider conversation. Project files are kept.")).FontSize(uiPx(12)).TextColor(palette.textSecondary).Wrap()
 		ui.Row(c).FillWidth().Justify(ui.End).Gap(8).Children(func() {
 			componentTextButton(c, "session-delete-cancel", tr("Cancel"), false).OnClick(func() { a.sessionActions.confirmation = nil })
 			componentTextButton(c, "session-delete-confirm", tr("Delete task"), true).OnClick(func() {

@@ -23,6 +23,31 @@ if ($found.Count -gt 0) {
 } else {
     Write-Host '[STOP] no running MyGo instance'
 }
+# Direct-launched daily windows (run-*/fintwind-mygo.exe, no launcher Job)
+# are invisible to the match above; replace them too so the fresh window is
+# the only one. Scoped to this repo's daily dir: agent profiles, other
+# checkouts and installed Fintwind are untouched.
+$daily = Join-Path $root 'target/mygo/daily'
+$stray = @()
+foreach ($p in Get-Process -ErrorAction SilentlyContinue) {
+    if ($p.ProcessName -ne 'fintwind-mygo' -and $p.ProcessName -ne 'fintwind-daemon') {
+        continue
+    }
+    try { $path = $p.Path } catch { continue }
+    if ([string]::IsNullOrEmpty($path)) {
+        continue
+    }
+    if ($path.StartsWith($daily, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $stray += $p
+    }
+}
+if ($stray.Count -gt 0) {
+    foreach ($p in $stray) {
+        Stop-Process -Id $p.Id -Force
+    }
+    Start-Sleep -Seconds 2
+    Write-Host '[STOP] replaced' $stray.Count 'direct-launched daily window(s)'
+}
 
 Start-Process -FilePath (Join-Path $root 'MyGo.cmd') -WorkingDirectory $root -WindowStyle Minimized
 Write-Host '[START] MyGo.cmd launched'

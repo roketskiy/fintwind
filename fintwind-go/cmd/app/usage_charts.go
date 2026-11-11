@@ -20,7 +20,7 @@ func (a *app) usageTrend(c *ui.Context, view *usageViewData) {
 		a.usage.UI.chartHover = -1
 	}
 	c.Key("usage-trend-" + source)
-	usagePanel(c, "chart-column", "Daily usage", meta, func() {
+	usagePanel(c, "chart-column", tr("Daily usage"), meta, func() {
 		if len(view.Daily) == 0 {
 			usageChartEmpty(c)
 			return
@@ -41,19 +41,19 @@ func (a *app) usageTrend(c *ui.Context, view *usageViewData) {
 			day := view.Daily[0]
 			maximum = max(maximum, day.cache)
 			ui.Column(c).FillWidth().Gap(14).Padding(12, 0).Children(func() {
-				usageSingleDayLane(c, "Input", day.input, maximum, palette.accent)
-				usageSingleDayLane(c, "Generated", day.output, maximum, palette.success)
-				usageSingleDayLane(c, "Cached", day.cache, maximum, palette.textTertiary)
+				usageSingleDayLane(c, tr("Input"), day.input, maximum, palette.accent)
+				usageSingleDayLane(c, tr("Generated"), day.output, maximum, palette.success)
+				usageSingleDayLane(c, tr("Cached"), day.cache, maximum, palette.textTertiary)
 			})
 		} else if len(labels) <= 7 {
-			chart.Area(c, "Daily token usage", labels, []chart.Series{
-				{Name: "Input", Values: input}, {Name: "Generated", Values: output},
+			chart.Area(c, tr("Daily token usage"), labels, []chart.Series{
+				{Name: tr("Input"), Values: input}, {Name: tr("Generated"), Values: output},
 			}, &a.usage.UI.chartIndex, chart.AreaOptions{Height: 190, Format: "%.0f"})
 		} else {
 			a.usageSparseTrend(c, view.Daily, maximum)
 			ui.Row(c).Gap(18).Children(func() {
-				usageLegend(c, "Input", palette.accent)
-				usageLegend(c, "Generated", palette.success)
+				usageLegend(c, tr("Input"), palette.accent)
+				usageLegend(c, tr("Generated"), palette.success)
 			})
 		}
 		if len(view.Daily) > 1 {
@@ -77,9 +77,9 @@ func (a *app) usageTrend(c *ui.Context, view *usageViewData) {
 					return
 				}
 				day := view.Daily[at]
-				ui.Text(c, day.date.Format("Jan 2, 2006")).FontSize(11.5).TextColor(palette.textSecondary)
-				kit.Numeric(c, formatTokens(usageAdd(day.input, day.output))+" direct").FontFeatures("tnum").FontSize(11).TextColor(palette.text)
-				ui.Text(c, fmt.Sprintf(tr("%d sessions"), day.sessions)).FontSize(11).TextColor(palette.textTertiary)
+				ui.Text(c, day.date.Format("Jan 2, 2006")).FontSize(uiPx(11.5)).TextColor(palette.textSecondary)
+				kit.Numeric(c, trf("%s direct", formatTokens(usageAdd(day.input, day.output)))).FontFeatures("tnum").FontSize(uiPx(11)).TextColor(palette.text)
+				ui.Text(c, fmt.Sprintf(tr("%d sessions"), day.sessions)).FontSize(uiPx(11)).TextColor(palette.textTertiary)
 				componentTextButton(c, "usage-trend-select-day", tr("View day"), false).OnClick(func() {
 					a.usage.UI.chartIndex = -1
 					a.selectUsageDay(day.date.Format("2006-01-02"))
@@ -94,7 +94,7 @@ func usageSingleDayLane(c *ui.Context, label string, value, maximum uint64, colo
 		ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
 			usageLegend(c, label, color)
 			ui.Box(c).Grow(1)
-			kit.Numeric(c, formatTokens(value)).FontFeatures("tnum").FontSize(15).TextColor(palette.text)
+			kit.Numeric(c, formatTokens(value)).FontFeatures("tnum").FontSize(uiPx(15)).TextColor(palette.text)
 		})
 		fraction := float32(0)
 		if maximum > 0 {
@@ -119,7 +119,7 @@ func (a *app) usageSparseTrend(c *ui.Context, days []usageDayBucket, maximum uin
 	}
 	ticks := y.Ticks(4)
 	mc.Plot(c, mc.Axes{Left: ticks, Bottom: bottom, Label: func(_ mc.Side, tick mc.Tick) {
-		ui.Text(c, tick.Label).FontSize(10).TextColor(palette.textTertiary).NoWrap()
+		ui.Text(c, tick.Label).FontSize(uiPx(10)).TextColor(palette.textTertiary).NoWrap()
 	}}, func(area ui.Element) {
 		area.Label(tr("Daily token usage")).Draw(kit.Inside(0, func(p *ui.Painter, r ui.Rect) {
 			for _, tick := range ticks {
@@ -133,7 +133,7 @@ func (a *app) usageSparseTrend(c *ui.Context, days []usageDayBucket, maximum uin
 		}))
 		describe := func(i int) string {
 			day := days[i]
-			return fmt.Sprintf("%s · Input %s · Generated %s · Cached %s · %d sessions",
+			return trf("%s · Input %s · Generated %s · Cached %s · %d sessions",
 				day.date.Format("2006-01-02"), formatTokens(day.input), formatTokens(day.output), formatTokens(day.cache), day.sessions)
 		}
 		mc.Select(c, area, &a.usage.UI.chartHover, xs, describe)
@@ -158,13 +158,13 @@ func (a *app) usageSparseTrend(c *ui.Context, days []usageDayBucket, maximum uin
 func usageChartEmpty(c *ui.Context) {
 	ui.Column(c).FillWidth().Height(160).Center().Gap(10).Children(func() {
 		icon(c, "chart-column", 22, palette.textGhost)
-		ui.Text(c, tr("No direct token usage in this period")).FontSize(12).TextColor(palette.textTertiary)
+		ui.Text(c, tr("No direct token usage in this period")).FontSize(uiPx(12)).TextColor(palette.textTertiary)
 	})
 }
 
 func usageLegend(c *ui.Context, label string, color ui.Color) {
 	ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 		ui.Box(c).Size(7, 7).Radius(2).Background(color)
-		ui.Text(c, label).FontSize(11).TextColor(palette.textSecondary)
+		ui.Text(c, label).FontSize(uiPx(11)).TextColor(palette.textSecondary)
 	})
 }

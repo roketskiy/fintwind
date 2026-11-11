@@ -61,6 +61,22 @@ type settingsCatalogUIState struct {
 	marketCat    string
 	marketSel    string
 	marketList   ui.ListState
+	schedQuery        string
+	schedFilter       string
+	schedAdding       bool
+	schedTitle        string
+	schedPrompt       string
+	schedSchedule     string
+	schedTime         string
+	schedWeekdays     uint8
+	schedDate         string
+	schedInterval     string
+	schedTarget       string
+	schedProject      string
+	schedSession      string
+	schedModel        string
+	schedAccess       string
+	schedEnabled      bool
 }
 
 // settingsFilterWidth is the full inner width of each roster pane: the

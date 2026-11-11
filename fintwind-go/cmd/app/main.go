@@ -25,6 +25,7 @@ type mode int
 const (
 	modeSessions mode = iota
 	modeSourceControl
+	modeScheduled
 	modeUsage
 	modeSettings
 )
@@ -726,6 +727,8 @@ func (a *app) view(c *ui.Context) {
 					a.settingsSecondary(c)
 				}
 				a.settingsContent(c)
+			case modeScheduled:
+				a.scheduledSettings(c)
 			default:
 				a.mainArea(c)
 			}
@@ -743,6 +746,8 @@ func (a *app) mainArea(c *ui.Context) {
 		a.placeholder(c, "Settings", "settings")
 	case modeSourceControl:
 		a.sourceControlView(c)
+	case modeScheduled:
+		a.scheduledSettings(c)
 	case modeUsage:
 		a.usageView(c)
 	default:

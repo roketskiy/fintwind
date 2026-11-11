@@ -75,6 +75,12 @@ type settingsBackendState struct {
 	mcpStatuses                       []settingsMcpStatus
 	mcpStatusError                    string
 	removeConfirm                     string
+	schedTasks                        []scheduledTask
+	sched                             settingsOperation
+	schedSelected, schedEditing       string
+	schedDraftGeneration              uint64
+	schedList                         ui.ListState
+	schedDeleteConfirm                string
 	settingsWrite                     bool
 	settingsUncertain                 bool
 	auth                              settingsAuthState
@@ -215,6 +221,7 @@ func (a *app) syncSettingsSource() {
 	*st = settingsBackendState{source: source, generation: generation}
 	a.cancelProviderAdd()
 	a.settings.catalog.mcpAdding = false
+	a.settings.catalog.schedAdding = false
 	a.settingsLoaded, a.settings.loading = false, false
 	a.settingsRaw = nil
 }

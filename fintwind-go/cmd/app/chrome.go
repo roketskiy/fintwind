@@ -163,6 +163,7 @@ func (a *app) modeRail(c *ui.Context) {
 	}{
 		{modeSessions, "message-square-text", "Sessions"},
 		{modeSourceControl, "file-diff", "Source control"},
+		{modeScheduled, "clock", "Scheduled tasks"},
 		{modeUsage, "chart-column", "Usage"},
 	}
 	ui.Column(c).Width(modeRailWidth).FillHeight().Background(palette.rail).
@@ -173,6 +174,8 @@ func (a *app) modeRail(c *ui.Context) {
 			a.railEntry(c, entry.icon, entry.tip, a.mode == entry.m, func() {
 				if entry.m == modeSourceControl {
 					a.openSourceControl()
+				} else if entry.m == modeScheduled {
+					a.openScheduledTasks()
 				} else {
 					a.mode = entry.m
 				}

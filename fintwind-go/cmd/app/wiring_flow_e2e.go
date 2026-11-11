@@ -59,6 +59,7 @@ func wiringRun(ctx context.Context, r *wiringReport, round string) {
 	wiringSidebarHistory(ctx, r, root)
 	wiringSkills(ctx, r, a, f, root)
 	wiringMcpSettings(ctx, r, client, f, root)
+	wiringScheduledTasks(ctx, r, client, root, f)
 }
 
 func wiringApp(ctx context.Context, client *daemon.Client, root string) *app {

@@ -52,7 +52,7 @@ func (a *app) activityCluster(c *ui.Context, blockIndex int, liveTurn bool, late
 	liveReasoningID := a.liveReasoningID(activities, blockIndex, liveTurn)
 	state := a.clusterState(blockIndex, liveTurn, latestGroup)
 	expanded := state != clusterCollapsed
-	headerTitle := activityHeaderTitle(activities, liveTurn, liveReasoningID)
+	headerTitle := activityHeaderTitle(activities, expanded, liveTurn && latestGroup)
 
 	ui.Column(c).FillWidth().MinWidth(0).Gap(4).Children(func() {
 		header := ui.ButtonBase(c).Label(headerTitle).Opacity(activityOpacity).
@@ -618,81 +618,17 @@ func hunkNewStart(header string, fallback int) int {
 
 // ── Activity text helpers, from components.rs ──────────────────────────────
 
-func activityHeaderTitle(activities []model.ActivityItem, liveTurn bool, liveReasoningID string) string {
-	if liveTurn && len(activities) > 0 {
+func activityHeaderTitle(activities []model.ActivityItem, expanded, liveGroup bool) string {
+	if !expanded && liveGroup && len(activities) > 0 {
 		last := &activities[len(activities)-1]
-		if last.Reasoning != nil {
-			return reasoningActivityTitle(last.Reasoning, liveReasoningID != "" && liveReasoningID == last.ID || !last.Complete && !last.Failed)
-		}
-		return activityDisplayTitle(last)
-	}
-	return activitySummary(activities)
-}
-
-func activitySummary(activities []model.ActivityItem) string {
-	type count struct {
-		kind  string
-		total int
-	}
-	counts := make([]count, 0, 4)
-	for index := range activities {
-		kind := activities[index].Kind
-		found := false
-		for entry := range counts {
-			if counts[entry].kind == kind {
-				counts[entry].total++
-				found = true
-				break
-			}
-		}
-		if !found {
-			counts = append(counts, count{kind: kind, total: 1})
+		if !last.Complete && !last.Failed {
+			return activityDisplayTitle(last)
 		}
 	}
-	parts := make([]string, 0, len(counts))
-	for _, entry := range counts {
-		singular, plural := activityNoun(entry.kind)
-		noun := singular
-		if entry.total != 1 {
-			noun = plural
-		}
-		parts = append(parts, fmt.Sprintf(tr(noun), entry.total))
+	if len(activities) == 1 {
+		return fmt.Sprintf(tr("%d step"), len(activities))
 	}
-	running := false
-	for index := range activities {
-		if !activities[index].Complete {
-			running = true
-			break
-		}
-	}
-	joined := strings.Join(parts, " · ")
-	if running {
-		return fmt.Sprintf(tr("Running %s"), joined)
-	}
-	return fmt.Sprintf(tr("Ran %s"), joined)
-}
-
-func activityNoun(kind string) (string, string) {
-	switch kind {
-	case model.KindReasoning:
-		return "%d thought", "%d thoughts"
-	case model.KindCommand:
-		return "%d command", "%d commands"
-	case model.KindFileChange:
-		return "%d file edit", "%d file edits"
-	case model.KindFileRead:
-		return "%d file read", "%d file reads"
-	case model.KindFileSearch:
-		return "%d file search", "%d file searches"
-	case model.KindFileList:
-		return "%d file listing", "%d file listings"
-	case model.KindSearch:
-		return "%d search", "%d searches"
-	case model.KindPlan:
-		return "%d plan step", "%d plan steps"
-	default:
-		return "%d tool call", "%d tool calls"
-	}
+	return fmt.Sprintf(tr("%d steps"), len(activities))
 }
 
 func activityDisplayTitle(activity *model.ActivityItem) string {

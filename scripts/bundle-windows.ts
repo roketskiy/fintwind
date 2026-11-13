@@ -9,7 +9,7 @@
 //   bun scripts/bundle-windows.ts --channel=beta     # personal beta, local only
 //
 // Env:
-//   CARGO_TARGET_DIR              cargo target directory (default: target)
+//   FINTWIND_TARGET_DIR           output directory (default: target)
 //   FINTWIND_CHANNEL              fallback channel when --channel is absent
 //   FINTWIND_ISCC_EXE              explicit Inno Setup compiler path (optional)
 //   WINDOWS_CERTIFICATE           base64 Authenticode .pfx (optional)
@@ -20,7 +20,6 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-const packageName = "fintwind";
 const projectRoot = resolve(import.meta.dir, "..");
 
 type ReleaseChannel = "stable" | "beta";
@@ -40,16 +39,11 @@ if (channelInput !== "stable" && channelInput !== "beta") {
 const channel = channelInput as ReleaseChannel;
 const beta = channel === "beta";
 
-/** Installer naming uses the Rust arch name, so the installer carries
- *  that rather than the full triple. */
+/** Retain the established Windows artifact names. */
 const architectureForTarget: Record<string, string> = {
   "x86_64-pc-windows-msvc": "x86_64",
   "aarch64-pc-windows-msvc": "aarch64",
 };
-
-interface CargoMetadata {
-  packages: { name: string; version: string }[];
-}
 
 /** Inno Setup's compiler, however it was installed. */
 function findInnoSetupCompiler(): string {
@@ -165,29 +159,16 @@ if (process.platform !== "win32") {
   );
 }
 
-const targetDirectory = resolve(process.env.CARGO_TARGET_DIR || "target");
+const targetDirectory = resolve(process.env.FINTWIND_TARGET_DIR || "target");
 const releaseDirectory = join(targetDirectory, "release");
-
-const metadata = JSON.parse(
-  await $`cargo metadata --no-deps --format-version 1`.quiet().text(),
-) as CargoMetadata;
-const version = metadata.packages.find(
-  (candidate) => candidate.name === packageName,
-)?.version;
-if (!version) {
-  throw new Error(`Cargo package "${packageName}" was not found.`);
+const version = (await Bun.file(join(projectRoot, "VERSION")).text()).trim();
+if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
+  throw new Error("VERSION must contain a stable version (x.y.z)");
 }
-
-const hostLine = (await $`rustc -vV`.quiet().text())
-  .split("\n")
-  .find((line) => line.startsWith("host: "));
-const targetTriple = hostLine?.slice("host: ".length).trim();
-const architecture = targetTriple
-  ? architectureForTarget[targetTriple]
-  : undefined;
-if (!targetTriple || !architecture) {
-  throw new Error(`Unsupported Windows target ${targetTriple ?? "(unknown)"}`);
-}
+const targetTriple = process.arch === "x64" ? "x86_64-pc-windows-msvc" :
+  process.arch === "arm64" ? "aarch64-pc-windows-msvc" : "";
+const architecture = architectureForTarget[targetTriple];
+if (!architecture) throw new Error(`Unsupported Windows architecture ${process.arch}`);
 
 const channelSuffix = beta ? "-beta" : "";
 const packageDirectoryName = `fintwind-${version}${channelSuffix}-${targetTriple}`;
@@ -197,11 +178,11 @@ const installer = join(
   `fintwind-${version}${channelSuffix}-${architecture}-Setup.exe`,
 );
 
-if (beta) {
-  await $`cargo build --locked --release --features beta --package fintwind --bin fintwind --package fintwind-daemon --bin fintwind-daemon`;
-} else {
-  await $`cargo build --locked --release --package fintwind --bin fintwind --package fintwind-daemon --bin fintwind-daemon`;
-}
+await mkdir(releaseDirectory, { recursive: true });
+$.cwd(join(projectRoot, "fintwind-go"));
+await $`go build -mod=readonly -ldflags=-H=windowsgui -o ${join(releaseDirectory, "fintwind.exe")} ./cmd/app`;
+await $`go build -mod=readonly ${`-ldflags=-X=fintwind-go/internal/backend.Version=${version}`} -o ${join(releaseDirectory, "fintwind-daemon.exe")} ./cmd/daemon`;
+$.cwd(projectRoot);
 
 const staging = await mkdtemp(join(tmpdir(), "fintwind-bundle-"));
 try {

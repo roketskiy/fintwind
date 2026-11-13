@@ -556,6 +556,9 @@ func (a *app) commitSettingsMcp(roster []settingsMcpServer, selected string) {
 	draftGeneration, wasAdding, previousSelected := st.mcpDraftGeneration, a.settings.catalog.mcpAdding, st.mcpSelected
 	binary := a.settingsStr("opencode_binary_path", "opencode")
 	st.mcp.writing, st.mcp.err, st.mcp.message = true, "", ""
+	st.mcpLoadGeneration++
+	st.mcp.loading = false
+	a.cancelSettingsMcpStatus()
 	go func() {
 		ctx, cancel := context.WithTimeout(a.lifetime, 90*time.Second)
 		defer cancel()
@@ -570,14 +573,8 @@ func (a *app) commitSettingsMcp(roster []settingsMcpServer, selected string) {
 			err = errors.New("Saved MCP server list is missing from the response")
 		}
 		var reloadErr error
-		var statuses struct {
-			Statuses []settingsMcpStatus `json:"statuses"`
-		}
 		if err == nil {
 			reloadErr = settingsRequest(ctx, source, map[string]any{"type": "reloadOpenCodeServer", "binary": binary, "directory": source.directory}, "ack", nil)
-			if reloadErr == nil {
-				reloadErr = settingsRequest(ctx, source, map[string]any{"type": "listMcpServerStatuses", "binary": binary, "directory": source.directory}, "mcpServerStatuses", &statuses)
-			}
 		}
 		a.post(func() {
 			if !a.settingsSourceMatches(source, generation) {
@@ -590,7 +587,7 @@ func (a *app) commitSettingsMcp(roster []settingsMcpServer, selected string) {
 				st.mcp.uncertain = true
 				return
 			}
-			st.mcpServers, st.mcpRevision, st.mcpStatuses = body.Servers, body.Revision, statuses.Statuses
+			st.mcpServers, st.mcpRevision, st.mcpStatuses = body.Servers, body.Revision, nil
 			if st.mcpSelected == previousSelected {
 				st.mcpSelected = selected
 			}
@@ -620,6 +617,8 @@ func (a *app) commitSettingsMcp(roster []settingsMcpServer, selected string) {
 			st.mcp.message, st.mcpStatusError = tr("Saved"), ""
 			if reloadErr != nil {
 				st.mcpStatusError = "Configuration saved; connection status unavailable. " + reloadErr.Error()
+			} else {
+				a.refreshSettingsMcpStatuses()
 			}
 		})
 	}()
@@ -784,7 +783,6 @@ func (a *app) settingsMcpDetail(c *ui.Context) {
 					if knownErr != "" {
 						ui.Text(c, knownErr).FontSize(uiPx(10.5)).FixedLineHeight(uiPx(15)).TextColor(palette.textTertiary).Wrap()
 					}
-					ui.Text(c, tr("Connection status refreshes when this page opens or the server changes.")).FontSize(uiPx(10.5)).FixedLineHeight(uiPx(15)).TextColor(palette.textTertiary).Wrap()
 				})
 			}
 			// OAuth (remote only): tri-state mode, custom fields, sign-in.

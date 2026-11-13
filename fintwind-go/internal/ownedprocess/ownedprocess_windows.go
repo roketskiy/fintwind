@@ -9,6 +9,8 @@ import (
 	"strings"
 	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 var (
@@ -101,6 +103,23 @@ func Start(executable string, args []string, roundDir string, extra map[string]s
 // StartWithEnvironment contains a caller-selected profile in the same owned
 // Job as isolated verification. The complete environment must be explicit.
 func StartWithEnvironment(executable string, args []string, runDir, workingDir string, environment []string) (*Owned, error) {
+	return startWithEnvironmentInput(executable, args, runDir, workingDir, environment, nil)
+}
+
+func startWithEnvironmentInput(executable string, args []string, runDir, workingDir string, environment []string, input *os.File) (*Owned, error) {
+	return startWithStreams(executable, args, runDir, workingDir, environment, input, nil, nil)
+}
+
+// StartWithOutput directs output to caller-owned pipes without log files.
+// Only duplicated write handles are inherited; caller handles are unchanged.
+func StartWithOutput(executable string, args []string, runDir, workingDir string, environment []string, stdout, stderr *os.File) (*Owned, error) {
+	if stdout == nil || stderr == nil {
+		return nil, fmt.Errorf("ownedprocess: both output streams are required")
+	}
+	return startWithStreams(executable, args, runDir, workingDir, environment, nil, stdout, stderr)
+}
+
+func startWithStreams(executable string, args []string, runDir, workingDir string, environment []string, input, stdoutFile, stderrFile *os.File) (*Owned, error) {
 	if len(environment) == 0 {
 		return nil, fmt.Errorf("ownedprocess: an explicit nonempty environment is required")
 	}
@@ -136,27 +155,37 @@ func StartWithEnvironment(executable string, args []string, runDir, workingDir s
 		return nil, fmt.Errorf("ownedprocess: SetInformationJobObject failed: %v (size=%d)", errno, unsafe.Sizeof(limits))
 	}
 
-	stdoutPath := filepath.Join(roundDir, "child-stdout.log")
-	stderrPath := filepath.Join(roundDir, "child-stderr.log")
-	stdoutFile, err := inheritFile(stdoutPath)
-	if err != nil {
-		_, _, _ = procCloseHandle.Call(job)
-		return nil, err
+	stdoutPath, stderrPath := "", ""
+	if stdoutFile == nil {
+		stdoutPath = filepath.Join(roundDir, "child-stdout.log")
+		stdoutFile, err = inheritFile(stdoutPath)
+		if err != nil {
+			_, _, _ = procCloseHandle.Call(job)
+			return nil, err
+		}
+		defer stdoutFile.Close()
 	}
-	defer stdoutFile.Close()
-	stderrFile, err := inheritFile(stderrPath)
-	if err != nil {
-		_, _, _ = procCloseHandle.Call(job)
-		return nil, err
+	if stderrFile == nil {
+		stderrPath = filepath.Join(roundDir, "child-stderr.log")
+		stderrFile, err = inheritFile(stderrPath)
+		if err != nil {
+			_, _, _ = procCloseHandle.Call(job)
+			return nil, err
+		}
+		defer stderrFile.Close()
 	}
-	defer stderrFile.Close()
 
-	cmdLine, err := syscall.UTF16PtrFromString(commandLine(absolute, args))
+	application, line, lineErr := ptyCommand(absolute, args)
+	if lineErr != nil {
+		_, _, _ = procCloseHandle.Call(job)
+		return nil, lineErr
+	}
+	cmdLine, err := syscall.UTF16PtrFromString(line)
 	if err != nil {
 		_, _, _ = procCloseHandle.Call(job)
 		return nil, fmt.Errorf("ownedprocess: command line: %w", err)
 	}
-	appName, err := syscall.UTF16PtrFromString(absolute)
+	appName, err := syscall.UTF16PtrFromString(application)
 	if err != nil {
 		_, _, _ = procCloseHandle.Call(job)
 		return nil, fmt.Errorf("ownedprocess: executable: %w", err)
@@ -172,17 +201,56 @@ func StartWithEnvironment(executable string, args []string, runDir, workingDir s
 		envPtr = unsafe.Pointer(&envBlock[0])
 	}
 
-	startup := startupInfo{flags: startfUseStdHandles}
-	startup.cb = uint32(unsafe.Sizeof(startup))
-	startup.stdInput = syscall.Handle(0)
-	startup.stdOutput = syscall.Handle(stdoutFile.Fd())
-	startup.stdError = syscall.Handle(stderrFile.Fd())
+	// A precise handle list prevents a parallel child from retaining another
+	// flow's pipe write end and keeping its readers alive indefinitely.
+	var inherited []windows.Handle
+	defer func() {
+		for _, handle := range inherited {
+			_ = windows.CloseHandle(handle)
+		}
+	}()
+	duplicate := func(file *os.File) (windows.Handle, error) {
+		if file == nil {
+			return 0, nil
+		}
+		var handle windows.Handle
+		err := windows.DuplicateHandle(windows.CurrentProcess(), windows.Handle(file.Fd()), windows.CurrentProcess(), &handle, 0, true, windows.DUPLICATE_SAME_ACCESS)
+		if err == nil {
+			inherited = append(inherited, handle)
+		}
+		return handle, err
+	}
+	startup := windows.StartupInfoEx{}
+	startup.Cb = uint32(unsafe.Sizeof(startup))
+	startup.Flags = startfUseStdHandles
+	startup.StdInput, err = duplicate(input)
+	if err == nil {
+		startup.StdOutput, err = duplicate(stdoutFile)
+	}
+	if err == nil {
+		startup.StdErr, err = duplicate(stderrFile)
+	}
+	if err != nil {
+		_, _, _ = procCloseHandle.Call(job)
+		return nil, fmt.Errorf("ownedprocess: duplicate stdio handle: %w", err)
+	}
+	attributes, err := windows.NewProcThreadAttributeList(1)
+	if err != nil {
+		_, _, _ = procCloseHandle.Call(job)
+		return nil, err
+	}
+	defer attributes.Delete()
+	if err := attributes.Update(windows.PROC_THREAD_ATTRIBUTE_HANDLE_LIST, unsafe.Pointer(&inherited[0]), uintptr(len(inherited))*unsafe.Sizeof(inherited[0])); err != nil {
+		_, _, _ = procCloseHandle.Call(job)
+		return nil, err
+	}
+	startup.ProcThreadAttributeList = attributes.List()
 	var info processInfo
 	ok, _, errno = procCreateProcessW.Call(
 		uintptr(unsafe.Pointer(appName)),
 		uintptr(unsafe.Pointer(cmdLine)),
 		0, 0, 1,
-		uintptr(createSuspended|createNoWindow|createUnicodeEnvironment),
+		uintptr(createSuspended|createNoWindow|createUnicodeEnvironment|windows.EXTENDED_STARTUPINFO_PRESENT),
 		uintptr(envPtr),
 		uintptr(unsafe.Pointer(curDir)),
 		uintptr(unsafe.Pointer(&startup)),

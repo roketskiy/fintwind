@@ -3,12 +3,13 @@
 # tears the app and daemon down), then starts MyGo.cmd detached. The launcher
 # rebuilds the app from source on every launch, so a restart picks up the
 # latest code.
+param([switch]$ProbeProvider, [string]$ProbeSession = '')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 
 $found = @()
 foreach ($p in Get-CimInstance Win32_Process -Filter "Name = 'mygo.exe'") {
-    if ($p.CommandLine -match '--profile daily' -and $p.CommandLine -like "*$root*") {
+    if ($p -and $p.CommandLine -and $p.CommandLine -match '(?:^|\s)"?--profile"?\s+"?daily"?(?:\s|$)' -and $p.CommandLine -like "*$root*") {
         $found += $p
     }
 }
@@ -23,31 +24,15 @@ if ($found.Count -gt 0) {
 } else {
     Write-Host '[STOP] no running MyGo instance'
 }
-# Direct-launched daily windows (run-*/fintwind-mygo.exe, no launcher Job)
-# are invisible to the match above; replace them too so the fresh window is
-# the only one. Scoped to this repo's daily dir: agent profiles, other
-# checkouts and installed Fintwind are untouched.
-$daily = Join-Path $root 'target/mygo/daily'
-$stray = @()
-foreach ($p in Get-Process -ErrorAction SilentlyContinue) {
-    if ($p.ProcessName -ne 'fintwind-mygo' -and $p.ProcessName -ne 'fintwind-daemon') {
-        continue
-    }
-    try { $path = $p.Path } catch { continue }
-    if ([string]::IsNullOrEmpty($path)) {
-        continue
-    }
-    if ($path.StartsWith($daily, [System.StringComparison]::OrdinalIgnoreCase)) {
-        $stray += $p
-    }
-}
-if ($stray.Count -gt 0) {
-    foreach ($p in $stray) {
-        Stop-Process -Id $p.Id -Force
-    }
-    Start-Sleep -Seconds 2
-    Write-Host '[STOP] replaced' $stray.Count 'direct-launched daily window(s)'
-}
+# Do not claim directly launched app/daemon processes by name or path.
+# A conflicting data lock must make the new launcher fail, not widen cleanup.
 
-Start-Process -FilePath (Join-Path $root 'MyGo.cmd') -WorkingDirectory $root -WindowStyle Minimized
+$launchArgs = @()
+if ($ProbeProvider) { $launchArgs += '--probe-provider' }
+if ($ProbeSession) { $launchArgs += @('--probe-session', $ProbeSession) }
+if ($launchArgs.Count -gt 0) {
+    Start-Process -FilePath (Join-Path $root 'MyGo.cmd') -ArgumentList $launchArgs -WorkingDirectory $root -WindowStyle Minimized
+} else {
+    Start-Process -FilePath (Join-Path $root 'MyGo.cmd') -WorkingDirectory $root -WindowStyle Minimized
+}
 Write-Host '[START] MyGo.cmd launched'

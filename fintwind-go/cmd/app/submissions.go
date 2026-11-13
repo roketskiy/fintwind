@@ -37,6 +37,14 @@ func (a *app) submitSessionSubmission(submission sessionSubmission) bool {
 	if a.client == nil {
 		return false
 	}
+	if text == "/compact" && len(attachments) == 0 && a.detail != nil && a.detail.ID == submission.sessionID {
+		if !a.canCompactContext() {
+			a.status = tr("Context compaction is unavailable")
+			return false
+		}
+		a.requestContextCompaction()
+		return true
+	}
 	session := a.resolveSubmissionSession(submission.sessionID)
 	if session == nil {
 		return false
@@ -187,7 +195,11 @@ func (a *app) startIdleTurn(session *model.Session, text string, attachments []d
 	now := uint64(time.Now().Unix())
 	state.stopped = false
 	state.preparing = true
-	record := model.NewSubmissionRecord(session.ID, uuid.NewString(), text, submissionFilesForAttachments(attachments))
+	prompt := text
+	if project := a.projectForID(session.ProjectID); project != nil && project.Path == a.autocompleteDir {
+		prompt = expandSlashSubmission(text, a.slashIndex)
+	}
+	record := model.NewSubmissionRecord(session.ID, uuid.NewString(), prompt, submissionFilesForAttachments(attachments))
 	turnID := record.Receipt.ID
 	receiptRaw, err := json.Marshal(record.Receipt)
 	if err != nil {

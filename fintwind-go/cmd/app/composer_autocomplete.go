@@ -58,6 +58,7 @@ type slashCommand struct {
 	scope       string
 	hint        string
 	skill       bool
+	template    *string
 }
 
 // mentionFile is one ListProjectFiles entry.
@@ -283,13 +284,12 @@ func (a *app) refreshAutocompleteSources() {
 						Description  string  `json:"description"`
 						Scope        string  `json:"scope"`
 						ArgumentHint *string `json:"argument_hint"`
+						Template     *string `json:"template"`
 					} `json:"commands"`
 				}
 				if json.Unmarshal(envelope.Result, &result) == nil && result.Commands != nil {
 					seen := map[string]bool{}
-					for _, b := range commands {
-						seen[b.name] = true
-					}
+					commands = nil
 					for _, cmd := range result.Commands {
 						if cmd.Name == "" || seen[cmd.Name] {
 							continue
@@ -302,7 +302,8 @@ func (a *app) refreshAutocompleteSources() {
 						commands = append(commands, slashCommand{
 							name: cmd.Name, description: cmd.Description,
 							scope: cmd.Scope, hint: hint,
-							skill: cmd.Scope == "skill" || cmd.Scope == "Skill",
+							skill:    cmd.Scope == "skill" || cmd.Scope == "Skill",
+							template: cmd.Template,
 						})
 					}
 				}

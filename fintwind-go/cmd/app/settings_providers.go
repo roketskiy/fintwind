@@ -40,10 +40,7 @@ func (a *app) providerRefreshButton(c *ui.Context) {
 	}
 }
 
-// providerModelSection is the detail catalog card: a bordered r9 list under
-// an 8px top margin (render_builtin_provider_detail's models card). Rows are
-// two-line picker rows (13 semibold name over the 11.5 tertiary id);
-// empty/loading states reuse the Rust copy.
+// Keep the CLI catalog virtualized and share provider model row presentation.
 func (a *app) providerModelSection(c *ui.Context) {
 	var models []providerModel
 	if a.modelProbe != nil {
@@ -64,45 +61,25 @@ func (a *app) providerModelSection(c *ui.Context) {
 	}
 	current := a.currentProviderModelID()
 	c.Key("settings-provider-model-list")
-	ui.List(c, &a.settings.catalog.providerModelList, len(models)).FillWidth().Height(float32(min(len(models)*54, 400))).
-		Margin(8, 0, 0, 0).Radius(9).Border(1, palette.border).
+	ui.List(c, &a.settings.catalog.providerModelList, len(models)).FillWidth().Height(float32(min(len(models)*88, 440))).
+		Radius(6).
 		ItemKey(func(index int) any { return models[index].ID }).Rows(func(listRow ui.ListRow) {
 		c := listRow.Context
-		i := listRow.Index
-		m := models[i]
+		m := models[listRow.Index]
 		selected := m.ID == current
-		row := ui.ButtonBase(c).Label(m.ID).FillWidth().
-			Padding(8, 10).Gap(8).Justify(ui.Start).AlignItems(ui.Center)
-		if i > 0 {
-			row.BorderWidth(1, 0, 0, 0).BorderColor(palette.border)
+		provider := "opencode"
+		if m.SubProvider != nil {
+			provider = *m.SubProvider
 		}
-		if selected {
-			row.Background(palette.sidebarItem)
-		} else {
-			if row.Hovered() {
-				row.Background(palette.overlay)
-			}
-			if row.Pressed() {
-				row.Background(palette.overlayStrong)
-			}
-		}
-		row.Children(func() {
-			ui.Column(c).Grow(1).MinWidth(0).Children(func() {
-				ui.Text(c, m.Name).FontSize(uiPx(13)).FontWeight(600).
-					TextColor(palette.text).SingleLine().Ellipsis("...")
-				ui.Text(c, m.ID).FontSize(uiPx(11.5)).FixedLineHeight(uiPx(16)).
-					TextColor(palette.textTertiary).SingleLine().
-					Ellipsis("...").Margin(2, 0, 0, 0)
+		input, output := a.providerModelModalities(m.ID, provider, nil, nil)
+		providerModelListRow(c, m.ID, m.ID, m.Name, provider, nil, input, output, selected,
+			func() { a.settings.catalog.providerModelID = m.ID }, func() {
+				if m.IsDefault {
+					ui.Text(c, tr("Default")).FontSize(uiPx(10.5)).TextColor(palette.textTertiary)
+				}
+				if selected {
+					icon(c, "check", 12, palette.textTertiary)
+				}
 			})
-			if m.IsDefault {
-				mailEnabledBadge(c, true, "Default")
-			}
-			if selected {
-				icon(c, "check", 12, palette.textTertiary)
-			}
-		})
-		if row.Clicked() {
-			a.settings.catalog.providerModelID = m.ID
-		}
 	})
 }

@@ -3,12 +3,7 @@
   "type": "module",
   "scripts": {
     "mobile:build": "bun run --cwd mobile build",
-    "dev": "bun ./scripts/dev.ts",
-    "browser:poc": "bun ./scripts/browser-poc.ts",
-    "browser:collaboration": "bun ./scripts/browser-collaboration.ts",
-    "browser:tools": "cargo run --locked --package fintwind-core --example browser_tools_e2e",
-    "browser:tools-opencode": "bun ./scripts/browser-tools-opencode.ts",
-    "browser:tools-native": "bun ./scripts/browser-tools-native.ts",
+    "dev": "pwsh -NoLogo -NoProfile -File scripts/mygo.ps1 -Profile agent",
     "bundle": "bun ./scripts/bundle-windows.ts",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push"
@@ -19,7 +14,6 @@
     "@types/bun": "latest",
     "drizzle-kit": "^0.31.10",
     "drizzle-orm": "^0.45.2",
-    "playwright-core": "1.63.0",
     "typescript": "^7.0.2"
   }
 }

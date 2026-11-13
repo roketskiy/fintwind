@@ -233,9 +233,6 @@ func (a *app) handleDaemonNotice(event daemon.Event) {
 		if a.mode == modeScheduled {
 			a.loadSettingsScheduled()
 		}
-	case "browserRequest":
-		a.status = tr("Browser tools are not enabled")
-	case "browserCancel", "browserShareRejected":
 	case "shuttingDown":
 		a.connection.phase = "reconnecting"
 		a.status = tr("The daemon is shutting down")

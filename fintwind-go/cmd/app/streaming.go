@@ -365,7 +365,7 @@ func (a *app) reasoningForPart(session *model.Session, part string) *model.Activ
 
 func (a *app) applyUsageEvent(session *model.Session, payload json.RawMessage) error {
 	var usage struct {
-		Tokens       uint64  `json:"contextTokens"`
+		Tokens       *uint64 `json:"contextTokens"`
 		Window       *uint64 `json:"contextWindow"`
 		Resolved     bool    `json:"contextWindowResolved"`
 		Total        *uint64 `json:"sessionTotal"`
@@ -379,7 +379,9 @@ func (a *app) applyUsageEvent(session *model.Session, payload json.RawMessage) e
 		session.ContextUsage = &model.ContextUsage{}
 	}
 	current := session.ContextUsage
-	current.Tokens, current.Measured = usage.Tokens, true
+	if usage.Tokens != nil {
+		current.Tokens, current.Measured = *usage.Tokens, true
+	}
 	if usage.Resolved {
 		current.Window = usage.Window
 	}
@@ -599,6 +601,10 @@ func (a *app) sessionStatus(id string) string {
 // noteSessionEvent records the coarse live state of one session, including
 // background tabs whose transcript is not loaded.
 func (a *app) noteSessionEvent(event daemon.Event) {
+	switch event.Kind {
+	case "turnStarted", "turnFinished", "processExited", "providerBusy":
+		a.settings.backend.schedBoard.ready = false
+	}
 	session := a.summarySession(event.SessionID)
 	if session == nil {
 		return

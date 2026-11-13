@@ -15,13 +15,13 @@ import (
 // and writes are kept.
 
 type schedLaunch struct {
-	Model            string  `json:"model"`
-	RuntimeMode      string  `json:"runtimeMode"`
-	InteractionMode  string  `json:"interactionMode,omitempty"`
-	ReasoningEffort  *string `json:"reasoningEffort,omitempty"`
-	ServiceTier      *string `json:"serviceTier,omitempty"`
-	ContextWindow    *string `json:"contextWindow,omitempty"`
-	AgentPreset      *string `json:"agentPreset,omitempty"`
+	Model           string  `json:"model"`
+	RuntimeMode     string  `json:"runtimeMode"`
+	InteractionMode string  `json:"interactionMode,omitempty"`
+	ReasoningEffort *string `json:"reasoningEffort,omitempty"`
+	ServiceTier     *string `json:"serviceTier,omitempty"`
+	ContextWindow   *string `json:"contextWindow,omitempty"`
+	AgentPreset     *string `json:"agentPreset,omitempty"`
 }
 
 type schedSchedule struct {
@@ -35,11 +35,11 @@ type schedSchedule struct {
 
 func (s *schedSchedule) UnmarshalJSON(data []byte) error {
 	type wire struct {
-		Kind         string           `json:"kind"`
-		IntervalSecs uint32           `json:"intervalSecs"`
-		At           json.RawMessage  `json:"at"`
-		Weekdays     uint8            `json:"weekdays"`
-		Timezone     *string          `json:"timezone"`
+		Kind         string          `json:"kind"`
+		IntervalSecs uint32          `json:"intervalSecs"`
+		At           json.RawMessage `json:"at"`
+		Weekdays     uint8           `json:"weekdays"`
+		Timezone     *string         `json:"timezone"`
 	}
 	var w wire
 	if err := json.Unmarshal(data, &w); err != nil {
@@ -83,11 +83,11 @@ func (s schedSchedule) MarshalJSON() ([]byte, error) {
 }
 
 type schedTarget struct {
-	Kind        string          `json:"kind"`
-	ProjectID   string          `json:"projectId,omitempty"`
-	Launch      schedLaunch     `json:"launch,omitempty"`
-	Workspace   json.RawMessage `json:"workspace,omitempty"`
-	SessionID   string          `json:"sessionId,omitempty"`
+	Kind      string          `json:"kind"`
+	ProjectID string          `json:"projectId,omitempty"`
+	Launch    schedLaunch     `json:"launch,omitempty"`
+	Workspace json.RawMessage `json:"workspace,omitempty"`
+	SessionID string          `json:"sessionId,omitempty"`
 }
 
 func (t *schedTarget) UnmarshalJSON(data []byte) error {
@@ -130,23 +130,25 @@ type schedPending struct {
 }
 
 type schedOutcome struct {
-	Outcome    string  `json:"outcome"`
-	SessionID  *string `json:"sessionId"`
-	Reason     string  `json:"reason"`
+	Outcome      string  `json:"outcome"`
+	SessionID    *string `json:"sessionId"`
+	SubmissionID *string `json:"submissionId,omitempty"`
+	Reason       string  `json:"reason"`
 }
 
 func (o *schedOutcome) UnmarshalJSON(data []byte) error {
 	type wire struct {
-		Outcome          string  `json:"outcome"`
-		SessionID        *string `json:"sessionId"`
-		SubmissionID     *string `json:"submissionId"`
-		Reason           string  `json:"reason"`
+		Outcome      string  `json:"outcome"`
+		SessionID    *string `json:"sessionId"`
+		SubmissionID *string `json:"submissionId"`
+		Reason       string  `json:"reason"`
 	}
 	var w wire
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
 	o.Outcome, o.SessionID, o.Reason = w.Outcome, w.SessionID, w.Reason
+	o.SubmissionID = w.SubmissionID
 	return nil
 }
 
@@ -495,7 +497,7 @@ func schedDraft(title, prompt, schedule, clock string, weekdays uint8, date, int
 		}
 		draft["target"] = map[string]any{
 			"kind": "newSession", "projectId": projectID,
-			"launch": map[string]any{"model": strings.TrimSpace(model), "runtimeMode": schedAccessMode(access)},
+			"launch":    map[string]any{"model": strings.TrimSpace(model), "runtimeMode": schedAccessMode(access)},
 			"workspace": workspaceValue,
 		}
 	}

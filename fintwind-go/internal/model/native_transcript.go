@@ -12,4 +12,7 @@ type NativeTranscript struct {
 	Messages []Message         `json:"messages"`
 	Blocks   []TranscriptBlock `json:"blocks"`
 	Turns    []AgentTurn       `json:"turns"`
+	// DetachedShells is adapter-only discovery evidence, never part of the
+	// public transcript wire. A live shell row must still verify ownership.
+	DetachedShells []BackgroundWorkItem `json:"-"`
 }

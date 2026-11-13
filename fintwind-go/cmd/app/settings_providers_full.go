@@ -250,7 +250,7 @@ func (a *app) providersListPaneFull(c *ui.Context) {
 				a.cancelProviderAdd()
 				a.selectProvider(provider.ID)
 			}, func() { providerTile(c, settingsProviderName(provider), selected) }, func() {
-				mailEnabledBadge(c, provider.Enabled, choice(provider.Enabled, tr("Enabled"), tr("Disabled")))
+				mailStatusDot(c, provider.Enabled)
 			})
 		})
 	})
@@ -259,24 +259,6 @@ func (a *app) providersListPaneFull(c *ui.Context) {
 			a.beginProviderForm()
 		}
 	})
-	caption := tr("Not loaded")
-	if backend.provider.loaded {
-		switch len(backend.providers) {
-		case 0:
-			caption = tr("No custom providers yet")
-		case 1:
-			caption = trf("%d custom provider", 1)
-			if caption == "%d custom provider" {
-				caption = fmt.Sprintf("%d custom provider", 1)
-			}
-		default:
-			caption = fmt.Sprintf(tr("%d custom providers"), len(backend.providers))
-			if strings.Contains(caption, "%!") {
-				caption = fmt.Sprintf("%d custom providers", len(backend.providers))
-			}
-		}
-	}
-	mailFooter(c, caption, false)
 }
 
 // --- detail dispatch ---
@@ -305,7 +287,7 @@ func (a *app) providersDetailFull(c *ui.Context) {
 
 func (a *app) opencodeProviderDetail(c *ui.Context) {
 	ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
-		ui.Column(c).FillWidth().Padding(18, 24, 24, 24).Children(func() {
+		ui.Column(c).FillWidth().Padding(18, 24, 24, 24).Gap(14).Children(func() {
 			ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
 				mailDetailTile(c, "bot", 17)
 				ui.Column(c).Grow(1).MinWidth(0).Children(func() {
@@ -324,15 +306,17 @@ func (a *app) opencodeProviderDetail(c *ui.Context) {
 					}
 				}
 				mailEnabledBadge(c, installed, status)
-				a.providerRefreshButton(c)
 			})
-			ui.Text(c, tr("fintwind drives agent CLIs installed on this computer. Install or sign in with each agent's own CLI, then refresh")).FontSize(uiPx(11.5)).TextColor(palette.textSecondary).Wrap().Margin(14, 0, 0, 0)
-			ui.Row(c).FillWidth().Gap(8).Margin(12, 0, 0, 0).AlignItems(ui.Center).Children(func() {
-				icon(c, "info", 12, palette.textTertiary)
-				ui.Text(c, tr("The endpoint and API key are managed by the opencode CLI (opencode auth login); this roster is OpenCode's own configuration file.")).FontSize(uiPx(10.5)).TextColor(palette.textSecondary).Wrap()
+			providerInfoCard(c, "opencode-login", "key", "Login information", func() { a.providerRefreshButton(c) }, func() {
+				ui.Text(c, tr("fintwind drives agent CLIs installed on this computer. Install or sign in with each agent's own CLI, then refresh")).FontSize(uiPx(11.5)).TextColor(palette.textSecondary).Wrap().Margin(14, 0, 0, 0)
+				ui.Row(c).FillWidth().Gap(8).Margin(12, 0, 0, 0).AlignItems(ui.Center).Children(func() {
+					icon(c, "info", 12, palette.textTertiary)
+					ui.Text(c, tr("The endpoint and API key are managed by the opencode CLI (opencode auth login); this roster is OpenCode's own configuration file.")).FontSize(uiPx(10.5)).TextColor(palette.textSecondary).Wrap()
+				})
 			})
-			a.providerModelSection(c)
-			a.settingsBuiltinIntegrations(c)
+			providerInfoCard(c, "opencode-models", "package", "Model information", nil, func() {
+				a.providerModelSection(c)
+			})
 		})
 	})
 }
@@ -359,7 +343,10 @@ func (a *app) customProviderDetail(c *ui.Context, provider settingsProvider) {
 					}
 					ui.Text(c, provider.ID).FontSize(uiPx(10.5)).TextColor(palette.textTertiary).SingleLine().Ellipsis("...")
 				})
-				mailEnabledBadge(c, provider.Enabled, choice(provider.Enabled, tr("Enabled"), tr("Disabled")))
+				a.providerEnabledSwitch(c, provider)
+				if componentIconButton(c, "provider-remove", "trash", true).Label(tr("Delete provider")).Disabled(st.provider.writing).Clicked() {
+					st.removeConfirm = "provider:" + provider.ID
+				}
 			})
 			if st.providerRenaming {
 				ui.Row(c).Gap(8).Children(func() {
@@ -371,46 +358,40 @@ func (a *app) customProviderDetail(c *ui.Context, provider settingsProvider) {
 					}
 				})
 			}
-			ui.Row(c).Gap(8).Wrap().Children(func() {
-				toggleLabel := tr("Disable")
-				if !provider.Enabled {
-					toggleLabel = tr("Enable")
-				}
-				if componentTextButton(c, "provider-toggle", toggleLabel, false).Disabled(st.provider.writing).Clicked() {
-					a.toggleCustomProvider(provider.ID)
-				}
+			providerInfoCard(c, "provider-login", "key", "Login information", func() {
 				if componentTextButton(c, "provider-probe", tr("Test connection"), false).Disabled(st.provider.writing).Clicked() {
 					a.probeCustomConnectivity(provider.ID)
 				}
-				if componentTextButton(c, "provider-fetch", tr("Fetch models"), false).Disabled(st.provider.writing).Clicked() {
-					a.fetchCustomModels(provider.ID)
+			}, func() {
+				a.customProviderFields(c, provider)
+				a.providerLatencyControls(c, provider)
+				if st.removeConfirm == "provider:"+provider.ID {
+					ui.Text(c, tr("Remove this provider configuration?")).FontSize(uiPx(12)).TextColor(palette.text)
+					ui.Row(c).Gap(8).Children(func() {
+						if componentTextButton(c, "provider-remove-cancel", tr("Cancel"), false).Clicked() {
+							st.removeConfirm = ""
+						}
+						if componentTextButton(c, "provider-remove-confirm", tr("Delete provider"), true).Disabled(st.provider.writing).Clicked() {
+							a.deleteCustomProvider(provider.ID)
+						}
+					})
 				}
-				if componentTextButton(c, "provider-remove", tr("Delete provider"), false).Disabled(st.provider.writing).Clicked() {
-					st.removeConfirm = "provider:" + provider.ID
+				if state, ok := st.providerConnectivity[provider.ID]; ok {
+					if state.testing {
+						ui.Text(c, tr("Testing…")).FontSize(uiPx(11)).TextColor(palette.textSecondary)
+					} else if state.reachable {
+						ui.Text(c, trf("Reachable · %s · %d models", formatProbeLatency(time.Duration(state.latencyMs)*time.Millisecond), state.models)).FontSize(uiPx(11)).TextColor(palette.textSecondary)
+					} else if state.err != "" {
+						ui.Text(c, trf("Unreachable: %s", state.err)).FontSize(uiPx(11)).TextColor(palette.textSecondary).Wrap()
+					}
 				}
 			})
-			if st.removeConfirm == "provider:"+provider.ID {
-				ui.Text(c, tr("Remove this provider configuration?")).FontSize(uiPx(12)).TextColor(palette.text)
-				ui.Row(c).Gap(8).Children(func() {
-					if componentTextButton(c, "provider-remove-cancel", tr("Cancel"), false).Clicked() {
-						st.removeConfirm = ""
-					}
-					if componentTextButton(c, "provider-remove-confirm", tr("Delete provider"), true).Disabled(st.provider.writing).Clicked() {
-						a.deleteCustomProvider(provider.ID)
-					}
+			providerInfoCard(c, "provider-models", "package", "Model information", func() {
+				componentTextButton(c, "provider-fetch", tr("Fetch models"), false).Disabled(st.provider.writing).OnClick(func() { a.fetchCustomModels(provider.ID) })
+				componentTextButton(c, "provider-model-add", tr("Add model"), false).Disabled(st.provider.writing).OnClick(func() {
+					st.providerModelEditor = &providerModelEditorState{add: true, input: map[string]bool{"text": true}, output: map[string]bool{"text": true}}
 				})
-			}
-			if state, ok := st.providerConnectivity[provider.ID]; ok {
-				if state.testing {
-					ui.Text(c, tr("Testing…")).FontSize(uiPx(11)).TextColor(palette.textSecondary)
-				} else if state.reachable {
-					ui.Text(c, trf("Reachable · %s · %d models", formatProbeLatency(time.Duration(state.latencyMs)*time.Millisecond), state.models)).FontSize(uiPx(11)).TextColor(palette.textSecondary)
-				} else if state.err != "" {
-					ui.Text(c, trf("Unreachable: %s", state.err)).FontSize(uiPx(11)).TextColor(palette.textSecondary).Wrap()
-				}
-			}
-			a.customProviderFields(c, provider)
-			a.customProviderModelsSection(c, provider)
+			}, func() { a.customProviderModelsSection(c, provider) })
 			settingsOperationStatus(c, st.provider, "")
 		})
 	})
@@ -443,39 +424,24 @@ func (a *app) customProviderFields(c *ui.Context, provider settingsProvider) {
 	ui.Column(c).FillWidth().Gap(6).Children(func() {
 		ui.Text(c, tr("API Key")).FontSize(uiPx(11)).FontWeight(500).TextColor(palette.text)
 		authorized := a.providerIsAuthorized(provider.ID)
-		if !st.providerKeyRevealed {
-			masked := tr("Enter API key")
-			if st.providerKeyDraft != "" {
-				masked = strings.Repeat("•", providerMin(len(st.providerKeyDraft), 36))
-			} else if authorized {
-				masked = tr("Authorized")
-			}
-			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, masked).Grow(1).FontSize(uiPx(11)).TextColor(palette.textSecondary).SingleLine().Ellipsis("...")
-				if componentIconButton(c, "provider-key-reveal", "eye", true).Label(tr("Reveal")).Clicked() {
-					st.providerKeyRevealed = true
-				}
-			})
-			if authorized && st.providerKeyDraft == "" {
-				if componentTextButton(c, "provider-logout", tr("Log out"), false).Clicked() {
-					a.disconnectSettingsIntegration(provider.ID)
-				}
-			}
-		} else {
-			formSecretField(c, "provider-key-edit", tr("API Key"), &st.providerKeyDraft, &st.providerKeyRevealed)
+		a.providerPasswordInput(c, provider, authorized)
+		dirty := st.providerKeyDraft != settingsProviderAPIKey(provider.Entry, native)
+		if dirty || authorized {
 			ui.Row(c).Gap(8).Children(func() {
-				if componentTextButton(c, "provider-key-save", tr("Save"), true).Disabled(st.provider.writing).Clicked() {
-					a.saveCustomProviderKey(provider.ID, strings.TrimSpace(st.providerKeyDraft))
+				if dirty {
+					componentTextButton(c, "provider-key-save", tr("Save"), true).Disabled(st.provider.writing || strings.TrimSpace(st.providerKeyDraft) == "").OnClick(func() {
+						a.saveCustomProviderKey(provider.ID, strings.TrimSpace(st.providerKeyDraft))
+					})
+					componentTextButton(c, "provider-key-hide", tr("Cancel"), false).OnClick(func() { a.loadProviderFields(provider.ID) })
 				}
-				if componentTextButton(c, "provider-key-hide", tr("Cancel"), false).Clicked() {
-					st.providerKeyRevealed = false
-					a.loadProviderFields(provider.ID)
+				if authorized {
+					componentTextButton(c, "provider-logout", tr("Log out"), false).Disabled(st.auth.busy).OnClick(func() { a.disconnectSettingsIntegration(provider.ID) })
 				}
 			})
 		}
 		// Account selector when multiple key accounts exist and no draft key.
 		for _, integration := range st.integrations {
-			if integration.ID != provider.ID || len(integration.KeyAccounts) <= 1 || st.providerKeyDraft != "" || st.providerKeyRevealed {
+			if integration.ID != provider.ID || len(integration.KeyAccounts) <= 1 || dirty {
 				continue
 			}
 			active := tr("Account")
@@ -526,64 +492,35 @@ func providerAccountOptions(integration settingsIntegration) []settingsOption {
 
 func (a *app) customProviderModelsSection(c *ui.Context, provider settingsProvider) {
 	st := &a.settings.backend
-	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, tr("Models")).Grow(1).FontSize(uiPx(11)).FontWeight(500).TextColor(palette.text)
-		if componentTextButton(c, "provider-model-add", tr("Add model"), false).Clicked() {
-			st.providerModelEditor = &providerModelEditorState{add: true, input: map[string]bool{"text": true}, output: map[string]bool{"text": true}}
-		}
-	})
 	models := providerModelsList(provider)
+	if editor := st.providerModelEditor; editor != nil && editor.add {
+		a.modelEditorRow(c, provider.ID)
+	}
 	if len(models) == 0 {
 		mailStatusRow(c, tr("No models yet. Add one to make this provider usable in chat."))
 		return
 	}
-	for index, model := range models {
-		index, model := index, model
-		if editor := st.providerModelEditor; editor != nil && !editor.add && editor.index == index {
-			a.modelEditorRow(c, provider.ID)
-			continue
-		}
-		c.Key(fmt.Sprintf("provider-model-%d", index))
-		ui.Column(c).FillWidth().Padding(10, 0).Gap(4).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
-			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Column(c).Grow(1).MinWidth(0).Children(func() {
-					if name := customModelDisplayName(model.name, model.id); name != nil {
-						ui.Text(c, *name).FontSize(uiPx(11)).TextColor(palette.text).SingleLine().Ellipsis("...")
-					}
-					ui.Text(c, model.id).FontSize(uiPx(9.5)).TextColor(palette.textTertiary).SingleLine().Ellipsis("...")
-				})
-				if window := model.contextWindow; window != nil && *window > 0 {
-					mailEnabledBadge(c, true, formatContextWindow(*window))
-				}
-				if customModelEmitsImage(model.id, model.output, provider.ID, st.modelsTable) {
-					mailEnabledBadge(c, true, tr("image"))
-				}
-				if key := provider.ID + "\x00" + model.id; true {
-					if latency, ok := st.providerLatency[key]; ok {
-						if latency.testing {
-							ui.Text(c, tr("Testing…")).FontSize(uiPx(10)).TextColor(palette.textTertiary)
-						} else if latency.err != "" {
-							ui.Text(c, tr("Failed")).FontSize(uiPx(10)).TextColor(palette.textTertiary)
-						} else {
-							ui.Text(c, trf("first token in %s", formatProbeLatency(time.Duration(latency.latencyMs)*time.Millisecond))).FontSize(uiPx(10)).TextColor(palette.textTertiary)
-						}
-					}
-					if componentIconButton(c, fmt.Sprintf("model-latency-%d", index), "zap", true).Label(tr("Measure first-token latency")).Clicked() {
-						a.probeModelLatency(provider.ID, model.id)
-					}
-				}
-				if componentIconButton(c, fmt.Sprintf("model-edit-%d", index), "pencil", true).Label(tr("Edit model")).Clicked() {
-					st.providerModelEditor = &providerModelEditorState{index: index, id: model.id, context: formatContextPtr(model.contextWindow), input: sliceToSet(model.input, "text"), output: sliceToSet(model.output, "text")}
-				}
-				if componentIconButton(c, fmt.Sprintf("model-delete-%d", index), "trash", true).Label(tr("Delete model")).Clicked() {
-					a.deleteCustomModel(provider.ID, index)
-				}
+	ui.Column(c).FillWidth().Gap(4).Children(func() {
+		for index, model := range models {
+			index, model := index, model
+			if editor := st.providerModelEditor; editor != nil && !editor.add && editor.index == index {
+				a.modelEditorRow(c, provider.ID)
+				continue
+			}
+			name := model.id
+			if model.name != nil && strings.TrimSpace(*model.name) != "" {
+				name = *model.name
+			}
+			edit := func() {
+				st.providerModelEditor = &providerModelEditorState{index: index, id: model.id, name: name, context: formatContextPtr(model.contextWindow), input: sliceToSet(model.input, "text"), output: sliceToSet(model.output, "text")}
+			}
+			input, output := a.providerModelModalities(model.id, provider.ID, model.input, model.output)
+			providerModelListRow(c, provider.ID+"/"+model.id, model.id, name, provider.ID, model.contextWindow, input, output, false, edit, func() {
+				componentIconButton(c, fmt.Sprintf("model-edit-%d", index), "pencil", true).Label(tr("Edit model")).Disabled(st.provider.writing).OnClick(edit)
+				componentIconButton(c, fmt.Sprintf("model-delete-%d", index), "trash", true).Label(tr("Delete model")).Disabled(st.provider.writing).OnClick(func() { a.deleteCustomModel(provider.ID, index) })
 			})
-		})
-	}
-	if editor := st.providerModelEditor; editor != nil && editor.add {
-		a.modelEditorRow(c, provider.ID)
-	}
+		}
+	})
 }
 
 type providerModelView struct {
@@ -635,14 +572,25 @@ func (a *app) modelEditorRow(c *ui.Context, providerID string) {
 	if editor == nil {
 		return
 	}
-	ui.Column(c).FillWidth().Padding(10).Gap(6).Children(func() {
-		settingsFormField(c, "provider-model-id", tr("Model ID"), &editor.id, "e.g. deepseek-chat")
-		settingsFormField(c, "provider-model-context", tr("Context window"), &editor.context, "e.g. 1M")
+	ui.Column(c.Key("provider-model-editor")).FillWidth().Padding(14).Gap(12).Radius(8).Background(palette.overlay).Border(1, palette.border).Children(func() {
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			providerModelMark(c, editor.id, editor.name, providerID)
+			ui.Text(c, choice(editor.add, tr("Add model"), tr("Edit model"))).FontSize(uiPx(12)).FontWeight(500).TextColor(palette.text)
+		})
+		settingsFormField(c, "provider-model-id", tr("Model ID"), &editor.id, "deepseek-chat")
+		ui.Row(c).FillWidth().Wrap().Gap(12).Children(func() {
+			ui.Column(c).Grow(1).Basis(200).MinWidth(0).Children(func() {
+				settingsFormField(c, "provider-model-name", tr("Name"), &editor.name, tr("Optional"))
+			})
+			ui.Column(c).Grow(1).Basis(140).MinWidth(0).Children(func() {
+				settingsFormField(c, "provider-model-context", tr("Context window"), &editor.context, "128K / 1M")
+			})
+		})
 		settingsModalityRow(c, "model-editor-input", "Input", providerInputModalities, editor.input)
 		settingsModalityRow(c, "model-editor-output", "Output", providerOutputModalities, editor.output)
-		ui.Row(c).Gap(8).Children(func() {
+		ui.Row(c).FillWidth().Gap(8).Justify(ui.End).Children(func() {
 			valid := strings.TrimSpace(editor.id) != "" && (strings.TrimSpace(editor.context) == "" || parseContextWindow(editor.context) != nil)
-			if componentTextButton(c, "provider-model-confirm", tr("Save"), true).Disabled(!valid).Clicked() {
+			if componentTextButton(c, "provider-model-confirm", tr("Save"), true).Disabled(!valid || st.provider.writing).Clicked() {
 				a.confirmModelEditor(providerID)
 			}
 			if componentTextButton(c, "provider-model-cancel", tr("Cancel"), false).Clicked() {
@@ -847,7 +795,11 @@ func (a *app) confirmModelEditor(providerID string) {
 		if spec == nil {
 			spec = map[string]any{}
 		}
-		spec["name"] = modelID
+		name := strings.TrimSpace(editor.name)
+		if name == "" {
+			name = modelID
+		}
+		spec["name"] = name
 		limit := jsonObject(spec, "limit")
 		if contextWindow != nil {
 			limit["context"] = *contextWindow
@@ -1473,86 +1425,77 @@ func (a *app) builtinProviderDetail(c *ui.Context, provider modelsDevProvider) {
 				if len(envNames) > 0 {
 					mailEnabledBadge(c, false, tr("Env variable"))
 				}
+			})
+			providerInfoCard(c, "builtin-login", "key", "Login information", func() {
 				if authorized {
-					if componentTextButton(c, "provider-logout", tr("Log out"), false).Disabled(backend.auth.busy).Clicked() {
-						a.disconnectSettingsIntegration(provider.ID)
+					componentTextButton(c, "provider-logout", tr("Log out"), false).Disabled(backend.auth.busy).OnClick(func() { a.disconnectSettingsIntegration(provider.ID) })
+				}
+			}, func() {
+				if provider.API != nil {
+					ui.Text(c, *provider.API).FontSize(uiPx(10.5)).TextColor(palette.textTertiary).SingleLine().Ellipsis("...")
+				}
+				if needsAuth {
+					ui.Text(c, tr("The provider rejected the stored credential. Sign in again — in the CLI (opencode auth login), the TUI, or by updating the key here — then refresh this page.")).FontSize(uiPx(11)).TextColor(palette.textSecondary).Wrap()
+					if len(a.providerOAuthMethods(provider.ID)) > 0 {
+						if componentTextButton(c, "provider-relogin", tr("Sign in again"), true).Clicked() {
+							a.beginProviderForm()
+							backend.providerFormStage = "builtin"
+							backend.providerFormBuiltin = provider.ID
+						}
 					}
 				}
-			})
-			if provider.API != nil {
-				ui.Text(c, *provider.API).FontSize(uiPx(10.5)).TextColor(palette.textTertiary).SingleLine().Ellipsis("...")
-			}
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				if componentTextButton(c, "provider-catalog-check", tr("Check model catalog"), false).Disabled(!authorized).Clicked() {
-					a.checkBuiltinCatalog(provider.ID)
+				if len(envNames) > 0 {
+					ui.Text(c, trf("This provider's credential comes from the environment variable %s. Env credentials are managed by the system — the key is never shown here, and logging out cannot remove the connection.", strings.Join(envNames, ", "))).FontSize(uiPx(11)).TextColor(palette.textSecondary).Wrap()
 				}
+				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+					icon(c, "info", 12, palette.textTertiary)
+					ui.Text(c, tr("The API key is stored in OpenCode's own credential store and managed by the opencode CLI; it is never shown here.")).FontSize(uiPx(10.5)).TextColor(palette.textSecondary).Wrap()
+				})
+				a.providerOAuthSection(c, provider.ID)
+				if backend.auth.kind == "provider" && backend.auth.providerID == provider.ID {
+					a.settingsOAuthControls(c)
+				}
+				if form := backend.oauthForm; form != nil && form.providerID == provider.ID {
+					a.settingsOAuthForm(c, form)
+				}
+			})
+			providerInfoCard(c, "builtin-models", "package", "Model information", func() {
+				componentTextButton(c, "provider-catalog-check", tr("Check model catalog"), false).Disabled(!authorized).OnClick(func() { a.checkBuiltinCatalog(provider.ID) })
+			}, func() {
 				if check := backend.providerBuiltinCheck; check != nil && backend.providerBuiltinCheckID == provider.ID {
-					if check.testing {
-						ui.Text(c, tr("Checking catalog…")).FontSize(uiPx(11)).TextColor(palette.textSecondary)
-					} else if check.err != "" {
-						ui.Text(c, trf("Catalog query failed: %s", check.err)).FontSize(uiPx(11)).TextColor(palette.textSecondary).Wrap()
-					} else {
-						ui.Text(c, trf("Catalog available · %d models", check.models)).FontSize(uiPx(11)).TextColor(palette.textSecondary)
+					status := tr("Checking catalog…")
+					if !check.testing {
+						status = trf("Catalog available · %d models", check.models)
+						if check.err != "" {
+							status = trf("Catalog query failed: %s", check.err)
+						}
 					}
+					ui.Text(c, status).FontSize(uiPx(11)).TextColor(palette.textSecondary).Wrap()
 				}
-			})
-			if needsAuth {
-				ui.Text(c, tr("The provider rejected the stored credential. Sign in again — in the CLI (opencode auth login), the TUI, or by updating the key here — then refresh this page.")).FontSize(uiPx(11)).TextColor(palette.textSecondary).Wrap()
-				if len(a.providerOAuthMethods(provider.ID)) > 0 {
-					if componentTextButton(c, "provider-relogin", tr("Sign in again"), true).Clicked() {
-						a.beginProviderForm()
-						backend.providerFormStage = "builtin"
-						backend.providerFormBuiltin = provider.ID
+				models := provider.Models
+				if len(models) == 0 {
+					mailStatusRow(c, tr("No models yet. Add one to make this provider usable in chat."))
+				} else {
+					shown := models
+					if len(shown) > 200 {
+						shown = shown[:200]
 					}
-				}
-			}
-			if len(envNames) > 0 {
-				ui.Text(c, trf("This provider's credential comes from the environment variable %s. Env credentials are managed by the system — the key is never shown here, and logging out cannot remove the connection.", strings.Join(envNames, ", "))).FontSize(uiPx(11)).TextColor(palette.textSecondary).Wrap()
-			}
-			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				icon(c, "info", 12, palette.textTertiary)
-				ui.Text(c, tr("The API key is stored in OpenCode's own credential store and managed by the opencode CLI; it is never shown here.")).FontSize(uiPx(10.5)).TextColor(palette.textSecondary).Wrap()
-			})
-			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, tr("Models")).Grow(1).FontSize(uiPx(11)).FontWeight(500).TextColor(palette.text)
-			})
-			models := provider.Models
-			if len(models) == 0 {
-				mailStatusRow(c, tr("No models yet. Add one to make this provider usable in chat."))
-			} else {
-				shown := models
-				if len(shown) > 200 {
-					shown = shown[:200]
-				}
-				for i, model := range shown {
-					i, model := i, model
-					c.Key(fmt.Sprintf("builtin-model-%d", i))
-					ui.Column(c).FillWidth().Padding(10, 0).Children(func() {
-						ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+					ui.Column(c).FillWidth().Gap(4).Children(func() {
+						for _, model := range shown {
 							name := model.ID
 							if model.Name != nil && *model.Name != "" {
 								name = *model.Name
 							}
-							ui.Text(c, name).FontSize(uiPx(11)).TextColor(palette.text).SingleLine().Ellipsis("...")
-							ui.Text(c, model.ID).Grow(1).FontSize(uiPx(9.5)).TextColor(palette.textTertiary).SingleLine().Ellipsis("...")
-							if model.ContextWindow != nil {
-								mailEnabledBadge(c, true, formatContextWindow(*model.ContextWindow))
-							}
-						})
+							input, output := a.providerModelModalities(model.ID, provider.ID, model.InputModalities, model.OutputModalities)
+							providerModelListRow(c, provider.ID+"/"+model.ID, model.ID, name, provider.ID, model.ContextWindow, input, output, false, nil, nil)
+						}
 					})
+					if hidden := len(models) - len(shown); hidden > 0 {
+						ui.Text(c, trf("%d more models not shown", hidden)).FontSize(uiPx(10)).TextColor(palette.textTertiary)
+					}
 				}
-				if hidden := len(models) - len(shown); hidden > 0 {
-					ui.Text(c, trf("%d more models not shown", hidden)).FontSize(uiPx(10)).TextColor(palette.textTertiary)
-				}
-			}
+			})
 			settingsOperationStatus(c, backend.provider, "")
-			a.providerOAuthSection(c, provider.ID)
-			if backend.auth.kind == "provider" && backend.auth.providerID == provider.ID {
-				a.settingsOAuthControls(c)
-			}
-			if form := backend.oauthForm; form != nil && form.providerID == provider.ID {
-				a.settingsOAuthForm(c, form)
-			}
 		})
 	})
 }

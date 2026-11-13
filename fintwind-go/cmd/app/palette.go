@@ -52,7 +52,7 @@ func (a *app) paletteItems() []paletteEntry {
 	entries = append(entries,
 		paletteEntry{group: "Commands", label: "Toggle sidebar", icon: "panel-left", keys: "toggle show hide left sidebar history tasks ctrl b",
 			run: func() { a.sidebarOpen = !a.sidebarOpen }},
-		paletteEntry{group: "Commands", label: "Toggle right panel", icon: "panel-right", keys: "toggle show hide right panel files diff terminal browser",
+		paletteEntry{group: "Commands", label: "Toggle right panel", icon: "panel-right", keys: "toggle show hide right panel files diff terminal",
 			run: func() { a.rightOpen = !a.rightOpen }},
 		paletteEntry{group: "Commands", label: "Sessions", icon: "message-square-text", keys: "sessions tasks list history",
 			run: func() { a.mode = modeSessions }},

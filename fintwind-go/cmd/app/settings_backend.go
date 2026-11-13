@@ -43,6 +43,7 @@ type settingsBackendState struct {
 	providerModelEditor               *providerModelEditorState
 	providerConnectivity              map[string]providerConnectivityState
 	providerLatency                   map[string]providerLatencyState
+	providerLatencyModel              string
 	providerBuiltinCheck              *providerBuiltinCheckState
 	providerBuiltinCheckID            string
 	builtinProviders                  *modelsDevProviders
@@ -74,12 +75,16 @@ type settingsBackendState struct {
 	mcpList                           ui.ListState
 	mcpStatuses                       []settingsMcpStatus
 	mcpStatusError                    string
+	mcpStatusLoading                  bool
+	mcpStatusGeneration               uint64
+	mcpStatusCancel                   context.CancelFunc
+	mcpLoadGeneration                 uint64
 	removeConfirm                     string
 	schedTasks                        []scheduledTask
 	sched                             settingsOperation
 	schedSelected, schedEditing       string
 	schedDraftGeneration              uint64
-	schedList                         ui.ListState
+	schedBoard                        scheduledBoardState
 	schedDeleteConfirm                string
 	settingsWrite                     bool
 	settingsUncertain                 bool
@@ -97,12 +102,13 @@ type settingsBackendState struct {
 }
 
 type providerModelEditorState struct {
-	add   bool
-	index int
-	id    string
-	context string
-	input map[string]bool
-	output map[string]bool
+	add         bool
+	index       int
+	id          string
+	name        string
+	context     string
+	input       map[string]bool
+	output      map[string]bool
 	packageName string
 }
 
@@ -115,9 +121,9 @@ type providerConnectivityState struct {
 }
 
 type providerLatencyState struct {
-	testing bool
+	testing   bool
 	latencyMs int64
-	err     string
+	err       string
 }
 
 type providerBuiltinCheckState struct {
@@ -217,6 +223,7 @@ func (a *app) syncSettingsSource() {
 	}
 	a.cancelSettingsOAuth()
 	a.clearSettingsMcpSecrets()
+	a.cancelSettingsMcpStatus()
 	generation := st.generation + 1
 	*st = settingsBackendState{source: source, generation: generation}
 	a.cancelProviderAdd()
@@ -387,8 +394,10 @@ func (a *app) loadSettingsMcp() {
 		return
 	}
 	st.mcp.loading, st.mcp.err = true, ""
+	st.mcpLoadGeneration++
+	loadGeneration := st.mcpLoadGeneration
+	a.cancelSettingsMcpStatus()
 	source, generation := st.source, st.generation
-	binary := a.settingsStr("opencode_binary_path", "opencode")
 	go func() {
 		ctx, cancel := context.WithTimeout(a.lifetime, 90*time.Second)
 		defer cancel()
@@ -400,15 +409,8 @@ func (a *app) loadSettingsMcp() {
 		if err == nil && body.Servers == nil {
 			err = errors.New("MCP server list is missing from the response")
 		}
-		var statuses struct {
-			Statuses []settingsMcpStatus `json:"statuses"`
-		}
-		var statusErr error
-		if err == nil {
-			statusErr = settingsRequest(ctx, source, map[string]any{"type": "listMcpServerStatuses", "binary": binary, "directory": source.directory}, "mcpServerStatuses", &statuses)
-		}
 		a.post(func() {
-			if !a.settingsSourceMatches(source, generation) {
+			if !a.settingsSourceMatches(source, generation) || a.settings.backend.mcpLoadGeneration != loadGeneration {
 				return
 			}
 			st := &a.settings.backend
@@ -419,11 +421,7 @@ func (a *app) loadSettingsMcp() {
 			}
 			st.mcpServers, st.mcpRevision, st.mcp.loaded, st.mcp.uncertain = body.Servers, body.Revision, true, false
 			a.syncMcpSelectionLocked()
-			st.mcpStatuses = statuses.Statuses
-			st.mcpStatusError = ""
-			if statusErr != nil {
-				st.mcpStatusError = "Connection status unavailable. " + statusErr.Error()
-			}
+			a.refreshSettingsMcpStatuses()
 		})
 	}()
 }

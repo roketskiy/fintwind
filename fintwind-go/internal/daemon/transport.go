@@ -20,8 +20,8 @@ import (
 // connection instead of dropping data, so resume from applied cursors.
 const eventQueueSize = 4096
 
-// maxMessageBytes bounds one inbound frame, mirroring the protocol budget.
-const maxMessageBytes = 48 << 20
+// MaxWireMessageBytes matches the Rust daemon protocol's message budget.
+const MaxWireMessageBytes = 256 << 20
 
 // writeTimeout bounds one outbound frame so a stuck peer cannot park a
 // sender forever.
@@ -139,7 +139,7 @@ func (c *Client) readLoop() {
 			c.enqueueEvent(Event{Type: msg.Type, Kind: msg.Type, Payload: append(json.RawMessage(nil), raw...)})
 			c.fail(errors.New("daemon is shutting down"))
 			return
-		case "taskStateChanged", "scheduledTasksChanged", "browserRequest", "browserCancel", "browserShareRejected":
+		case "taskStateChanged", "scheduledTasksChanged":
 			if !c.enqueueEvent(Event{Type: msg.Type, Kind: msg.Type, Payload: append(json.RawMessage(nil), raw...)}) {
 				return
 			}

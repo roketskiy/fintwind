@@ -67,15 +67,15 @@ func (a *app) settingsProviderModels(c *ui.Context) {
 }
 
 func settingsModalityRow(c *ui.Context, key, label string, options []string, selected map[string]bool) {
-	ui.Row(c).FillWidth().Gap(4).AlignItems(ui.Center).FocusGroup(ui.Horizontal).Children(func() {
-		ui.Text(c, label).Width(40).Shrink(0).FontSize(uiPx(10)).TextColor(palette.textTertiary)
+	ui.Row(c).FillWidth().Gap(6).Wrap().AlignItems(ui.Center).FocusGroup(ui.Horizontal).Children(func() {
+		ui.Text(c, tr(label)).Width(40).Shrink(0).FontSize(uiPx(11)).TextColor(palette.textSecondary)
 		for _, option := range options {
-			control := componentTextButton(c, key+"-"+option, option, false).
-				Height(22).Padding(0, 6).Radius(5).FontSize(uiPx(10))
+			control := componentTextButton(c, key+"-"+option, tr(option), false).
+				Height(28).Padding(0, 8).Radius(5).FontSize(uiPx(11)).Border(1, palette.border)
 			if selected[option] {
-				control.Background(palette.overlayStrong).TextColor(palette.text)
+				control.Background(palette.sidebarItem).BorderColor(palette.accent).TextColor(palette.text)
 			}
-			control.Label(label + " " + option).OnClick(func() { selected[option] = !selected[option] })
+			control.Label(tr(label) + " " + tr(option)).OnClick(func() { selected[option] = !selected[option] })
 		}
 	})
 }

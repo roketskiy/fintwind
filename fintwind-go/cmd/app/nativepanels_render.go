@@ -1,7 +1,6 @@
 package main
 
 import (
-	"strings"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/plugins/terminal"
@@ -14,15 +13,11 @@ import (
 // file header), the palette.* ramp, and 10.5/16 mono body text. Library
 // pieces slot in only where their chrome can be overridden to those pixels:
 //
-//   - File Save/Reload/Cancel/Go/Share buttons use componentTextButton
+//   - File Save/Reload/Cancel buttons use componentTextButton
 //     (components.go): button.Ghost with Scale(1,1), height 30, padding 11,
 //     radius 7, font 12.5 chained over, so kit.Press scale animation and the
 //     theme look never leak through. Stable c.Key first, automation .Label
 //     second for the non-visual E2E.
-//   - Address bar stays ui.TextInputBase: input.URLField adds a label row,
-//     a scheme prefix, and blur validation the Rust toolbar has no room for.
-//   - Browser toolbar stays a local row: desktop.UnifiedToolbar brings
-//     theme spacing plus a Tap cue, and its search field is not a URL bar.
 //   - File editor uses editor.View directly: code.CodeEditor adds a themed
 //     header plus status bar at a fixed t.Space(80) height and cannot fill
 //     the panel; the Rust header (42px path row) plus dirty/conflict states
@@ -31,88 +26,11 @@ import (
 //     renders static lines and cannot carry input, scrollback, or a remote
 //     Conn.
 
-// Extra automation labels for the browser and terminal controls.
+// Extra automation labels for file controls.
 const (
-	nativeBrowserBackLabel    = "native-browser-back"
-	nativeBrowserForwardLabel = "native-browser-forward"
-	nativeBrowserReloadLabel  = "native-browser-reload"
-	nativeBrowserStopLabel    = "native-browser-stop"
-	nativeBrowserOpenLabel    = "native-browser-open"
-	nativeFileReloadLabel     = "native-file-reload"
-	nativeFileCancelLabel     = "native-file-cancel"
+	nativeFileReloadLabel = "native-file-reload"
+	nativeFileCancelLabel = "native-file-cancel"
 )
-
-func (a *app) browserSurface(c *ui.Context, tab *nativeBrowserTab) {
-	if tab == nil {
-		a.surfacePlaceholder(c, "Browser", "Open a local app or URL")
-		return
-	}
-	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Label(nativeBrowserLabel).Children(func() {
-		toolbar := ui.Row(c).FillWidth().Height(rightPanelFileHeaderHeight).
-			Padding(0, 10).Gap(2).AlignItems(ui.Center).
-			BorderWidth(0, 0, 1, 0).BorderColor(palette.border)
-		toolbar.Children(func() {
-			if back := componentIconButton(c, "browser-back-"+tab.tabID, "arrow-left", tab.view != nil && tab.canBack).
-				Label(nativeBrowserBackLabel); back.Clicked() {
-				a.nativeBrowserBack(tab)
-			}
-			if fwd := componentIconButton(c, "browser-fwd-"+tab.tabID, "arrow-right", tab.view != nil && tab.canFwd).
-				Label(nativeBrowserForwardLabel); fwd.Clicked() {
-				a.nativeBrowserForward(tab)
-			}
-			if tab.loading && tab.view != nil {
-				if stop := componentIconButton(c, "browser-stop-"+tab.tabID, "x", true).
-					Label(nativeBrowserStopLabel); stop.Clicked() {
-					a.stopNativeBrowser(tab)
-				}
-			} else if reload := componentIconButton(c, "browser-reload-"+tab.tabID, "rotate-cw", tab.view != nil && tab.committed != "").
-				Label(nativeBrowserReloadLabel); reload.Clicked() {
-				a.nativeBrowserReload(tab)
-			}
-			secureURL := tab.committed
-			if secureURL == "" {
-				secureURL = tab.address
-			}
-			secureIcon := "globe"
-			if strings.HasPrefix(secureURL, "https://") {
-				secureIcon = "lock"
-			}
-			icon(c, secureIcon, 11, palette.textSecondary)
-			c.Key("browser-addr-" + tab.tabID)
-			addr := ui.TextInputBase(c, &tab.address).Grow(1).MinWidth(0).
-				FontSize(uiPx(12)).Label(nativeBrowserAddressLabel)
-			if addr.Focused() && c.Shortcut(0, ui.KeyEnter) {
-				_ = a.navigateNativeBrowser(tab, tab.address)
-			}
-			if openExt := componentIconButton(c, "browser-open-"+tab.tabID, "external-link", tab.view != nil && secureURL != "").
-				Label(nativeBrowserOpenLabel); openExt.Clicked() {
-				a.openNativeBrowserExternal(tab)
-			}
-		})
-		if tab.title != "" {
-			ui.Row(c).FillWidth().Padding(0, 8, 0, 8).Children(func() {
-				ui.Text(c, tab.title).FontSize(uiPx(11)).TextColor(palette.textSecondary).
-					SingleLine().Ellipsis("...").Label(nativeBrowserTitleLabel)
-			})
-		}
-		ui.Column(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
-			switch {
-			case tab.creating || tab.view == nil && tab.loadErr == "":
-				ui.Row(c).Padding(6, 16).Children(func() {
-					ui.Text(c, tr("Starting")).FontSize(uiPx(10.5)).TextColor(palette.textMuted)
-				})
-			case tab.view == nil:
-				ui.Row(c).Padding(6, 16).Children(func() {
-					ui.Text(c, tab.loadErr).FontSize(uiPx(10.5)).TextColor(palette.danger).
-						Label(nativeBrowserErrorLabel)
-				})
-			default:
-				c.Key("browser-view-" + tab.tabID)
-				ui.WebView(c, tab.view).Grow(1).FillWidth()
-			}
-		})
-	})
-}
 
 // terminalSurface is one open terminal tab: the live pty filling the
 // panel, or the tab's error state. No header: the tab itself carries the

@@ -25,6 +25,14 @@ export const projects = sqliteTable("projects", {
   createdAt: integer("created_at").notNull(),
 });
 
+/** Deleted local identities must not be re-created by an offline client's
+ * stale save after the daemon restarts. No transcript or credential is kept. */
+export const deletedTaskIdentities = sqliteTable("deleted_task_identities", {
+  id: text("id").notNull(),
+  kind: text("kind").notNull(),
+  deletedAt: integer("deleted_at").notNull(),
+}, (table) => [uniqueIndex("deleted_task_identity").on(table.kind, table.id)]);
+
 export const sessions = sqliteTable(
   "sessions",
   {

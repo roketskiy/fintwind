@@ -75,12 +75,10 @@ func (a *app) rightPanel(c *ui.Context) {
 			a.filesSurface(c)
 		default:
 			kind := a.activeKind()
-			if tabID, ok := browserTabID(kind); ok {
-				a.browserSurface(c, a.lookupNativeBrowserTab(a.selectedID, tabID))
-			} else if tabID, ok := terminalTabID(kind); ok {
+			if tabID, ok := terminalTabID(kind); ok {
 				a.terminalSurface(c, a.lookupNativeTerminalTab(a.selectedID, tabID))
 			} else {
-				a.surfacePlaceholder(c, "Browser", "Open a local app or URL")
+				a.filesSurface(c)
 			}
 		}
 		a.rightPanelResizeHandle(c)
@@ -135,7 +133,7 @@ func (a *app) surfaceTab(c *ui.Context, index int, kind string) {
 var addSurfaceMenuOpen bool
 
 // addSurfaceButton is the header's "+" control: ui.icon_button's 26 box,
-// 7 radius and 14 tertiary glyph, opening the same four surfaces the
+// 7 radius and 14 tertiary glyph, opening the same surfaces the
 // chooser cards offer, with a check on the single-instance ones already
 // open — render_right_panel_header's dropdown_menu.
 func (a *app) addSurfaceButton(c *ui.Context) {
@@ -160,10 +158,10 @@ func (a *app) addSurfaceButton(c *ui.Context) {
 			Shadow(0, 12, 28, 0, ui.RGBA(0, 0, 0, 0.22)).
 			Children(func() {
 				for _, kind := range []string{
-					rightPanelBrowser, rightPanelTerminal, rightPanelFiles,
+					rightPanelTerminal, rightPanelFiles,
 				} {
 					kind := kind
-					alreadyOpen := kind != rightPanelBrowser && kind != rightPanelTerminal &&
+					alreadyOpen := kind != rightPanelTerminal &&
 						a.hasSurface(kind)
 					row := ui.ButtonBase(c).Label(surfaceLabel(kind)).FillWidth().
 						Padding(5, 8).Radius(7).Gap(10).AlignItems(ui.Center)
@@ -199,10 +197,7 @@ func (a *app) surfaceChooser(c *ui.Context) {
 				ui.Text(c, tr("Choose what to show in the right panel")).FontSize(uiPx(11)).
 					TextColor(palette.textTertiary).Margin(5, 0, 0, 0)
 				ui.Row(c).FillWidth().Gap(8).Margin(18, 0, 0, 0).Children(func() {
-					a.surfaceCard(c, rightPanelBrowser, "Open a local app or URL")
 					a.surfaceCard(c, rightPanelTerminal, "Start a shell in this workspace")
-				})
-				ui.Row(c).FillWidth().Gap(8).Margin(8, 0, 0, 0).Children(func() {
 					a.surfaceCard(c, rightPanelFiles, "Browse and read workspace files")
 				})
 			})
@@ -245,7 +240,6 @@ func (a *app) surfacePlaceholder(c *ui.Context, title, description string) {
 
 const (
 	rightPanelFiles    = "files"
-	rightPanelBrowser  = "browser"
 	rightPanelTerminal = "terminal"
 	rightPanelContext  = "context"
 )
@@ -260,10 +254,10 @@ func surfaceLabel(kind string) string {
 		return tr("Context")
 	case rightPanelFiles:
 		return tr("Files")
-	case rightPanelBrowser, rightPanelTerminal:
+	case rightPanelTerminal:
 		return surfaceBaseLabel(kind)
 	}
-	if strings.HasPrefix(kind, browserTabPrefix) || strings.HasPrefix(kind, terminalTabPrefix) {
+	if strings.HasPrefix(kind, terminalTabPrefix) {
 		return surfaceBaseLabel(kind)
 	}
 	return kind
@@ -273,8 +267,6 @@ func surfaceBaseLabel(kind string) string {
 	switch {
 	case kind == rightPanelContext:
 		return tr("Context")
-	case kind == rightPanelBrowser || strings.HasPrefix(kind, browserTabPrefix):
-		return tr("Browser")
 	case kind == rightPanelTerminal || strings.HasPrefix(kind, terminalTabPrefix):
 		return tr("Terminal")
 	}
@@ -289,8 +281,6 @@ func surfaceIcon(kind string) string {
 	switch {
 	case kind == rightPanelContext:
 		return "gauge"
-	case kind == rightPanelBrowser || strings.HasPrefix(kind, browserTabPrefix):
-		return "globe"
 	case kind == rightPanelTerminal || strings.HasPrefix(kind, terminalTabPrefix):
 		return "terminal"
 	case kind == rightPanelFiles:
@@ -299,15 +289,9 @@ func surfaceIcon(kind string) string {
 	return "file"
 }
 
-// surfaceTabTitle names one tab: the live browser or terminal title when the
+// surfaceTabTitle names one tab: the live terminal title when the
 // tab is known, else the generic surface label.
 func (a *app) surfaceTabTitle(kind string) string {
-	if tabID, ok := browserTabID(kind); ok {
-		if tab := a.lookupNativeBrowserTab(a.selectedID, tabID); tab != nil && tab.title != "" {
-			return tab.title
-		}
-		return "Browser"
-	}
 	if tabID, ok := terminalTabID(kind); ok {
 		if tab := a.lookupNativeTerminalTab(a.selectedID, tabID); tab != nil && tab.title != "" {
 			return tab.title
@@ -407,9 +391,9 @@ func (a *app) syncSelectedFile() {
 	}
 }
 
-// openSurface shows a surface. Browser and terminal tabs always open fresh,
+// openSurface shows a surface. Terminal tabs always open fresh,
 // like reusable_surface_index, with one surface string per native tab
-// ("browser:<tabID>", "terminal:<tabID>"); the single-instance kinds reuse
+// ("terminal:<tabID>"); the single-instance kinds reuse
 // their tab.
 func (a *app) openSurface(kind string) {
 	if kind == rightPanelContext {
@@ -419,12 +403,6 @@ func (a *app) openSurface(kind string) {
 		a.ensureContextSources()
 	}
 	switch kind {
-	case rightPanelBrowser:
-		if a.selectedID == "" {
-			return
-		}
-		tab := a.openNativeBrowser(a.selectedID)
-		kind = browserTabPrefix + tab.tabID
 	case rightPanelTerminal:
 		if a.selectedID == "" {
 			a.status = tr("Select a task before opening a terminal.")
@@ -461,8 +439,8 @@ func (a *app) removeSurfaceKind(kind string) {
 // closeSurface removes a tab. Closing the active tab selects the previous
 // one; a closed file tab hands focus to the nearest remaining file, and
 // when none is left the Files tab returns where the file was —
-// close_right_panel_surface. Browser and terminal tabs dispose their native
-// tab (view or shell plus MCP unshare); file tabs drop their editor draft.
+// close_right_panel_surface. Terminal tabs dispose their shell;
+// file tabs drop their editor draft.
 func (a *app) closeSurface(index int) {
 	if index < 0 || index >= len(a.surfaces) {
 		return
@@ -471,9 +449,7 @@ func (a *app) closeSurface(index int) {
 	if kind == rightPanelContext && index == a.activeSurface {
 		a.focusComposerOnce = true
 	}
-	if tabID, ok := browserTabID(kind); ok {
-		a.closeNativeBrowserTab(a.selectedID, tabID)
-	} else if tabID, ok := terminalTabID(kind); ok {
+	if tabID, ok := terminalTabID(kind); ok {
 		a.closeNativeTerminalTab(a.selectedID, tabID)
 	} else if path, ok := fileTabPath(kind); ok {
 		a.closeNativeFile(a.selectedID, path)

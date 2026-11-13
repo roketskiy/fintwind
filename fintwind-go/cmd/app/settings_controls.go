@@ -18,6 +18,7 @@ type settingsChoiceState struct {
 
 func (a *app) openSettingsPage(page string) {
 	if a.settings.page != page {
+		a.cancelSettingsMcpStatus()
 		a.cancelSettingsOAuth()
 		a.clearSettingsMcpSecrets()
 		a.settings.catalog.mcpAdding = false

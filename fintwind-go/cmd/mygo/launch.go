@@ -39,11 +39,7 @@ func launch(ctx context.Context, plan launchprofile.Plan, binaries binaries, run
 		}
 	}
 	args := []string{"--bind", "127.0.0.1:0", "--parent-pid", strconv.Itoa(os.Getpid())}
-	if string(plan.Profile) == "daily" {
-		args = append(args, "--production-data")
-	} else {
-		args = append(args, "--data-dir", plan.DataDir)
-	}
+	args = append(args, "--data-dir", plan.DataDir)
 	backend, err := ownedprocess.StartWithEnvironment(binaries.daemon, args, daemonDir, plan.WorkDir, withEnvironment(plan.Environment, map[string]string{"FINTWIND_DAEMON_TOKEN": token, "FINTWIND_MYGO_EXPECTED_DATA_DIR": plan.DataDir}))
 	if err != nil {
 		return err
@@ -68,6 +64,193 @@ func launch(ctx context.Context, plan launchprofile.Plan, binaries binaries, run
 		return fmt.Errorf("daemon handshake failed; frontend was not opened: %w", err)
 	}
 	defer client.Close()
+	if probeSession != "" {
+		checkCtx, checkCancel := context.WithTimeout(ctx, 90*time.Second)
+		data, checkErr := client.Request(checkCtx, map[string]any{"type": "hydrateSession", "sessionId": probeSession})
+		checkCancel()
+		result := map[string]any{"passed": false}
+		mcpCtx, mcpCancel := context.WithTimeout(ctx, 15*time.Second)
+		mcpData, mcpErr := client.Request(mcpCtx, map[string]any{"type": "loadMcpServers"})
+		mcpCancel()
+		if mcpErr != nil {
+			result["mcpError"] = mcpErr.Error()
+		} else {
+			var mcp struct {
+				Servers []json.RawMessage `json:"servers"`
+			}
+			if err := json.Unmarshal(mcpData, &mcp); err != nil || mcp.Servers == nil {
+				result["mcpError"] = "invalid server list"
+			} else {
+				result["mcpServers"] = len(mcp.Servers)
+			}
+		}
+		if checkErr != nil {
+			result["error"] = checkErr.Error()
+		} else {
+			var detail struct {
+				Session *struct {
+					ID         string            `json:"id"`
+					ProjectID  string            `json:"project_id"`
+					NativeID   *string           `json:"native_session_id"`
+					Messages   []json.RawMessage `json:"messages"`
+					Blocks     []json.RawMessage `json:"transcript_blocks"`
+					Background []json.RawMessage `json:"background_work"`
+				} `json:"session"`
+			}
+			if err := json.Unmarshal(data, &detail); err != nil {
+				result["error"] = err.Error()
+			} else if detail.Session != nil && detail.Session.ID == probeSession {
+				result["passed"] = true
+				result["bytes"] = len(data)
+				result["messages"] = len(detail.Session.Messages)
+				result["transcriptBlocks"] = len(detail.Session.Blocks)
+				result["backgroundWork"] = len(detail.Session.Background)
+				if detail.Session.NativeID != nil && len(detail.Session.Messages) == 0 {
+					readCtx, done := context.WithTimeout(ctx, 90*time.Second)
+					catalog, e := client.Request(readCtx, map[string]any{"type": "loadTaskState"})
+					var state struct {
+						Projects []struct {
+							ID   string `json:"id"`
+							Path string `json:"path"`
+						} `json:"projects"`
+					}
+					if e == nil {
+						e = json.Unmarshal(catalog, &state)
+					}
+					var directory string
+					for _, project := range state.Projects {
+						if project.ID == detail.Session.ProjectID {
+							directory = project.Path
+							break
+						}
+					}
+					if e == nil && directory != "" {
+						var native []byte
+						native, e = client.Request(readCtx, map[string]any{"type": "fetchNativeTranscript", "directory": directory, "sessionId": *detail.Session.NativeID})
+						if e == nil {
+							var transcript struct {
+								Transcript struct {
+									Messages []json.RawMessage `json:"messages"`
+									Blocks   []json.RawMessage `json:"blocks"`
+									Turns    []json.RawMessage `json:"turns"`
+								} `json:"transcript"`
+							}
+							e = json.Unmarshal(native, &transcript)
+							if e == nil {
+								result["nativeMessages"] = len(transcript.Transcript.Messages)
+								result["nativeBlocks"] = len(transcript.Transcript.Blocks)
+								result["nativeTurns"] = len(transcript.Transcript.Turns)
+							}
+						}
+						if e == nil {
+							usage, usageErr := client.Request(readCtx, map[string]any{"type": "fetchNativeUsage", "directory": directory, "sessionId": *detail.Session.NativeID})
+							var parsed struct {
+								Usage struct {
+									Tokens   uint64  `json:"tokens"`
+									Measured bool    `json:"measured"`
+									Total    *uint64 `json:"total_tokens"`
+								} `json:"usage"`
+							}
+							if usageErr != nil {
+								result["usageError"] = usageErr.Error()
+							} else if json.Unmarshal(usage, &parsed) != nil {
+								result["usageError"] = "invalid usage"
+							} else {
+								result["usageMeasured"] = parsed.Usage.Measured
+								result["usageTokens"] = parsed.Usage.Tokens
+								result["usageTotal"] = parsed.Usage.Total
+							}
+						}
+					} else if e == nil {
+						e = errors.New("native session project not found")
+					}
+					done()
+					if e != nil {
+						result["nativeError"] = e.Error()
+					}
+				}
+			}
+		}
+		if data, err := json.Marshal(result); err == nil {
+			_ = os.WriteFile(filepath.Join(runDir, "session-probe.json"), data, 0o600)
+		}
+	}
+	if probeProvider && plan.Profile == launchprofile.Daily && selectedBackend == "go" {
+		probeCtx, stop := context.WithTimeout(ctx, 60*time.Second)
+		raw, probeErr := client.Request(probeCtx, map[string]any{"type": "probeProvider", "discoverModels": true, "probeVersion": true})
+		stop()
+		result := map[string]any{"passed": false}
+		if probeErr == nil {
+			var response struct {
+				Probe struct {
+					Installed bool              `json:"installed"`
+					Models    []json.RawMessage `json:"models"`
+				} `json:"probe"`
+				Version any `json:"version"`
+			}
+			if json.Unmarshal(raw, &response) == nil {
+				result["passed"] = response.Probe.Installed
+				result["models"] = len(response.Probe.Models)
+				result["version"] = response.Version
+			}
+		} else {
+			result["error"] = probeErr.Error()
+		}
+		checkCtx, checkCancel := context.WithTimeout(ctx, 45*time.Second)
+		catalog, catalogErr := client.Request(checkCtx, map[string]any{"type": "loadTaskState"})
+		if catalogErr == nil {
+			var state struct {
+				Projects []struct {
+					ID   string `json:"id"`
+					Path string `json:"path"`
+				} `json:"projects"`
+				Sessions []struct {
+					ID        string `json:"id"`
+					ProjectID string `json:"project_id"`
+				} `json:"sessions"`
+			}
+			if json.Unmarshal(catalog, &state) == nil {
+				volumes := map[string]bool{}
+				workspaceOK, workspaceFailed, hydrated, hydrateFailed := 0, 0, 0, 0
+				for _, project := range state.Projects {
+					volume := strings.ToUpper(filepath.VolumeName(project.Path))
+					if volume == "" || volumes[volume] {
+						continue
+					}
+					volumes[volume] = true
+					_, err := client.Request(checkCtx, map[string]any{"type": "workspace", "operation": map[string]any{"type": "listProjectFiles", "root": project.Path, "cap": 1}})
+					if err != nil {
+						workspaceFailed++
+					} else {
+						workspaceOK++
+					}
+					for _, session := range state.Sessions {
+						if session.ProjectID != project.ID {
+							continue
+						}
+						data, err := client.Request(checkCtx, map[string]any{"type": "hydrateSession", "sessionId": session.ID})
+						var detail struct {
+							Session json.RawMessage `json:"session"`
+						}
+						if err != nil || json.Unmarshal(data, &detail) != nil || len(detail.Session) == 0 || string(detail.Session) == "null" {
+							hydrateFailed++
+						} else {
+							hydrated++
+						}
+						break
+					}
+				}
+				result["projectVolumesChecked"], result["projectVolumesFailed"] = workspaceOK, workspaceFailed
+				result["sessionsHydrated"], result["sessionHydrationFailed"] = hydrated, hydrateFailed
+			}
+		} else {
+			result["catalogError"] = catalogErr.Error()
+		}
+		checkCancel()
+		if data, err := json.Marshal(result); err == nil {
+			_ = os.WriteFile(filepath.Join(runDir, "provider-probe.json"), data, 0o600)
+		}
+	}
 	client.Close() // The launcher's probe is not a long-lived event subscriber.
 	defer func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

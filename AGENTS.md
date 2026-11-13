@@ -69,47 +69,21 @@
 
 ## Windows release 构建
 
-dev watcher 占用的是 `target/debug/fintwind.exe`，release 写到 `target/release`，两者不冲突，不必停 watcher。所有渠道只需要应用和 `fintwind-daemon.exe`。应用从自身旁边启动 `fintwind-daemon.exe`。
+正式版本使用 Go 应用和 Go daemon，Rust 源码保留作为参考，不再构建和维护。
+版本号保存在根目录 `VERSION`。发布包包含并排的 `fintwind.exe` 和
+`fintwind-daemon.exe`；应用启动同目录的 daemon。
 
-三渠道规则：GitHub CI 只构建和发布 stable（release.yml 显式 `--channel=stable`，无 beta job/输入/tag/制品，不要新增）；beta 只在本地构建，与 stable 共用生产数据目录（不可同开两版，新 beta 迁移过的数据不保证旧 stable 可读）；dev 是 debug 构建，数据目录 `Fintwind Debug` 隔离。非 stable 构建不执行自动更新检查，beta 靠重新构建更新。stable 与 beta 的 release 产物写同一个 `target/release`，先后构建会互相覆盖，属预期。
+在 `fintwind-go/` 构建两个可执行文件：
 
-### 不带安装包
-
-稳定版只产出两个 release 可执行文件，不打包、不调用 Inno Setup：
-
-```sh
-cargo build --locked --release --package fintwind --bin fintwind --package fintwind-daemon --bin fintwind-daemon
+```powershell
+go build -mod=readonly -ldflags=-H=windowsgui -o ../target/release/fintwind.exe ./cmd/app
+go build -mod=readonly -o ../target/release/fintwind-daemon.exe ./cmd/daemon
 ```
 
-产物：`target/release/fintwind.exe`、`target/release/fintwind-daemon.exe`。
-
-beta 版使用相同的生产数据目录，但不执行自动更新检查：
-
-```sh
-cargo build --locked --release --features beta --package fintwind --bin fintwind --package fintwind-daemon --bin fintwind-daemon
-```
-
-### 带安装包
-
-编译 release，再打便携 zip 和 per-user 安装程序（需本机已装 Inno Setup 6.3+，`ISCC.exe`）：
-
-```sh
-bun scripts/bundle-windows.ts
-```
-
-默认构建稳定版；个人 beta 包使用：
-
-```sh
-bun scripts/bundle-windows.ts --channel=beta
-```
-
-等价于 `bun run bundle`。产物都在 `target/release`：
-
-- 稳定版：`fintwind-<version>-<target-triple>.zip`（目录内两个 exe 并排）和
-  `fintwind-<version>-<arch>-Setup.exe`
-- beta 版：文件名带 `-beta`，目录内仍只有应用和 daemon 两个 exe
-
-未设置 `WINDOWS_CERTIFICATE`（base64 `.pfx`）和 `WINDOWS_CERTIFICATE_PASSWORD` 时打出的是未签名包，脚本会打印说明。细节见 [CONTRIBUTING.md](CONTRIBUTING.md) 的 Windows bundle 与 [RELEASING.md](RELEASING.md)。
+在仓库根目录运行 `bun scripts/bundle-windows.ts` 构建 stable 安装包和便携包；
+使用 `--channel=beta` 构建本地 beta 包。GitHub CI 只发布 stable。两个渠道
+共用生产数据目录，不得同时运行。打包需要 Inno Setup 6.3 或更新版本；未配置
+签名证书时产物不签名。具体发布步骤见 [RELEASING.md](RELEASING.md)。
 
 ## 性能
 
@@ -184,7 +158,7 @@ bun scripts/bundle-windows.ts --channel=beta
 
 ## mygo 前端与组件库
 
-`fintwind-go/` 是正式迁移主线，连接 Rust daemon。日用入口为根目录 `MyGo.cmd`，
+`fintwind-go/` 是正式主线，包含 Go 应用和 Go daemon。源码日用入口为根目录 `MyGo.cmd`，
 直接使用真实 Fintwind 数据；未获用户明确许可，agent 不得运行该入口（`--plan` 除外）。
 用户已授权（2026-11-11）：每轮 mygo 改动完成后，agent 用
 `pwsh -File scripts/mygo-restart.ps1` 重启日用实例——脚本只停止 `--profile daily`

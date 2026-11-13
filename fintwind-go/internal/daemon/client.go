@@ -18,7 +18,7 @@ import (
 // ProtocolVersion is the wire version this client speaks. It must match the
 // Rust daemon's fintwind-protocol PROTOCOL_VERSION; the launcher refuses a
 // daemon that reports anything else.
-const ProtocolVersion = 24
+const ProtocolVersion = 25
 
 const zeroUUID = "00000000-0000-0000-0000-000000000000"
 
@@ -34,7 +34,7 @@ var ErrSequenceGap = errors.New("daemon event sequence gap")
 
 // Event is one message the daemon pushed. Driver events carry Type "event"
 // and keep the driver Kind. Every other server push (task state, scheduled
-// tasks, browser traffic, recovery markers, unknown types) is a notice:
+// tasks, recovery markers, unknown types) is a notice:
 // Type and Kind both name the server message type and Payload holds the
 // complete original JSON envelope so the upper layer decides what it means.
 type Event struct {
@@ -129,7 +129,7 @@ func DialWithResume(ctx context.Context, address, token string, resume []ReplayC
 	if err != nil {
 		return nil, fmt.Errorf("connect to daemon: %w", err)
 	}
-	conn.SetReadLimit(maxMessageBytes)
+	conn.SetReadLimit(MaxWireMessageBytes)
 	stopHandshake := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stopHandshake()
 	resumeFrom := make([]ReplayCursor, 0, len(resume))
@@ -366,22 +366,21 @@ func (c *Client) Version() string {
 	return c.version
 }
 
-// Send enqueues one fire-and-forget message such as a browser publish or a
-// browser reply. It never retries: a failed send leaves delivery unknown
-// and says so.
+// Send enqueues one fire-and-forget protocol message. It never retries:
+// a failed send leaves delivery unknown and says so.
 func (c *Client) Send(ctx context.Context, message any) error {
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("browser message not sent, context ended: %w", err)
+		return fmt.Errorf("message not sent, context ended: %w", err)
 	}
 	select {
 	case <-c.closed:
-		return fmt.Errorf("browser message not sent, connection is closed: %w", c.Err())
+		return fmt.Errorf("message not sent, connection is closed: %w", c.Err())
 	case <-ctx.Done():
-		return fmt.Errorf("browser message not sent, context ended: %w", ctx.Err())
+		return fmt.Errorf("message not sent, context ended: %w", ctx.Err())
 	default:
 	}
 	if err := c.writeJSON(ctx, message); err != nil {
-		return fmt.Errorf("send browser message: %w (delivery unknown: the daemon may have received it; do not retry automatically)", err)
+		return fmt.Errorf("send message: %w (delivery unknown: the daemon may have received it; do not retry automatically)", err)
 	}
 	return nil
 }

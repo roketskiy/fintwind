@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -90,6 +91,8 @@ type app struct {
 	mdCompact      markdown.Options
 	mdReasoning    markdown.Options
 	mdReady        bool
+	diagrams       map[[32]byte]*diagramState
+	diagramWorkers chan struct{}
 	draft          string
 	surfaces       []string
 	activeSurface  int
@@ -247,6 +250,24 @@ func main() {
 	preferencesDir := flag.String("preferences-dir", "", "client preferences directory")
 	connect := flag.Bool("connect", false, "connect to the launcher-owned daemon")
 	flag.Parse()
+	if !*connect && flag.NFlag() == 0 {
+		root := os.Getenv("LOCALAPPDATA")
+		if root == "" {
+			log.Fatal("LOCALAPPDATA is required")
+		}
+		*dataDir = filepath.Join(root, "Fintwind")
+		*preferencesDir = filepath.Join(root, "Fintwind Go")
+		*profile = "daily"
+		address, token, stop, err := startReleaseDaemon(*daemonPath, *dataDir)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer stop()
+		_ = os.Setenv("FINTWIND_MYGO_PROFILE", "daily")
+		_ = os.Setenv("FINTWIND_MYGO_DAEMON_ADDRESS", address)
+		_ = os.Setenv("FINTWIND_MYGO_DAEMON_TOKEN", token)
+		*connect = true
+	}
 	if *profile != "daily" && *profile != "agent" {
 		log.Fatal("unsupported launch profile")
 	}
@@ -591,8 +612,15 @@ func (a *app) loadSession(id string) {
 	if client == nil {
 		return
 	}
+	var projectPath string
+	if summary := a.summarySession(id); summary != nil {
+		if project := a.projectForID(summary.ProjectID); project != nil {
+			projectPath = project.Path
+		}
+	}
+	binary := a.settingsStr("opencode_binary_path", "opencode")
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
 		payload, err := client.Request(ctx, map[string]any{
 			"type":          "hydrateSession",
@@ -619,6 +647,54 @@ func (a *app) loadSession(id string) {
 				a.detailErr = err.Error()
 			})
 			return
+		}
+		if session := detail.Session; session != nil && session.NativeSessionID != nil && *session.NativeSessionID != "" && len(session.Messages) == 0 && len(session.TranscriptBlocks) == 0 && len(session.Turns) == 0 {
+			directory := projectPath
+			if session.Workspace.Kind == "worktree" && session.Workspace.Path != "" {
+				directory = session.Workspace.Path
+			}
+			var native struct {
+				Transcript model.NativeTranscript `json:"transcript"`
+			}
+			var response json.RawMessage
+			if directory == "" {
+				err = errors.New("native session workspace is unavailable")
+			} else {
+				response, err = client.Request(ctx, map[string]any{"type": "fetchNativeTranscript", "binary": binary, "directory": directory, "sessionId": *session.NativeSessionID})
+				if err == nil {
+					err = json.Unmarshal(response, &native)
+				}
+			}
+			if err != nil {
+				a.post(func() {
+					if generation == a.generation {
+						a.detailLoading = false
+						a.detailErr = err.Error()
+					}
+				})
+				return
+			}
+			session.Messages, session.TranscriptBlocks, session.Turns = native.Transcript.Messages, native.Transcript.Blocks, native.Transcript.Turns
+		}
+		if session := detail.Session; session != nil && session.NativeSessionID != nil && *session.NativeSessionID != "" && (session.ContextUsage == nil || !session.ContextUsage.Measured) {
+			directory := projectPath
+			if session.Workspace.Kind == "worktree" && session.Workspace.Path != "" {
+				directory = session.Workspace.Path
+			}
+			if directory != "" {
+				if data, err := client.Request(ctx, map[string]any{"type": "fetchNativeUsage", "binary": binary, "directory": directory, "sessionId": *session.NativeSessionID}); err == nil {
+					var result struct {
+						Usage *model.ContextUsage `json:"usage"`
+					}
+					if json.Unmarshal(data, &result) == nil && result.Usage != nil {
+						if old := session.ContextUsage; old != nil {
+							result.Usage.Window, result.Usage.Composition = old.Window, old.Composition
+							result.Usage.FirstTokenMs, result.Usage.FirstTokenTurns = old.FirstTokenMs, old.FirstTokenTurns
+						}
+						session.ContextUsage = result.Usage
+					}
+				}
+			}
 		}
 		a.post(func() {
 			if generation != a.generation {
@@ -697,6 +773,9 @@ func (a *app) view(c *ui.Context) {
 		a.mdUser = newMarkdownOptions(c, 14, 20, 11.5, 17.5)
 		a.mdCompact = newMarkdownOptions(c, 11.5, 17, 10.5, 16)
 		a.mdReasoning = newMarkdownOptions(c, 11.5, 17, 10.5, 16)
+		for _, options := range []*markdown.Options{&a.md, &a.mdUser, &a.mdCompact, &a.mdReasoning} {
+			options.Code = map[string]func(*ui.Context, *markdown.CodeBlockView){"mermaid": a.renderDiagram, "markdown": a.renderMarkdownCode}
+		}
 		// Transcript messages share one selection per message row (like the
 		// source's transcript selection): the row column is Selectable and
 		// carries the unified menu, so these views leave selection to it.

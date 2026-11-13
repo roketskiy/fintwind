@@ -251,6 +251,7 @@ func (a *app) refreshCatalog() {
 			}
 			a.projects = state.Projects
 			a.sessions = state.Sessions
+			a.settings.backend.schedBoard.ready = false
 			a.projectlessRoot = state.ProjectlessRoot
 			a.byID = make(map[string]*model.Session, len(a.sessions))
 			for index := range a.sessions {

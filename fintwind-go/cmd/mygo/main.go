@@ -11,8 +11,13 @@ import (
 	"path/filepath"
 	"time"
 
+	"fintwind-go/internal/daemon"
 	"fintwind-go/internal/launchprofile"
 )
+
+var selectedBackend = "go"
+var probeProvider bool
+var probeSession string
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "--bind" && os.Getenv("MYGO_VERIFY_BAD_DAEMON") == "1" {
@@ -28,13 +33,21 @@ func main() {
 		return
 	}
 	profile := flag.String("profile", "agent", "daily uses real Fintwind data; agent is isolated")
+	backend := flag.String("backend", "go", "daemon implementation: go")
 	name := flag.String("name", "default", "isolated agent environment name")
 	root := flag.String("root", "", "repository directory")
 	planOnly := flag.Bool("plan", false, "print paths without building, creating data, or starting processes")
 	buildOnly := flag.Bool("build-only", false, "build matching binaries without starting the app or daemon")
+	flag.BoolVar(&probeProvider, "probe-provider", false, "check the real provider catalog during startup")
+	flag.StringVar(&probeSession, "probe-session", "", "check a real session during startup")
 	verify := flag.Bool("verify", false, "run isolated launcher process E2E without opening a window")
 	daemonPath := flag.String("daemon", "", "daemon binary for --verify only")
 	flag.Parse()
+	if *backend != "go" {
+		fmt.Fprintln(os.Stderr, "[X] backend must be go")
+		os.Exit(1)
+	}
+	selectedBackend = *backend
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	if *verify {
@@ -64,7 +77,7 @@ func run(ctx context.Context, root, profile, name string, planOnly, buildOnly bo
 	}
 	if planOnly {
 		// Daily credentials remain in memory; plan output never serializes them.
-		return json.NewEncoder(os.Stdout).Encode(map[string]any{"profile": plan.Profile, "name": plan.Name, "dataDir": plan.DataDir, "preferencesDir": plan.PreferencesDir, "workDir": plan.WorkDir, "buildDir": plan.BuildDir, "protocolVersion": 24})
+		return json.NewEncoder(os.Stdout).Encode(map[string]any{"profile": plan.Profile, "backend": selectedBackend, "name": plan.Name, "dataDir": plan.DataDir, "preferencesDir": plan.PreferencesDir, "workDir": plan.WorkDir, "buildDir": plan.BuildDir, "protocolVersion": daemon.ProtocolVersion})
 	}
 	if err := plan.Prepare(); err != nil {
 		return err

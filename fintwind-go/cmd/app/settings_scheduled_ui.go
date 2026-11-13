@@ -1,170 +1,18 @@
 package main
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/lobehub/lobe-mygo/pkg/theme"
-	lobechoice "github.com/lobehub/lobe-mygo/pkg/choice"
 )
 
-// scheduledSettings is the standalone scheduled-tasks workspace: a
-// mail-style roster left and detail right, entered from the mode rail or
-// the command palette like GPUI's WorkspaceMode::ScheduledTasks.
+// scheduledSettings is the standalone scheduled-task board.
 func (a *app) scheduledSettings(c *ui.Context) {
-	a.mailRoot(c, func() {
-		a.scheduledListPane(c)
-	}, func() {
-		a.scheduledDetail(c)
-	})
+	a.scheduledBoard(c)
 }
 
-func schedFilterOptions() []string {
-	return []string{tr("All"), tr("Active"), tr("Paused")}
-}
-
-func schedFilterIndex(filter string) int {
-	switch filter {
-	case "active":
-		return 1
-	case "paused":
-		return 2
-	default:
-		return 0
-	}
-}
-
-func (a *app) scheduledListPane(c *ui.Context) {
-	st, backend := &a.settings.catalog, &a.settings.backend
-	tk := theme.TokensOf(c)
-	ui.Row(c).FillWidth().Padding(14, 12, 0, 12).Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, tr("Scheduled tasks")).FontSize(uiPx(20)).FontWeight(500).
-			TextColor(palette.text).Grow(1).MinWidth(0).SingleLine().Ellipsis("...")
-		newTask := ui.ButtonBase(c).Label(tr("New task")).Height(32).Padding(0, 12).
-			Radius(7).Gap(6).AlignItems(ui.Center).Border(0, ui.Transparent).
-			Background(tk.Primary).TextColor(tk.PrimaryForeground).
-			FontSize(uiPx(12.5)).FontWeight(500)
-		if newTask.Hovered() {
-			newTask.Background(tk.PrimaryHover)
-		}
-		if newTask.Pressed() {
-			newTask.Background(tk.PrimaryActive)
-		}
-		newTask.Children(func() {
-			icon(c, "plus", 13, tk.PrimaryForeground)
-			ui.Text(c, tr("New task")).SingleLine()
-		})
-		if newTask.Clicked() {
-			a.beginScheduledTask(nil)
-		}
-	})
-	ui.Column(c).FillWidth().Padding(10, 12, 0, 12).Gap(8).Children(func() {
-		settingsSearchInput(c, "scheduled-search", tr("Search tasks"), &st.schedQuery)
-		c.Key("scheduled-filter")
-		index := schedFilterIndex(st.schedFilter)
-		themeSegmented(c, &index, schedFilterOptions())
-		selected := "all"
-		if index == 1 {
-			selected = "active"
-		} else if index == 2 {
-			selected = "paused"
-		}
-		if selected != st.schedFilter && !(st.schedFilter == "" && selected == "all") {
-			if selected == "all" {
-				st.schedFilter = ""
-			} else {
-				st.schedFilter = selected
-			}
-		}
-	})
-	settingsOperationStatus(c, backend.sched, "")
-	visible, _ := a.schedVisible(backend.schedTasks, st.schedFilter, st.schedQuery)
-	if backend.sched.loaded && len(visible) == 0 {
-		if len(backend.schedTasks) == 0 {
-			mailStatusRow(c, tr("No scheduled tasks"))
-		} else {
-			mailStatusRow(c, tr("No matching tasks"))
-		}
-	}
-	c.Key("settings-scheduled-list")
-	ui.List(c, &backend.schedList, len(visible)).FillWidth().Grow(1).MinHeight(0).ItemKey(func(i int) any { return visible[i].ID }).Rows(func(row ui.ListRow) {
-		task := visible[row.Index]
-		rowCtx := row.Context
-		ui.Column(rowCtx).FillWidth().Padding(4, 8, 4, 8).Children(func() {
-			a.schedTaskCard(rowCtx, task, backend.schedSelected == task.ID && !st.schedAdding)
-		})
-	})
-	caption := tr("Not loaded")
-	if backend.sched.loaded {
-		caption = fmt.Sprintf("%d tasks", len(backend.schedTasks))
-	}
-	mailFooter(c, caption, false)
-}
-
-// schedStatusBadge is the roster's enable badge with a tone dot: success
-// while enabled, danger while paused, like the source's badge tones.
-func schedStatusBadge(c *ui.Context, enabled bool) {
-	color, label := palette.success, tr("Enabled")
-	if !enabled {
-		color, label = palette.danger, tr("Paused")
-	}
-	badge := ui.Row(c).Padding(2, 7).Radius(10).Gap(5).AlignItems(ui.Center).
-		Background(ui.RGBA(color.R, color.G, color.B, 0.14))
-	badge.Children(func() {
-		ui.Row(c).Size(6, 6).Shrink(0).Radius(3).Background(color)
-		ui.Text(c, label).FontSize(uiPx(9.5)).TextColor(color)
-	})
-}
-
-// schedTaskCard is one roster card: title plus status badge over the
-// target/schedule/next/last meta, with the row menu (Edit/Run/Delete) like
-// the source's task row menu. Enter/Space on a focused card selects it.
-func (a *app) schedTaskCard(c *ui.Context, task scheduledTask, selected bool) {
-	st, backend := &a.settings.catalog, &a.settings.backend
-	card := ui.ButtonBase(c).Label(task.Title).FillWidth().Padding(10, 12).Radius(9).
-		Gap(6).Border(1, palette.cardBorder).Background(palette.raised)
-	if selected {
-		card.Border(1, palette.accent)
-	}
-	card.Children(func() {
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, task.Title).FontSize(uiPx(12.5)).FontWeight(500).
-				TextColor(palette.text).Grow(1).MinWidth(0).SingleLine().Ellipsis("...")
-			schedStatusBadge(c, task.Enabled)
-		})
-		meta := a.schedTargetLabel(task) + tr(" · ") + schedScheduleSummary(task.Schedule) + tr(" · ") + a.schedNextLabel(task)
-		if task.Last != nil {
-			meta += tr(" · ") + strings.ReplaceAll(tr("Last %{time}"), "%{time}", schedFormatTimestamp(task.Last.At))
-		}
-		ui.Text(c, meta).FontSize(uiPx(10.5)).TextColor(palette.textTertiary).SingleLine().Ellipsis("...")
-	})
-	busy := backend.sched.writing || backend.sched.uncertain
-	card.ContextMenu(func(m *ui.Menu) {
-		if m.Item(tr("Edit task")).Disabled(busy).Chosen() {
-			a.beginScheduledTask(&task)
-		}
-		runDisabled := busy || task.Pending != nil
-		if m.Item(tr("Run now")).Disabled(runDisabled).Chosen() {
-			a.runScheduledTaskNow(task)
-		}
-		m.Separator()
-		if m.Item(tr("Delete")).Disabled(busy).Chosen() {
-			st.schedAdding = false
-			backend.schedEditing = ""
-			backend.schedSelected = task.ID
-			backend.schedDeleteConfirm = "scheduled:" + task.ID
-		}
-	})
-	if card.Clicked() || (card.Focused() && (c.Shortcut(0, ui.KeyEnter) || c.Shortcut(0, ui.KeySpace))) {
-		st.schedAdding = false
-		backend.schedEditing, backend.schedDeleteConfirm = "", ""
-		backend.schedSelected = task.ID
-		a.closeSettingsMenus()
-	}
-}
-
-func (a *app) schedNextLabel(task scheduledTask) string {	if !task.Enabled {
+func (a *app) schedNextLabel(task scheduledTask) string {
+	if !task.Enabled {
 		return tr("Not scheduled")
 	}
 	if task.NextDueAt == nil {
@@ -211,8 +59,8 @@ func (a *app) scheduledTaskDetail(c *ui.Context, task scheduledTask) {
 				ui.Text(c, reason).FontSize(uiPx(11)).TextColor(palette.danger).Wrap()
 			}
 			ui.Row(c).Gap(8).Children(func() {
-				componentTextButton(c, "scheduled-edit", tr("Edit task"), false).Disabled(st.sched.writing).OnClick(func() { a.beginScheduledTask(&task) })
-				runDisabled := st.sched.writing || st.sched.uncertain || task.Pending != nil
+				componentTextButton(c, "scheduled-edit", tr("Edit task"), false).Disabled(st.sched.writing || st.sched.uncertain).OnClick(func() { a.beginScheduledTask(&task) })
+				runDisabled := st.sched.writing || st.sched.uncertain || a.scheduledTaskRunning(task)
 				componentTextButton(c, "scheduled-run", tr("Run now"), false).Disabled(runDisabled).OnClick(func() { a.runScheduledTaskNow(task) })
 				componentTextButton(c, "scheduled-toggle", choice(task.Enabled, tr("Pause"), tr("Enable")), false).Disabled(st.sched.writing || st.sched.uncertain).OnClick(func() { a.toggleScheduledTask(task, !task.Enabled) })
 				componentTextButton(c, "scheduled-remove", tr("Delete"), false).Disabled(st.sched.writing || st.sched.uncertain).OnClick(func() { st.schedDeleteConfirm = "scheduled:" + task.ID })
@@ -220,7 +68,7 @@ func (a *app) scheduledTaskDetail(c *ui.Context, task scheduledTask) {
 			if st.schedDeleteConfirm == "scheduled:"+task.ID {
 				ui.Text(c, strings.ReplaceAll(tr("Delete “%{title}”?"), "%{title}", task.Title)).FontSize(uiPx(12)).TextColor(palette.text).Wrap()
 				ui.Text(c, tr("Sessions it already started are kept.")).FontSize(uiPx(11)).TextColor(palette.textSecondary).Wrap()
-				ui.Row(c).Gap(8).Children(func() {
+				ui.Row(c).Gap(8).Wrap().Children(func() {
 					componentTextButton(c, "scheduled-remove-cancel", tr("Cancel"), false).OnClick(func() { st.schedDeleteConfirm = "" })
 					componentTextButton(c, "scheduled-remove-confirm", tr("Delete"), true).Disabled(st.sched.writing).OnClick(func() { a.deleteScheduledTask(task) })
 				})
@@ -239,10 +87,8 @@ func (a *app) scheduledTaskDetail(c *ui.Context, task scheduledTask) {
 
 func (a *app) scheduledForm(c *ui.Context) {
 	st, backend := &a.settings.catalog, &a.settings.backend
-	editing := backend.schedEditing != ""
-	ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
-		ui.Column(c).FillWidth().Padding(18, 24, 24, 24).Gap(14).Children(func() {
-			formTitle(c, choice(editing, tr("Edit task"), tr("New task")))
+	ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).Disabled(backend.sched.writing).Children(func() {
+		ui.Column(c).FillWidth().Padding(8, 4, 16, 4).Gap(12).Children(func() {
 			settingsFormField(c, "scheduled-form-title", tr("Name"), &st.schedTitle, tr("e.g. Weekly dependency update"))
 			a.scheduledPromptField(c)
 			ui.Column(c).FillWidth().Gap(6).Children(func() {
@@ -271,13 +117,11 @@ func (a *app) scheduledForm(c *ui.Context) {
 					a.settingsChoice(c, "scheduled-form-access", tr("Permissions"), st.schedAccess, formPickerWidth, schedAccessOptions(), func(option settingsOption) { st.schedAccess = option.value })
 				})
 			}
-			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				c.Key("settings-toggle-scheduled-enabled")
-				lobechoice.Switch(c, &st.schedEnabled, lobechoice.SwitchProps{Size: theme.Small}).Label(tr("Enabled")).OnChange(func() {})
-			})
-			settingsOperationStatus(c, backend.sched, "")
-			formActions(c, "scheduled-form", tr("Save"), !backend.sched.loaded || backend.sched.writing || backend.sched.uncertain, a.cancelScheduledTask, a.saveScheduledTask)
 		})
+	})
+	ui.Column(c.Key("scheduled-form-footer")).FillWidth().Padding(12, 4, 0, 4).Gap(8).Children(func() {
+		settingsOperationStatus(c, backend.sched, "")
+		formActions(c, "scheduled-form", tr("Save"), !backend.sched.loaded || backend.sched.writing || backend.sched.uncertain, a.cancelScheduledTask, a.saveScheduledTask)
 	})
 }
 
@@ -310,8 +154,10 @@ func (a *app) scheduledTimingFields(c *ui.Context) {
 			ui.Text(c, tr("minutes")).FontSize(uiPx(11)).TextColor(palette.textSecondary)
 		})
 	case "once":
-		settingsFormField(c, "scheduled-form-date", tr("Date"), &st.schedDate, tr("YYYY-MM-DD"))
-		settingsFormField(c, "scheduled-form-time", tr("Time"), &st.schedTime, "09:00")
+		ui.Row(c).FillWidth().Gap(12).Children(func() {
+			ui.Column(c).Grow(1).Basis(0).MinWidth(0).Children(func() { settingsFormField(c, "scheduled-form-date", tr("Date"), &st.schedDate, tr("YYYY-MM-DD")) })
+			ui.Column(c).Grow(1).Basis(0).MinWidth(0).Children(func() { settingsFormField(c, "scheduled-form-time", tr("Time"), &st.schedTime, "09:00") })
+		})
 	default:
 		settingsFormField(c, "scheduled-form-time", tr("Time"), &st.schedTime, "09:00")
 		c.Key("scheduled-form-weekdays")

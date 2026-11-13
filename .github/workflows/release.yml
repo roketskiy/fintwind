@@ -13,10 +13,6 @@ concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
 
-env:
-  CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: "0"
-
 jobs:
   version:
     name: Release preflight
@@ -70,12 +66,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Set up Rust and caches
-        id: rust
-        uses: ./.github/actions/setup-rust
+      - name: Set up Go
+        uses: actions/setup-go@v6
         with:
-          kind: release-build
-          profile: release
+          go-version-file: fintwind-go/go.mod
+          cache-dependency-path: fintwind-go/go.sum
 
       - uses: oven-sh/setup-bun@v2
 
@@ -99,51 +94,6 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
-
-      # Tag-scoped caches cannot warm the next version. Only a successful
-      # manual run on main saves compiler artifacts for subsequent releases.
-      - name: Verify inputs and save compiler artifacts
-        uses: ./.github/actions/save-rust-cache
-        with:
-          kind: release-build
-          profile: release
-          build-key: ${{ steps.rust.outputs.build-key }}
-          build-hit: ${{ steps.rust.outputs.build-hit }}
-          build-path: ${{ steps.rust.outputs.build-path }}
-
-      - name: Upload cache input verification
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: release-cache-inputs-${{ matrix.arch }}
-          path: ${{ runner.temp }}/cargo-cache-release-build/*.json
-          retention-days: 3
-
-  cache-maintenance:
-    name: Bound main-branch compiler caches
-    needs: [windows, checks]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
-    continue-on-error: true
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    concurrency:
-      group: cargo-cache-maintenance
-      cancel-in-progress: false
-    permissions:
-      contents: read
-      actions: write
-    steps:
-      - uses: actions/checkout@v6
-      - name: Retain recent successful generations within the free cache budget
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/cargo-cache-retention.py --repo "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID" --report "$RUNNER_TEMP/cache-retention.json" --apply
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: release-cache-retention-report
-          path: ${{ runner.temp }}/cache-retention.json
-          retention-days: 3
 
   draft-release:
     name: Draft GitHub release

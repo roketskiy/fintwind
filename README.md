@@ -3,15 +3,11 @@
 English | [简体中文](README.zh-CN.md)
 
 A native Windows desktop client for [OpenCode 2](https://opencode.ai/v2/docs).
-Built with Rust and [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui),
+Built with Go and [MyGo](https://github.com/egoist/mygo),
 not Electron. Manage projects, work in multiple session tabs, and follow the
 agent's replies, reasoning, and tool activity in one window.
 
 [Downloads](https://github.com/roketskiy/fintwind/releases/latest) · [Changelog](CHANGELOG.md)
-
-Session demo: switching models, a session in progress, and scrolling a long transcript.
-
-https://github.com/user-attachments/assets/beb2dcb5-88dd-4f2b-9415-153af9c93bf9
 
 ## Install
 
@@ -52,16 +48,6 @@ or use your existing provider configuration. fintwind uses OpenCode's models,
 provider credentials, and MCP configuration. You do not need to start
 `opencode serve` yourself: fintwind starts its own private local server.
 
-The optional browser and scheduled task MCPs require OpenCode 2.1.4 or newer.
-Enable them in **Settings → General → Features**; Fintwind manages the
-experimental MCP connections automatically. See
-[agent-created scheduled tasks](docs/scheduled-tasks-mcp.md).
-
-Optional image generation requires OpenCode 2.2.1 or newer and a compatible
-connected image model. Native Goal integration targets OpenCode 2.2.1;
-older versions without native Goal cannot use it. See [Goal](docs/goals.md)
-and image model configuration for scope.
-
 ### 2. Install fintwind
 
 - **System:** Windows 10 version 1809 or newer, or Windows 11; x86_64 or Arm64.
@@ -77,131 +63,18 @@ For the portable version, extract the release `.zip` and run `fintwind.exe`.
 **Keep `fintwind.exe` and `fintwind-daemon.exe` in the same folder** — the app
 launches the daemon from its own directory.
 
-When a newer release is available, the update card can install it in one
-click: fintwind downloads the installer for your architecture, verifies it
-against the sha256 published with the release, installs silently without
-administrator rights, and restarts into the new version. Portable installs have
-no install record, so their update entry still opens the release page. See
-[Windows setup and troubleshooting](docs/windows.md) for SmartScreen, CLI
-detection, data locations, and WebView2 details.
+For updates, download a newer installer or portable archive from the release page.
+See [Windows setup and troubleshooting](docs/windows.md) for data locations.
 
 ## Features
 
-- **Phone remote control.** Enable it from the desktop sidebar, then scan the QR
-  code or open the pairing link to use the mobile web client. Switch workspaces,
-  view and create sessions, send messages and attachments, stop tasks, and handle
-  approvals and questions over an end-to-end encrypted connection without an
-  account. The desktop must stay running; access covers workspaces registered
-  when remote control starts and sessions updated within the last 72 hours.
-  Stopping remote control, closing the desktop, or pairing again invalidates the
-  old pairing. See [remote control](docs/remote-control.md).
-- **Image generation.** Enable OpenCode's experimental image tool in General
-  settings and choose a default from the current workspace's available image models.
-- **Native Goal.** Set a goal with `/goal <goal>`, then inspect, pause, resume,
-  or clear it. OpenCode owns goal evaluation and continuation. Old Fintwind goals
-  are not migrated automatically.
-- **Session Todo.** Follow the agent's task list and completion progress in the
-  session capsule, alongside pending added and removed line counts.
-- **Keep awake.** Optionally keep the display and system awake while Fintwind runs.
-- **OpenCode runtime.** Check the version and install or update an npm- or
-  Bun-managed OpenCode in general settings. You can also choose a portable
-  executable without adding it to PATH and restore automatic detection later.
-- **Old session cleanup.** Preview and delete sessions inactive for 30, 90, or
-  180 days (90 by default). Cleanup covers sessions visible in Fintwind and
-  linked to OpenCode, removing the corresponding records from both.
-- **Context composition.** A treemap compares eight estimated categories,
-  including compaction summaries, tool calls, and tool results. Reported
-  occupancy stays separate, and unmeasurable content is marked explicitly.
-- **App updates.** Stable builds offer the most recently published full release,
-  even when a corrected version number is lower than the installed one. Drafts
-  and prereleases are excluded, and the current release is not offered again.
-- **Projects and session tabs.** Group sessions by project and open multiple
-  sessions in one window, with tab reordering and unread indicators. New sessions
-  without a project share a fixed general workspace. Change its folder in
-  **Settings → General → Data management**; existing sessions keep their paths.
-- **Session controls.** Switch model, reasoning effort where supported, and
-  access mode (Ask, Auto-accept edits, Full access). Queue or steer a follow-up
-  while the agent works; queued messages live inside the composer card in a
-  collapsible section and reorder by dragging. Choose the
-  default send behavior in General settings. Question cards can be skipped,
-  collapsed, or expanded. Use OpenCode's
-  native revert and restore for eligible Git-backed turns. `/btw` asks a
-  one-off side question from the session's settled context without disturbing
-  the task in progress.
-- **Turn recovery.** Recover missed replies and completion events from OpenCode's
-  stored history. History reads accept responses up to 64 MiB and reduce page
-  sizes when image or tool payloads make a page too large. Interrupted sessions
-  repair stale Working projections instead of staying stuck, and dead runtimes
-  are rebuilt on the next submit.
-- **Provider marks.** Recognized vendors use their brand marks in the model picker
-  and provider settings, with light and dark variants where available.
-- **Readable agent activity.** View streaming replies, reasoning, tool calls,
-  subagent activity, and nested Code Mode calls with OpenCode's tool names.
-  Background shell commands surface as capsules on the session card, and
-  finished activity groups fold away on their own. Transcripts and reasoning
-  use virtualized lists to limit per-frame work.
-- **Files and Git.** Browse workspace files and open multiple file tabs. Review
-  staged, unstaged, untracked, and ignored files in a directory tree, load
-  directories on demand, and inspect nested repositories and per-file diffs.
-  Read Git history in a fixed-lane branch graph with branch and tag labels.
-  A card-style commit box supports Ctrl+Enter, with commit, pull, push, and more
-  actions in a split button. Attach files from the composer or by
-  dropping them onto the conversation; images and PDFs are sent inline to OpenCode.
-- **Terminal and browser.** Work in a built-in terminal or the optional
-  WebView2 browser panel. Enable the browser tools in settings (off by
-  default; requires OpenCode 2.1.4+) and agents in any session can operate all
-  open browser tabs, including manually opened tabs, without per-page approval
-  or session isolation.
-  Tools can open, observe, click, fill, scroll, navigate, and take screenshots;
-  they support local file pages and password fields, and snapshots can include
-  passwords and hidden form values. The session interface itself remains native GPUI.
-- **Appearance settings.** Choose Fintwind or one of 13 additional theme
-  families, select light, dark, or automatic mode, and customize UI and code
-  fonts and text sizes. Automatic mode switches to light at 07:00 and dark at
-  19:00 local time; it does not follow the system appearance. Animations
-  honor the system's reduce-motion preference.
-- **Usage and subscriptions.** Explore OpenCode session history through an
-  activity heatmap, daily and hourly charts, and model, provider, and project
-  rankings, including subagent usage. History defaults to one day, with 7-day,
-  30-day, and all-time ranges also available. Switch to subscriptions to see available
-  quotas for connected, supported providers, including local Claude Code and
-  Codex subscriptions. The statistics page no longer displays cost estimates.
-  See [provider quotas](docs/provider-quota.md) for sources and limitations.
-- **Anonymous launch statistics.** Stable and beta builds report a randomly
-  generated local installation ID to the project website on each launch to
-  count daily active desktops. No sessions, project paths, or account data
-  are sent.
-- **Provider management.** Sign in and out of built-in providers, see at a
-  glance which connections need re-login, and read the provider's own rejection
-  reason (quota, key, or model) when a request fails. Custom provider API keys
-  use OpenCode credentials; models can inherit the provider protocol or select
-  their own, including OpenAI Images and Google Images.
-- **Scheduled tasks.** Open the clock icon in the sidebar to run instructions
-  on selected weekdays at a set time, at a fixed interval, or once at a specific
-  date and time. Pick the date from a calendar; one-shot tasks deactivate after
-  running but keep history. Create a session
-  with a chosen project, model, and access mode, or reuse an existing session.
-  Pause, resume, run immediately, and inspect results. Tasks do not run while
-  Fintwind is fully closed, and missed runs are not replayed. Enable **Scheduled
-  task MCP** in General settings to let agents create tasks. It is off by
-  default and requires OpenCode 2.1.4+. Agents ask for missing task details before
-  creating a task. See [the MCP reference](docs/scheduled-tasks-mcp.md).
-- **MCP management.** Browse search, office, design, data, automation,
-  operations, and business categories. Add remote servers, complete OAuth
-  login, and check connection status. Listings use vendor-operated endpoints
-  where available.
-- **Native Mermaid diagrams.** Read flowcharts, sequence diagrams, class
-  diagrams, state diagrams, and more directly in conversations. Click a diagram
-  (or press Enter/Space on it) to open a fullscreen preview with zoom in, zoom out,
-  and reset to 1:1. Diagrams use accent-tinted surfaces and a color series that adapts
-  to light and dark themes. Switch to
-  source or inspect compilation errors. Enable the Mermaid visualization
-  prompt in General settings to give new sessions diagram guidance and a
-  built-in validation tool. Existing sessions retain their original preference.
-- **Native math.** Typeset inline and display formulas, including `\(…\)` and
-  `\[…\]`, with layout work performed on background workers. Inline math renders
-  at 1.21x and display math at 1.25x; overwide formulas keep natural size on their
-  own horizontally scrollable row.
+The Go edition supports projects, conversation tabs, provider settings, MCP server
+settings, source control, and a built-in terminal. It uses the local OpenCode
+installation for agent interactions. Some features of the former Rust edition
+are not yet available in the Go edition.
+
+Web links and login authorization open in the system browser. Fintwind does not
+embed a browser or expose browser automation tools.
 
 ## Local data and scope
 
@@ -217,49 +90,24 @@ not the official OpenCode desktop app. fintwind ships for Windows and uses
 OpenCode 2 as its only agent backend. Multiple model providers are available
 through OpenCode; other agent backends are outside this fork's scope.
 
-### Memory snapshot
-
-One Task Manager snapshot shows the desktop at 69.4 MB and
-`fintwind-daemon.exe` at 25.7 MB — about 95 MB combined. This is not a benchmark
-or a total for the full agent stack: it excludes OpenCode and any other
-processes, and actual usage varies by workload.
-
-![Task Manager: fintwind at 69.4 MB, fintwind-daemon.exe at 25.7 MB](docs/media/runtime-memory.png)
-
 ## Architecture
 
-The desktop uses [`fintwind-client`](crates/fintwind-client) to communicate with
-a separate [`fintwind-daemon`](crates/fintwind-daemon) process over the
-authenticated, versioned WebSocket contract in
-[`fintwind-protocol`](crates/fintwind-protocol).
-[`fintwind-core`](crates/fintwind-core) implements daemon-owned storage,
-workspace and Git operations, and the OpenCode integration. The daemon listens
-on loopback and authenticates clients with a token generated at launch.
+The Go desktop and daemon live in [`fintwind-go/`](fintwind-go). The desktop
+starts `fintwind-daemon.exe` from its own directory. The daemon listens on a
+loopback address and authenticates clients with a token generated at launch.
+Application data is stored under `%LOCALAPPDATA%\Fintwind`; daemon provider
+settings are stored in `%USERPROFILE%\.fintwind\settings.json`.
 
-Release desktop preferences live in `~/.fintwind/app.json`; debug builds use
-`temp/app.json`. Daemon provider settings live in `~/.fintwind/settings.json`.
-New sessions without a project share `%LOCALAPPDATA%\Fintwind\projects` by
-default. You can choose another folder in General settings. Existing sessions
-keep their directories, including older dated workspaces under
-`~/.fintwind/projects/<date>/<slug>`.
+The former Rust implementation remains in the repository as source. It is no
+longer the maintained or released application.
 
 ## Development
 
-Requires Windows, the MSVC C++ toolchain and Windows SDK,
-[Rust 1.97 or newer](https://www.rust-lang.org/tools/install), and
-[Bun](https://bun.sh/). Follow [CONTRIBUTING.md](CONTRIBUTING.md) for setup and checks.
-
-```sh
-bun install
-bun run dev
-```
-
-The development watcher builds the app and a separate
-`target/debug/fintwind-debug-daemon.exe`; provider-only changes can replace the
-daemon without restarting the debug app. Release builds place
-`fintwind-daemon.exe` beside `fintwind.exe`.
-
-See [RELEASING.md](RELEASING.md) for packaging and release maintenance.
+Use Windows, PowerShell 7, and the Go version specified in
+[`fintwind-go/go.mod`](fintwind-go/go.mod). Run `MyGo.cmd` from the repository
+root to build and start the application with your existing Fintwind data. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for development and build instructions and
+[RELEASING.md](RELEASING.md) for packaging.
 
 ## License
 

@@ -78,24 +78,13 @@ async function findRelease(root: string, tag: string): Promise<Release | null> {
 }
 
 async function prepare(): Promise<void> {
-  const manifest = Bun.TOML.parse(await Bun.file("Cargo.toml").text()) as {
-    package?: { name?: string; version?: string };
-  };
-  const name = manifest.package?.name;
-  const version = manifest.package?.version;
-  if (name !== "fintwind" || typeof version !== "string" || !stableVersion.test(version)) {
-    throw new Error("Cargo.toml must declare a stable Fintwind version (x.y.z)");
-  }
-  const lock = Bun.TOML.parse(await Bun.file("Cargo.lock").text()) as {
-    package?: { name: string; version: string }[];
-  };
-  const locked = lock.package?.find((entry) => entry.name === name);
-  if (locked?.version !== version) {
-    throw new Error("Cargo.lock Fintwind version does not match Cargo.toml");
+  const version = (await Bun.file("VERSION").text()).trim();
+  if (!stableVersion.test(version)) {
+    throw new Error("VERSION must contain a stable Fintwind version (x.y.z)");
   }
   const tag = `v${version}`;
   if (required("GITHUB_EVENT_NAME") === "push" && required("GITHUB_REF_NAME") !== tag) {
-    throw new Error(`Tag must match Cargo.toml: expected ${tag}`);
+    throw new Error(`Tag must match VERSION: expected ${tag}`);
   }
   const notes = extractReleaseNotes(await Bun.file("CHANGELOG.md").text(), version);
   if (!notes) throw new Error(`CHANGELOG.md needs non-empty release notes for ${version}`);

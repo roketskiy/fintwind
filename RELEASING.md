@@ -1,63 +1,34 @@
 # Releasing Fintwind
 
-Users download a per-user **`fintwind-<version>-<arch>-Setup.exe`** (or the
-portable zip) from the
-[GitHub Releases](https://github.com/roketskiy/fintwind/releases) page. The app
-selects the most recently published full release, regardless of numeric version
-ordering, and can install it itself. Drafts and prereleases are excluded; the
-installed release is not offered again. An installed
-copy offers **Update now** on the update notice, which downloads the installer
-for the running architecture, verifies it against the asset's `digest`, and runs
-it silently. That makes both release files load-bearing — a release without its
-installer leaves installed copies with no in-app update, only the manual
-download row.
+Users can download a per-user installer or portable archive from
+[GitHub Releases](https://github.com/roketskiy/fintwind/releases). The release
+contains the Go application and daemon. The Rust source remains in the
+repository but is not built or released.
 
-Fintwind versions live in the root `Cargo.toml` and are **independent of
-waku**. Development happens on `main`. Never reuse a published `v*` tag, and
-do not bump `Cargo.toml` until you are cutting the release — unreleased work
-stays under `## [unreleased]` in [`CHANGELOG.md`](CHANGELOG.md).
+The root `VERSION` file contains the Fintwind version. Keep unreleased changes
+under `## [unreleased]` in [CHANGELOG.md](CHANGELOG.md). Never reuse a
+published version tag.
 
-Cutting a release is: push a `v*` tag (or run the **Release** workflow). CI
-builds both Windows architectures in parallel with checking the existing
-**Tests** result for that exact commit. Both must succeed before CI opens a
-draft GitHub release. Review the draft, then publish it.
+CI builds both Windows architectures and checks the existing **Tests** result
+for the same commit before creating a draft release. Review the draft before
+publishing it.
 
 - Windows packaging: [`scripts/bundle-windows.ts`](scripts/bundle-windows.ts)
 - Release notes: [`scripts/changelog.ts`](scripts/changelog.ts)
 - GitHub Actions: [`.github/workflows/release.yml`](.github/workflows/release.yml)
-  builds Windows (x86_64, arm64) on a `v*` tag — or on a manual **Run workflow**,
-  which takes the version from `Cargo.toml` — and opens a draft GitHub release.
-
----
 
 ## Channels
 
-| Channel | Built by | Data directory | In-app updates |
-| --- | --- | --- | --- |
-| stable | CI on a `v*` tag, or a manual **Release** run | `Fintwind` (production) | checks GitHub releases |
-| beta | **local builds only** (`bun scripts/bundle-windows.ts --channel=beta`) | `Fintwind` — the same directory as stable | disabled — there is no beta feed |
-| dev | plain `cargo build` (debug), for agent development | `Fintwind Debug` (isolated) | disabled |
+Stable packages are built by CI. Beta packages are local only:
 
-Every channel packages only `fintwind.exe` and `fintwind-daemon.exe`.
+```sh
+bun scripts/bundle-windows.ts --channel=beta
+```
 
-GitHub builds and publishes the **stable channel only**: the Release workflow
-passes `--channel=stable` explicitly, and there is no beta job, input, tag,
-prerelease, or artifact. Do not add one — beta exists as a local convenience.
-
-Sharing the production directory is deliberate (beta is a feature-ahead
-stable, not a second profile), and it carries two consequences. Beta and
-stable must not run at the same time, and data a newer beta has already
-migrated is not guaranteed to reopen in an older stable — schema compatibility
-runs forward only. A beta updates by being rebuilt; the app skips its update
-check outside the stable channel so a personal beta is never "updated" into
-the published stable over it.
-
-Stable and beta builds write the same `target/release` executables, so
-building one after the other replaces them in place. Each
-`bundle-windows.ts` run packages immediately after its own build, so that is
-expected, not a conflict.
-
----
+Stable and beta use `%LOCALAPPDATA%\Fintwind` and must not run together. Data
+migrated by a newer beta may not reopen in an older stable. Both builds write
+to `target/release`. Each archive contains `fintwind.exe` and
+`fintwind-daemon.exe` in the same directory.
 
 ## One-time setup
 
@@ -73,25 +44,19 @@ packages unsigned binaries and SmartScreen will warn.
 
 ## Cutting a release
 
-1. On `main`, set `version` in the root `Cargo.toml` to the intended unused
-   Fintwind version and update the root package entry in `Cargo.lock`.
-2. Rename `## [unreleased]` in [`CHANGELOG.md`](CHANGELOG.md) to
-   `## [<version>]` and add a fresh empty `## [unreleased]` above it.
-3. Update both README feature lists and state the OpenCode compatibility scope
-   in the release notes. Keep release notes focused on user-visible changes;
-   put verification procedures and results in the linked developer documents.
-   Use recorded results to establish compatibility; an installed CLI version
-   alone is not evidence. Commit, for example
-   `chore: release <version>`.
-4. Tag that commit `v<version>` (`git tag v<version>`) and push the branch
-   plus that exact tag (`git push --atomic origin main v<version>`), or run **Release** from
-   Actions without a tag (it reads `Cargo.toml`).
+1. Set `VERSION` to an unused version on `main`.
+2. Rename `## [unreleased]` in [CHANGELOG.md](CHANGELOG.md) to the version and
+   add a new `## [unreleased]` heading.
+3. Update both README feature lists and state the verified OpenCode compatibility
+   scope in the release notes. Commit the changes.
+4. Push the commit and its `v<version>` tag, or run **Release** manually for
+   that commit.
 5. Review the draft GitHub release, then publish it.
 
 ### Release safeguards and recovery
 
-Before building, CI checks that `Cargo.toml`, `Cargo.lock`, the pushed tag,
-and a non-empty CHANGELOG section agree. It refuses to replace a published
+Before building, CI checks that `VERSION`, the pushed tag, and a non-empty
+CHANGELOG section agree. It refuses to replace a published
 release or reuse a tag pointing to another commit. An existing draft can be
 retried only when its tag, or its exact `target_commitish` if untagged, identifies
 the commit being built. CI repeats these checks and the same-commit Tests gate
@@ -108,62 +73,6 @@ If checks are missing or cancelled, run **Tests** manually on a branch or tag
 that still points to the release commit, then rerun **Release**. Never move an
 existing release tag to repair a failed check. A retry of a completed published
 release requires a new version instead.
-
-### CI caches and diagnostics
-
-`.github/rust-version` is the CI toolchain source. The shared setup action
-separates Cargo dependency downloads from compiler artifacts. Test,
-release-check, and release-build caches have disjoint namespaces; v3 build keys
-identify build context and full input contents, not the source commit. Only successful jobs on `main` save compiler
-artifacts, so PRs and version tags do not create large, low-reuse build caches.
-Manual Release runs on `main` can seed the release-build cache; tag builds can
-restore it but do not save a tag-specific copy. Old cache entries remain subject
-to GitHub's normal eviction policy.
-
-CI disables incremental compilation and debug symbols for debug tests, and
-sets workspace dev/test opt-level=0 while retaining dependency overrides.
-Local development and shipped release settings are unchanged.
-Compiler caches exclude incremental state, top-level binaries, installers,
-and archives. The first run with the new cache scheme is cold; assess the speed
-and cache size from subsequent successful runs rather than assuming a speedup.
-
-The setup action restores timestamps only for content-identical workspace
-inputs, including vendored GPUI, embedded resources/translations/migrations and
-the embedded changelog. Directory restoration requires a matching entire
-subtree. Changed content is never backdated. A pre-build snapshot is verified
-again before saving. Missing/invalid snapshots skip restoration; unsupported or
-build-time-mutated inputs disable saving. Example outputs are cached too.
-Adoption of v3 requires a cold run before warm reuse can be measured.
-
-Successful main Tests runs maintain the newest two compiler-cache generations
-per architecture/profile and a recent dependency-download cache. Cleanup is
-limited to explicit Fintwind main-branch namespaces, defers while other runs
-are active, and reports against a 7.5 GB soft budget within GitHub's default
-10 GB free cache allowance. It never changes billing settings. See the
-diagnostics guide for migration, quota and concurrency caveats.
-
-Failed Rust tests upload available recovery E2E `result.json` files for seven
-days. The Workflow tools job checks release automation against an isolated
-loopback API and always uploads its JSON verification report.
-
-Both Windows check jobs stream real-time progress and upload Cargo fingerprint
-logs and phase timing on success and failure. An independent Windows job runs
-offline cache/logging checks in parallel. See [Cargo cache diagnostics](docs/cargo-cache-diagnostics.md) for the
-artifact names, the isolated local reproduction, and how to distinguish a
-cache download hit from actual compiler-artifact reuse.
-
-### OpenCode compatibility
-
-Fintwind uses OpenCode 2 (`@opencode/cli`), not OpenCode 1.x. The optional
-scheduled task MCP requires OpenCode 2.1.4+ and uses an experimental client-hosted
-MCP interface. Keep that requirement in both READMEs and the release notes.
-The General setting starts the connection automatically; OpenCode 2.1.4 has no
-additional experimental configuration flag for it.
-
-The [scheduled task MCP reference](docs/scheduled-tasks-mcp.md) records the
-verified version and scope. Run its isolated black-box check when changing this
-integration or the supported OpenCode version. Check the requirements of other
-features separately before claiming a wider compatibility range.
 
 ### What CI produces
 

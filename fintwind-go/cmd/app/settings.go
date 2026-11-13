@@ -43,7 +43,6 @@ type settingsState struct {
 	// app) marks its success. Both live outside settingsRaw so a failed
 	// load simply keeps the default chip labels.
 	loading           bool
-	browserTools      bool
 	scheduledTools    bool
 	mermaidVisual     bool
 	keepAwake         bool
@@ -369,11 +368,6 @@ func (a *app) generalSettings(c *ui.Context) {
 			runtimeDisabled := s.writeBusy || !s.loaded
 			settingsRow(c, tr("While running"), "", func() {
 				a.settingsSegmented(c)
-			})
-			a.settingsSeparator(c)
-			settingsRow(c, tr("Browser tools"), tr("Not available in this build"), func() {
-				c.Key("settings-toggle-browser-tools")
-				ui.Switch(c, &a.settings.browserTools).Label(tr("Browser tools")).Disabled(true)
 			})
 			a.settingsSeparator(c)
 			settingsRow(c, tr("Todo list"), tr("Off by default. When on, agents can keep a task list with todowrite and show it above the composer"), func() {

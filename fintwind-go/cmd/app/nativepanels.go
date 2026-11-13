@@ -7,7 +7,7 @@ import (
 )
 
 // Native panel state lives here, never in main.go beyond the single field
-// the main agent owns. One entry per session; every browser and terminal tab
+// the main agent owns. One entry per session; every terminal tab
 // carries its own unique tabID. Surfaces and the active tab are stored per
 // session here because sessionstate.go does not persist them: switching
 // sessions saves the outgoing pair and restores the incoming pair, so each
@@ -23,7 +23,6 @@ type nativePanelState struct {
 // nativeSessionPanels is everything the right panel owns for one session.
 type nativeSessionPanels struct {
 	sessionID     string
-	browsers      []*nativeBrowserTab
 	terminals     []*nativeTerminalTab
 	files         map[string]*nativeFileEditor
 	surfaces      []string
@@ -80,7 +79,7 @@ func (a *app) switchNativeSession(oldID, newID string) {
 }
 
 // closeNativePanels releases everything this file created: owned terminals
-// are closed, owned web views destroyed, background launches cancelled by
+// are closed and background launches cancelled by
 // generation. Main thread only, called from OnClosed.
 func (a *app) closeNativePanels() {
 	for sessionID, entry := range a.native.sessions {
@@ -89,9 +88,6 @@ func (a *app) closeNativePanels() {
 		}
 		for _, tab := range entry.terminals {
 			a.disposeNativeTerminal(tab)
-		}
-		for _, tab := range entry.browsers {
-			a.disposeNativeBrowser(tab)
 		}
 		delete(a.native.sessions, sessionID)
 	}
@@ -129,17 +125,6 @@ func (a *app) postOrReleaseOrDrop(release func(), update func()) {
 	}()
 }
 
-// removeNativeBrowserTab drops a tab from its session list. Callers dispose
-// the resource first.
-func (entry *nativeSessionPanels) removeNativeBrowserTab(tab *nativeBrowserTab) {
-	for i, other := range entry.browsers {
-		if other == tab {
-			entry.browsers = append(entry.browsers[:i], entry.browsers[i+1:]...)
-			return
-		}
-	}
-}
-
 // removeNativeTerminalTab drops a tab from its session list. Callers dispose
 // the resource first.
 func (entry *nativeSessionPanels) removeNativeTerminalTab(tab *nativeTerminalTab) {
@@ -151,24 +136,18 @@ func (entry *nativeSessionPanels) removeNativeTerminalTab(tab *nativeTerminalTab
 	}
 }
 
-// newNativeTabID mints the unique identity of one browser or terminal tab.
+// newNativeTabID mints the unique identity of one terminal tab.
 func newNativeTabID() string {
 	return uuid.NewString()
 }
 
-// Native tabs address their surfaces as "browser:<tabID>" and
-// "terminal:<tabID>": one unique surface per tab, mirroring how file tabs
+// Native tabs address their surfaces as "terminal:<tabID>": one unique
+// surface per tab, mirroring how file tabs
 // use "file:<relative>". Single-instance surfaces keep their bare kinds
 // ("files").
 const (
-	browserTabPrefix  = "browser:"
 	terminalTabPrefix = "terminal:"
 )
-
-// browserTabID splits a "browser:<tabID>" surface kind into its tab ID.
-func browserTabID(kind string) (string, bool) {
-	return splitTabKind(kind, browserTabPrefix)
-}
 
 // terminalTabID splits a "terminal:<tabID>" surface kind into its tab ID.
 func terminalTabID(kind string) (string, bool) {
@@ -184,22 +163,6 @@ func splitTabKind(kind, prefix string) (string, bool) {
 		return "", false
 	}
 	return id, true
-}
-
-// lookupNativeBrowserTab finds a live browser tab by ID without a generation,
-// for render and surface actions. Late callbacks keep using the
-// generation-checked findNativeBrowserTab.
-func (a *app) lookupNativeBrowserTab(sessionID, tabID string) *nativeBrowserTab {
-	entry, ok := a.native.sessions[sessionID]
-	if !ok || entry == nil {
-		return nil
-	}
-	for _, tab := range entry.browsers {
-		if tab != nil && tab.tabID == tabID && !tab.closed {
-			return tab
-		}
-	}
-	return nil
 }
 
 // lookupNativeTerminalTab finds a live terminal tab by ID without a

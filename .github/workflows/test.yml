@@ -2,8 +2,7 @@ name: Tests
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -14,182 +13,23 @@ concurrency:
   group: tests-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: "0"
-  CARGO_PROFILE_DEV_DEBUG: "0"
-  CARGO_PROFILE_TEST_DEBUG: "0"
-  # CI-only: dependency overrides retain GPUI opt-level=2; workspace code
-  # favors feedback latency. Shipping profiles and local development are intact.
-  CARGO_PROFILE_DEV_OPT_LEVEL: "0"
-  CARGO_PROFILE_TEST_OPT_LEVEL: "0"
-
 jobs:
-  test:
-    name: Rust (windows-latest)
+  go:
+    name: Go build and vet
     runs-on: windows-latest
-    timeout-minutes: 60
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-
-      - name: Set up Rust and caches
-        id: rust
-        uses: ./.github/actions/setup-rust
-        with:
-          kind: test
-          profile: debug
-
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: Run tests
-        run: ./scripts/cargo-cache-diagnostics.ps1 -Mode Test -LogDirectory (Join-Path $env:RUNNER_TEMP 'cargo-cache-test')
-
-      - name: Verify inputs and save compiler artifacts
-        uses: ./.github/actions/save-rust-cache
-        with:
-          kind: test
-          profile: debug
-          build-key: ${{ steps.rust.outputs.build-key }}
-          build-hit: ${{ steps.rust.outputs.build-hit }}
-          build-path: ${{ steps.rust.outputs.build-path }}
-
-      - name: Upload Cargo cache diagnostics
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: cargo-cache-diagnostics-test
-          path: ${{ runner.temp }}/cargo-cache-test/
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Upload failure diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: test-failure-diagnostics
-          path: temp/recovery-e2e/**/result.json
-          if-no-files-found: ignore
-          retention-days: 7
-
-  cache-tools:
-    name: Offline cache and logging verification
-    runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: fintwind-go
     steps:
       - uses: actions/checkout@v6
-      - name: Initialize native MSVC
-        run: python scripts/cargo-cache-msvc.py --arch x64
-      - name: Install the pinned Rust toolchain
-        run: |
-          $version = (Get-Content '.github/rust-version' -Raw).Trim()
-          rustup toolchain install $version --profile minimal
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          rustup default $version
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Verify Cargo cache freshness offline
-        timeout-minutes: 5
-        run: python scripts/cargo-cache-diagnostics-blackbox.py --require-msvc-env --sysroot (rustc --print sysroot) --output (Join-Path $env:RUNNER_TEMP 'cargo-cache-freshness/result.json')
-      - name: Verify whole-workspace freshness and live logging offline
-        timeout-minutes: 5
-        run: python scripts/cargo-cache-workspace-blackbox.py --sysroot (rustc --print sysroot) --output (Join-Path $env:RUNNER_TEMP 'cargo-cache-workspace/result.json')
-      - name: Upload isolated verification reports
-        if: always()
-        uses: actions/upload-artifact@v7
+      - uses: actions/setup-go@v6
         with:
-          name: cargo-cache-verification-reports
-          path: |
-            ${{ runner.temp }}/cargo-cache-freshness/result.json
-            ${{ runner.temp }}/cargo-cache-workspace/result.json
-          if-no-files-found: warn
-          retention-days: 7
-
-  # Debug tests never compile the release-only channel code, so this job
-  # checks the stable release configuration that CI actually ships. Beta is
-  # a local-only channel and is never built or checked on GitHub. Check
-  # only — running tests stays the debug job above's.
-  stable-release:
-    name: Stable release compile check
-    runs-on: windows-latest
-    timeout-minutes: 90
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-
-      - name: Set up Rust and caches
-        id: rust
-        uses: ./.github/actions/setup-rust
-        with:
-          kind: release-check
-          profile: release
-
-      - name: Check stable release
-        run: ./scripts/cargo-cache-diagnostics.ps1 -Mode StableRelease -LogDirectory (Join-Path $env:RUNNER_TEMP 'cargo-cache-release-check')
-
-      - name: Verify inputs and save compiler artifacts
-        uses: ./.github/actions/save-rust-cache
-        with:
-          kind: release-check
-          profile: release
-          build-key: ${{ steps.rust.outputs.build-key }}
-          build-hit: ${{ steps.rust.outputs.build-hit }}
-          build-path: ${{ steps.rust.outputs.build-path }}
-
-      - name: Upload Cargo cache diagnostics
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: cargo-cache-diagnostics-release-check
-          path: ${{ runner.temp }}/cargo-cache-release-check/
-          if-no-files-found: warn
-          retention-days: 7
-
-  workflow-tools:
-    name: Workflow tools
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v6
-      - uses: oven-sh/setup-bun@v2
-      - name: Check release automation against an isolated API
-        run: python3 scripts/ci-workflows-blackbox.py --output "$RUNNER_TEMP/workflow-tools/result.json"
-      - name: Check cache retention against an isolated CLI
-        run: python3 scripts/cargo-cache-retention-blackbox.py --output "$RUNNER_TEMP/workflow-tools/cache-retention.json"
-      - name: Upload verification report
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: workflow-tools-report
-          path: ${{ runner.temp }}/workflow-tools/*.json
-          retention-days: 7
-
-  cache-maintenance:
-    name: Bound main-branch compiler caches
-    # A housekeeping API outage must not turn passing product checks into a
-    # release-blocking failure. The failed step and JSON report remain visible.
-    continue-on-error: true
-    needs: [test, stable-release, workflow-tools, cache-tools]
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    concurrency:
-      group: cargo-cache-maintenance
-      cancel-in-progress: false
-    permissions:
-      contents: read
-      actions: write
-    steps:
-      - uses: actions/checkout@v6
-      - name: Retain recent successful generations within the free cache budget
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/cargo-cache-retention.py --repo "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID" --report "$RUNNER_TEMP/cache-retention.json" --apply
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: cache-retention-report
-          path: ${{ runner.temp }}/cache-retention.json
-          retention-days: 3
+          go-version-file: fintwind-go/go.mod
+          cache-dependency-path: fintwind-go/go.sum
+      - name: Build
+        run: go build -mod=readonly ./...
+      - name: Vet
+        run: go vet -mod=readonly ./internal/... ./cmd/app ./cmd/daemon ./cmd/mygo
+      - name: Check MyGo UI lifetimes
+        run: go run -mod=readonly github.com/egoist/mygo/cmd/mygo vet ./cmd/app

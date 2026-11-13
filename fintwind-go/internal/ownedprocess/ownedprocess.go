@@ -101,6 +101,26 @@ func NewRoundDir() (string, error) {
 	return dir, nil
 }
 
+// StartWithInput supplies a bounded, immutable stdin file to the same owned
+// Job launcher. The file stays beside the round's stdout/stderr as evidence.
+func StartWithInput(executable string, args []string, runDir, workingDir string, environment []string, input []byte) (*Owned, error) {
+	if len(input) > 64<<20 {
+		return nil, errors.New("ownedprocess: stdin exceeds budget")
+	}
+	file, err := os.CreateTemp(runDir, "child-stdin-*")
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	if _, err := file.Write(input); err != nil {
+		return nil, err
+	}
+	if _, err := file.Seek(0, 0); err != nil {
+		return nil, err
+	}
+	return startWithEnvironmentInput(executable, args, runDir, workingDir, environment, file)
+}
+
 // BuildEnv returns the child environment: allowlisted parent keys plus an
 // isolated root for profile-like variables plus explicit extra entries.
 // Parent OPENCODE_* and FINTWIND_* keys are dropped. Extra keys win and are
@@ -133,6 +153,31 @@ func BuildEnv(roundDir string, extra map[string]string) []string {
 		}
 		values[key] = value
 	}
+	for key, value := range extra {
+		values[strings.ToUpper(key)] = value
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	env := make([]string, 0, len(keys))
+	for _, key := range keys {
+		env = append(env, key+"="+values[key])
+	}
+	return env
+}
+
+// InheritEnv retains the user's normal configuration for the daily profile.
+// Explicit values replace inherited entries case-insensitively on Windows.
+func InheritEnv(extra map[string]string) []string {
+	values := map[string]string{}
+	for _, kv := range os.Environ() {
+		if index := strings.IndexByte(kv, '='); index > 0 {
+			values[strings.ToUpper(kv[:index])] = kv[index+1:]
+		}
+	}
+	delete(values, "FINTWIND_DAEMON_TOKEN")
 	for key, value := range extra {
 		values[strings.ToUpper(key)] = value
 	}

@@ -125,6 +125,9 @@ func (a *app) composer(c *ui.Context) {
 				// reach OnTextKey (they belong to the input method), so no
 				// Composing guard is needed here.
 				c.Key("composer-draft")
+				if caret, changed := a.composerPaste.Prepare(a.composerTargetSessionID(), &a.draft); changed {
+					a.pendingCaret = &caret
+				}
 				input := ui.TextAreaBase(c, &a.draft).FillWidth().Lines(1, 8).
 					MinHeight(composerInputHeight).FixedLineHeight(uiPx(composerInputLine)).
 					Placeholder(tr("Do anything…")).
@@ -147,7 +150,9 @@ func (a *app) composer(c *ui.Context) {
 				}
 				start, end := input.TextSelection()
 				a.composerCaretStart, a.composerCaretEnd = start, end
+				a.composerPaste.Bind(input, &a.draft, c.Services(), a.post)
 				input.OnTextKey(func(k ui.TextKey) bool {
+					a.composerPaste.TextKey(k)
 					// Autocomplete navigation outranks submit: Up/Down move,
 					// Enter/Tab accept, Esc dismisses first (the next Esc
 					// arms stop when busy).
@@ -206,7 +211,7 @@ func (a *app) composer(c *ui.Context) {
 						// Idle: unconsumed, default behavior kept.
 						return a.pressEscapeStop()
 					}
-					if k.Key == ui.KeyV && (k.Mods&ui.Ctrl) != 0 {
+					if k.Key == ui.KeyV && k.Mods == ui.Ctrl {
 						// A file clipboard stages uploads instead of text,
 						// mirroring the source's paste path; anything else
 						// falls through to the normal paste.

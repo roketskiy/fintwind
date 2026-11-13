@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"fintwind-go/internal/composerpaste"
 	"fintwind-go/internal/daemon"
 	"fintwind-go/internal/model"
 
@@ -97,6 +98,7 @@ type app struct {
 	diagramWorkers chan struct{}
 	draft          string
 	composerCard   ui.Handle
+	composerPaste  composerpaste.State
 	composerWidths [5]composerLabelWidth
 	surfaces       []string
 	activeSurface  int

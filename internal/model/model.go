@@ -105,9 +105,8 @@ type CompactionState struct {
 	Summary *string `json:"summary,omitempty"`
 }
 
-// ContextUsage mirrors fintwind-protocol's ContextUsage
-// (legacy/rust/crates/fintwind-protocol/src/model.rs): the provider's latest context
-// occupancy. Tokens is that call's occupancy; Window is the model's context
+// ContextUsage is the provider's latest context occupancy. Tokens is that
+// call's occupancy; Window is the model's context
 // size — nil means "not known yet", and the meter degrades to a bare token
 // count. Composition is the provider's estimated breakdown, separate from usage.
 type ContextUsage struct {

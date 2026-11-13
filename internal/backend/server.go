@@ -482,7 +482,7 @@ func (s *Server) dispatch(ctx context.Context, sessionID, runtimeID string, raw 
 		return nil, errors.New("daemon terminal " + sessionID + " is not running")
 	case "closeTerminal":
 		// No terminal can be opened on this platform; closing an absent one
-		// remains idempotent, matching the Rust daemon.
+		// remains idempotent.
 		return backendstore.Reply("ack", nil), nil
 	case "fetchUsageStats":
 		return s.usageStats(ctx, command)

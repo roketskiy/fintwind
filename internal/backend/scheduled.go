@@ -172,7 +172,7 @@ func (s *Server) scheduledTick(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	// Like the Rust system channel, execution waits for an attached client.
+	// Execution waits for an attached client.
 	connected := false
 	s.connections.Range(func(_, _ any) bool { connected = true; return false })
 	if !connected {

@@ -2,8 +2,8 @@ package model
 
 import "encoding/json"
 
-// Background work uses the Rust desktop wire schema. The transcript wrapper
-// deliberately uses transcriptBlocks, not NativeTranscript's blocks field.
+// The transcript wrapper uses transcriptBlocks rather than NativeTranscript's
+// blocks field; the two shapes are not interchangeable.
 type BackgroundWorkKey struct {
 	Kind       string `json:"kind"`
 	ProviderID string `json:"providerId"`

@@ -66,7 +66,7 @@ func scheduledTask(ctx context.Context, db scheduledReader, id string) (sched.Ta
 	return task, nil
 }
 
-// The JSON column deliberately keeps Rust's StoredTask shape. Operational
+// The JSON column keeps the stored task shape. Operational
 // columns are authoritative and must never be copied from a stale JSON value.
 func scheduledData(task sched.Task) (string, error) {
 	raw, err := json.Marshal(struct {

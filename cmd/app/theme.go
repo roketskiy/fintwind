@@ -16,7 +16,7 @@ func alpha(c ui.Color, a float32) ui.Color {
 	return ui.RGBA(c.R, c.G, c.B, a)
 }
 
-// Layout constants are copied from Fintwind's app.rs and persistence.rs.
+// Layout constants for the desktop shell.
 const (
 	topbarHeight    = 38.0
 	modeRailWidth   = 48.0
@@ -34,12 +34,11 @@ const (
 	monoFontFamily  = "JetBrains Mono"
 )
 
-// transcriptWidth is the content column width. Rust keeps it on the theme
-// (theme::transcript_width) so Settings -> Appearance can change it live; the
-// default is DEFAULT_TRANSCRIPT_WIDTH from persistence.rs.
+// transcriptWidth is the content column width. Settings -> Appearance can
+// change it live.
 var transcriptWidth float32 = 736
 
-// normalizeTranscriptWidth mirrors persistence.rs: clamp 560..1200, then snap
+// normalizeTranscriptWidth clamps 560..1200, then snaps
 // to the 16 px step.
 func normalizeTranscriptWidth(width float64) float64 {
 	if width < 560 {
@@ -124,13 +123,13 @@ func monoFont() string {
 }
 
 // snapPx snaps a scaled size to quarter pixels so scaled text neither blurs
-// nor makes layout jitter, mirroring Rust ui_px/code_px.
+// nor makes layout jitter.
 func snapPx(value float32) float32 {
 	return float32(math.Round(float64(value)*4) / 4)
 }
 
-// uiPx scales a UI text measurement by the interface scale, mirroring Rust
-// ui_px. At the default scale it returns the size unchanged.
+// uiPx scales a UI text measurement by the interface scale. At the default
+// scale it returns the size unchanged.
 func uiPx(size float32) float32 {
 	scale := activeAppearance.textScale
 	if scale == 1 {
@@ -139,8 +138,8 @@ func uiPx(size float32) float32 {
 	return snapPx(size * scale)
 }
 
-// codePx scales a code text measurement by the code scale, mirroring Rust
-// code_px. It is independent of the interface scale: code stays put while
+// codePx scales a code text measurement by the code scale. It is independent
+// of the interface scale: code stays put while
 // UI text grows. At the default scale it returns the size unchanged.
 func codePx(size float32) float32 {
 	scale := activeAppearance.codeScale
@@ -163,8 +162,7 @@ func terminalFontStack(family string) string {
 }
 
 // newMarkdownOptions builds the transcript's markdown metrics: body, user
-// bubble, or compact tool detail. Font sizes follow the appearance scales
-// like Rust ui_px/code_px so markdown keeps working when SetZoom is gone.
+// bubble, or compact tool detail. Font sizes follow the appearance scales.
 func newMarkdownOptions(c *ui.Context, fontSize, lineHeight, codeSize, codeLineHeight float32) markdown.Options {
 	fontSize, lineHeight = uiPx(fontSize), uiPx(lineHeight)
 	codeSize, codeLineHeight = codePx(codeSize), codePx(codeLineHeight)
@@ -190,11 +188,7 @@ func newMarkdownOptions(c *ui.Context, fontSize, lineHeight, codeSize, codeLineH
 	return markdown.Options{Theme: &theme, Reveal: &markdown.Reveal{Unit: markdown.AtOnce, Fade: -1}}
 }
 
-// cardShadow is Fintwind's lift for generic cards, mirroring Rust
-// card_shadow's geometry with a weaker hand: the bottom ambient layer is
-// pulled in (12/28 -> 8/20) and every alpha stepped down, especially the
-// bottom one. Alphas follow the appearance like Rust's dark/light split;
-// the old fixed dark alphas were heavy in light mode all day.
+// cardShadow is the lift for generic cards. Alphas follow the appearance.
 func cardShadow(el ui.Element) ui.Element {
 	if activeAppearance.dark {
 		return el.
@@ -208,7 +202,7 @@ func cardShadow(el ui.Element) ui.Element {
 		Shadow(0, 8, 20, 0, ui.RGBA(0, 0, 0, 0.045))
 }
 
-// sidebarShadow is Rust sidebar_shadow: one soft layer on the panel edge.
+// sidebarShadow is one soft layer on the panel edge.
 func sidebarShadow(el ui.Element) ui.Element {
 	if activeAppearance.dark {
 		return el.Shadow(-1, 0, 5, 0, ui.RGBA(0, 0, 0, 0.18))
@@ -216,8 +210,7 @@ func sidebarShadow(el ui.Element) ui.Element {
 	return el.Shadow(-1, 0, 5, 0, ui.RGBA(0, 0, 0, 0.06))
 }
 
-// workspaceShadow is Rust workspace_shadow: contact plus ambient layers
-// lifting the workspace over the sidebar.
+// workspaceShadow lifts the workspace over the sidebar.
 func workspaceShadow(el ui.Element) ui.Element {
 	if activeAppearance.dark {
 		return el.

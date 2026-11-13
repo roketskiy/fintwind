@@ -11,7 +11,7 @@ import (
 )
 
 // The diff reader turns daemon-captured Git patches into render-ready
-// viewers, the client side of Rust's review_diff.rs. Whole-source snapshots
+// viewers. Whole-source snapshots
 // arrive with unlimited context, so the reader rebuilds two whole texts and
 // the viewer collapses context into separators that expand in memory; live
 // sources arrive clipped to the requested context and growing it re-requests.
@@ -336,9 +336,8 @@ func reviewSeparator(onHeaderClick func()) func(*ui.Context, ui.Element, *editor
 // restyling its text every frame.
 var editorThemes = map[lobeConfigKey]*editor.Theme{}
 
-// reviewEditorTheme colors the diff viewer from the palette, the way the
-// Rust reader colors tokens and change washes. Fields left zero resolve to
-// the editor's defaults for the window's appearance.
+// reviewEditorTheme colors the diff viewer from the palette. Fields left zero
+// resolve to the editor's defaults for the window's appearance.
 func reviewEditorTheme() *editor.Theme {
 	key := lobeConfigKey{activeAppearance.scheme, activeAppearance.dark}
 	if t, ok := editorThemes[key]; ok {

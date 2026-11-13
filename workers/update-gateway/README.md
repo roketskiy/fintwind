@@ -48,7 +48,7 @@ Expected: `200` with `{ version, notes, url, assets: [...] }`
 
 ## Client contract
 
-`src/update.rs` calls this gateway first (`UPDATE_GATEWAY_URL`,
+`legacy/rust/src/update.rs` calls this gateway first (`UPDATE_GATEWAY_URL`,
 overridable at runtime with `FINTWIND_UPDATE_GATEWAY` for tests) and
 falls back to `api.github.com` when the gateway is unreachable. The
 gateway response shape matches the desktop `ReleaseInfo` struct, so no

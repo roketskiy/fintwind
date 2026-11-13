@@ -13,8 +13,7 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// providerProbe mirrors legacy/rust/crates/fintwind-protocol/src/model.rs ProviderProbe.
-// The daemon returns it inside the probeProvider payload as {"probe": {...}}.
+// providerProbe is the daemon's probeProvider payload as {"probe": {...}}.
 type providerProbe struct {
 	Installed    bool                  `json:"installed"`
 	Path         *string               `json:"path"`
@@ -22,8 +21,7 @@ type providerProbe struct {
 	AgentPresets []providerAgentPreset `json:"agentPresets"`
 }
 
-// providerModel mirrors legacy/rust/crates/fintwind-protocol/src/model.rs ProviderModel
-// (no serde rename there, so the wire keys stay snake_case).
+// providerModel is one model entry. Wire keys stay snake_case.
 type providerModel struct {
 	ID                     string                `json:"id"`
 	Name                   string                `json:"name"`

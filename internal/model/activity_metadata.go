@@ -252,7 +252,7 @@ func activityOutput(value any, depth int) string {
 			}
 		}
 		// This is an explicit public result value, not the source event or
-		// metadata object. Preserve structured tool data as Rust does.
+		// metadata object. Structured tool data is preserved verbatim.
 		raw, _ := json.MarshalIndent(v, "", "  ")
 		return string(raw)
 	default:

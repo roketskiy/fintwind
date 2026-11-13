@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Submission states, mirroring submission.rs SubmissionState camelCase.
+// Submission states are camelCase wire values.
 const (
 	SubmissionPreparing   = "preparing"
 	SubmissionDispatching = "dispatching"

@@ -112,7 +112,7 @@ func contextPercent(usage *model.ContextUsage) (float64, bool) {
 	return float64(usage.Tokens) * 100.0 / float64(*usage.Window), true
 }
 
-// formatTokens mirrors format_tokens in legacy/rust/crates/fintwind-protocol/src/usage.rs.
+// formatTokens shortens a token count for the usage meter.
 func formatTokens(tokens uint64) string {
 	if tokens >= 999500 {
 		return fmt.Sprintf("%.1fM", float64(tokens)/1000000.0)

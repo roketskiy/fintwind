@@ -291,7 +291,6 @@ func (a *app) reviewSourcePill(c *ui.Context, history bool) {
 	chosen := overlay.DropdownMenu(c, open, overlay.DropdownMenuProps{Items: items}, func(t ui.Element) {
 		action.StyleButton(c, t, "", action.ButtonProps{Size: theme.Small})
 		if valid {
-			// The area's file total, like Rust's pill tooltip.
 			t.Tooltip(trf("%d files", stats.Files))
 		}
 		t.Children(func() {
@@ -340,7 +339,7 @@ func (a *app) reviewSourceItems(current string) []overlay.MenuItem {
 }
 
 // pickReviewSource retargets the review surface from the menu. Leaving a
-// snapshot for a live source exits it first, like Rust's banner live action.
+// snapshot for a live source exits it first.
 func (a *app) pickReviewSource(key string, history bool) {
 	switch key {
 	case "turn":
@@ -398,8 +397,6 @@ func (a *app) reviewFileHeader(c *ui.Context, path string, reader *reviewReader,
 			if !history {
 				a.reviewFileActions(c)
 			}
-			// One layout switch for every surface, like Rust's
-			// source_control_diff_split.
 			reviewLayoutToggle(c, &a.sourceControl.LayoutSel, reader)
 		})
 	})
@@ -446,7 +443,7 @@ func (a *app) reviewFileActions(c *ui.Context) {
 }
 
 // reviewDiffStat draws "+N −N" beside five blocks scaled to the balance of
-// the change, like Rust's render_diff_stat.
+// the change.
 func reviewDiffStat(c *ui.Context, add, del uint64) {
 	ui.Text(c, trf("+%d", add)).FontSize(uiPx(11)).TextColor(palette.successText)
 	ui.Text(c, trf("−%d", del)).FontSize(uiPx(11)).TextColor(palette.dangerText)

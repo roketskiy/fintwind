@@ -290,7 +290,7 @@ func (a *app) confirmSettingsCleanup() {
 }
 
 // settingsCleanupProgress is the running caption while the confirm loop
-// removes sessions, mirroring Rust's Running{completed, total} phase.
+// removes sessions, showing completed/total progress.
 func (a *app) settingsCleanupProgress() string {
 	st := &a.settings.backend.general
 	if st.operation.writing && st.cleanupTotal > 0 {

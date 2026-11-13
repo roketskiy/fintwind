@@ -20,7 +20,7 @@ import (
 // connection instead of dropping data, so resume from applied cursors.
 const eventQueueSize = 4096
 
-// MaxWireMessageBytes matches the Rust daemon protocol's message budget.
+// MaxWireMessageBytes caps one daemon wire message.
 const MaxWireMessageBytes = 256 << 20
 
 // writeTimeout bounds one outbound frame so a stuck peer cannot park a

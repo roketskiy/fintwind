@@ -38,7 +38,7 @@ func (a *app) openSettingsPage(page string) {
 		if len(runtime.models) == 0 && !runtime.modelsLoading {
 			a.loadRuntimeImageModels()
 		}
-		// Like Rust's open_settings_page: check for an OpenCode update once.
+		// Check for an OpenCode update once.
 		general := &a.settings.backend.general
 		if !general.operation.loaded && !general.operation.writing {
 			a.manageSettingsOpenCode("check")

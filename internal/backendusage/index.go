@@ -138,7 +138,7 @@ func SourceKey(binary string, environment map[string]string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// std::fs::canonicalize uses verbatim Windows paths in Rust's source key.
+	// Source keys use verbatim Windows paths.
 	if runtime.GOOS == "windows" && !strings.HasPrefix(canonical, `\\?\`) {
 		if strings.HasPrefix(canonical, `\\`) {
 			canonical = `\\?\UNC\` + strings.TrimPrefix(canonical, `\\`)

@@ -10,8 +10,7 @@ import (
 )
 
 // The OpenCode global configuration is a JSONC document the desktop edits in
-// place — the client side of Rust's opencode_shell, opencode_todo, and
-// opencode_image_generate helpers. JSONC wins over JSON, comments and
+// place. JSONC wins over JSON, comments and
 // unrelated formatting survive every write, and a missing file starts from
 // OpenCode's template.
 
@@ -52,7 +51,7 @@ func opencodeReadDocument(path string) (string, error) {
 }
 
 // opencodeWriteDocument replaces the file atomically: a temp sibling then a
-// rename, like the Rust helpers.
+// rename.
 func opencodeWriteDocument(path, text string) error {
 	if parent := filepath.Dir(path); parent != "" {
 		if err := os.MkdirAll(parent, 0o755); err != nil {
@@ -439,7 +438,7 @@ func jsoncRemoveProperty(text string, open int, name string) (string, bool, erro
 
 // jsoncSetProperty sets one object property: every existing property with
 // the name goes away and a fresh one is appended before the closing brace,
-// mirroring the Rust CST editor's remove-all-then-append discipline. An
+// remove-all-then-append. An
 // empty value removes the property. parent is "top" for the root object or
 // the name of the object property to edit, such as "experimental".
 func jsoncSetProperty(text, parent, name, value string) (string, error) {

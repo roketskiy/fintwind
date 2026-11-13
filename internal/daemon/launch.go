@@ -27,11 +27,10 @@ type Process struct {
 }
 
 type readyLine struct {
-	Address              string `json:"address"`
-	ProtocolVersion      int    `json:"protocolVersion"`
-	ProtocolVersionSnake int    `json:"protocol_version"`
-	PID                  int    `json:"pid"`
-	EnvironmentID        string `json:"environmentId"`
+	Address         string `json:"address"`
+	ProtocolVersion int    `json:"protocolVersion"`
+	PID             int    `json:"pid"`
+	EnvironmentID   string `json:"environmentId"`
 }
 
 // Start launches an owned daemon and refuses production data directories.
@@ -91,9 +90,6 @@ func Start(ctx context.Context, executable, dataDir string) (*Process, error) {
 	select {
 	case value := <-ready:
 		version := value.ProtocolVersion
-		if version == 0 {
-			version = value.ProtocolVersionSnake
-		}
 		process.Address = value.Address
 		process.PID = value.PID
 		process.EnvironmentID = value.EnvironmentID

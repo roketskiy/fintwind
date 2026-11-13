@@ -20,7 +20,7 @@ import (
 
 func (a *app) sourceControlView(c *ui.Context) {
 	if c.Shortcut(0, ui.KeyEscape) || c.Shortcut(ui.Ctrl, ui.KeyBracketLeft) {
-		// Like Rust's return_to_sessions: leave the page, keep the review
+		// Leave the page, keep the review
 		// state for the next visit.
 		a.mode = modeSessions
 	}
@@ -76,7 +76,7 @@ func (a *app) scSecondary(c *ui.Context) {
 		}
 		a.scBranchRow(c)
 	})
-	// VSCode-style commit box, always visible like Rust's commit box.
+	// VSCode-style commit box, always visible.
 	a.scCommitBox(c)
 	if st.Discard != nil {
 		a.scDiscardDialog(c)
@@ -405,7 +405,7 @@ func scTreeAdd(root *scTreeDir, f scFile) {
 
 // scTreeEmit flattens the tree into list rows: directories at their depth,
 // their children one step in, directories before files, names sorted. The
-// filter forces every directory open, like Rust's tree does.
+// filter forces every directory open.
 func scTreeEmit(group string, dir *scTreeDir, prefix string, depth int, forced bool, collapsed map[string]bool, rows *[]scListRow) {
 	sort.Strings(dir.dirNames)
 	for _, name := range dir.dirNames {
@@ -601,8 +601,7 @@ func (a *app) scGroupAction(c *ui.Context, group, label string, unstage bool) {
 	})
 }
 
-// scFileRow is one clickable file with its status letter, like Rust's
-// SourceControlRow::File, indented one step per tree level.
+// scFileRow is one clickable file with its status letter, indented one step per tree level.
 func (a *app) scFileRow(c *ui.Context, file scFile, depth int) {
 	st := &a.sourceControl
 	c.Key(file.key())

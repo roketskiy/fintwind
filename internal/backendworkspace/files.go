@@ -20,7 +20,7 @@ const (
 	MaxDirEntries = 10000
 	// MaxListCap bounds listProjectFiles caller caps (FILE_INDEX_CAP).
 	MaxListCap = 50000
-	// maxWalkDepth mirrors the daemon non-git walk.
+	// maxWalkDepth bounds the non-git directory walk.
 	maxWalkDepth = 8
 )
 
@@ -136,7 +136,7 @@ func checkCtx(ctx context.Context) error {
 	return ctx.Err()
 }
 
-// workingTreeEntry mirrors protocol WorkingTreeEntry on the wire.
+// workingTreeEntry is the WorkingTreeEntry wire shape.
 type workingTreeEntry struct {
 	RelativePath string `json:"relativePath"`
 	AbsolutePath string `json:"absolutePath"`
@@ -511,7 +511,7 @@ func scopedBaseRel(root *confinedRoot, opRoot string) (string, error) {
 }
 
 // expandWithDirectories adds parent directory rows and sorts shallow
-// entries first, mirroring the daemon project file index.
+// entries first.
 func expandWithDirectories(files []string) []fileEntry {
 	seen := map[string]bool{}
 	dirs := []string{}

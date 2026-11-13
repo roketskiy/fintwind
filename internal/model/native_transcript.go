@@ -1,8 +1,7 @@
 package model
 
-// NativeTranscript mirrors fintwind-protocol's NativeTranscript
-// (legacy/rust/crates/fintwind-protocol/src/provider_session.rs): a provider session's
-// transcript translated into the app's rendering shapes, so the ordinary
+// NativeTranscript is a provider session's transcript translated into the
+// app's rendering shapes, so the ordinary
 // message/block/turn pipeline can consume it. The struct itself is
 // camelCase on the wire, but every field is a single word, so the JSON keys
 // are exactly "messages", "blocks" and "turns". The nested Message and

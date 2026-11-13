@@ -33,8 +33,7 @@ type runtimeConfigState struct {
 }
 
 // loadRuntimeConfig reads the OpenCode config file once in the background,
-// the entry-time load Rust's settings rows do. A read failure keeps the
-// defaults, like the Rust rows do.
+// A read failure keeps the defaults.
 func (a *app) loadRuntimeConfig() {
 	st := &a.settings.runtime
 	st.loadGeneration++
@@ -83,8 +82,7 @@ func (a *app) saveRuntimeShell(shell string) {
 	}()
 }
 
-// saveRuntimeTodo writes the experimental todo switch, optimistic like
-// Rust's set_todo_enabled: the toggle lands first, a failed write reverts.
+// saveRuntimeTodo writes the experimental todo switch optimistically: the toggle lands first, a failed write reverts.
 func (a *app) saveRuntimeTodo(enabled bool) {
 	st := &a.settings.runtime
 	if st.writeBusy {
@@ -176,7 +174,7 @@ func (a *app) runtimeShellOptions(current string) []settingsOption {
 }
 
 // runtimeShellDropdown is the OpenCode shell control: a dropdown of System
-// default and the detected shells, like Rust's opencode-shell-selector.
+// default and the detected shells.
 func (a *app) runtimeShellDropdown(c *ui.Context) {
 	st := &a.settings.runtime
 	a.settingsChoice(c, "runtime-shell", tr("OpenCode shell"), st.shell, 220, a.runtimeShellOptions(st.shell), func(option settingsOption) {
@@ -187,7 +185,7 @@ func (a *app) runtimeShellDropdown(c *ui.Context) {
 }
 
 // runtimeImageModelOptions builds the Default model dropdown: Automatic plus
-// the fetched models labeled "provider · label", like Rust's menu. The value
+// the fetched models labeled "provider · label". The value
 // stored in the config is "provider/model".
 func (a *app) runtimeImageModelOptions() []settingsOption {
 	st := &a.settings.runtime

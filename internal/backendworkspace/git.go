@@ -25,7 +25,7 @@ const (
 	maxCommitLimit = 200
 )
 
-// gitGate mirrors the daemon budget: at most four Git children at once.
+// gitGate bounds Git concurrency: at most four Git children at once.
 var gitGate = make(chan struct{}, 4)
 
 var (
@@ -247,8 +247,8 @@ func gitToplevel(ctx context.Context, cwd string) (string, bool, error) {
 	return top, true, nil
 }
 
-// gitListedFiles mirrors the daemon fast path: tracked plus unignored
-// untracked files from one subprocess. It applies only when the
+// gitListedFiles is the fast path: tracked plus unignored untracked files
+// from one subprocess. It applies only when the
 // operation root is the repository top level, so reported paths stay
 // relative to the requested root.
 func gitListedFiles(ctx context.Context, root *confinedRoot, baseRel string, cap int) ([]string, error) {
@@ -363,8 +363,8 @@ type inspectBranchRefsOp struct {
 	Cwd  string `json:"cwd"`
 }
 
-// dispatchInspectBranchRefs mirrors the daemon cheap branch menu read:
-// refs plus current checkout, with line counts left at zero.
+// dispatchInspectBranchRefs is the cheap branch menu read: refs plus
+// current checkout, with line counts left at zero.
 func dispatchInspectBranchRefs(ctx context.Context, root *confinedRoot, operation json.RawMessage) (json.RawMessage, error) {
 	defer root.close()
 	var op inspectBranchRefsOp
@@ -486,7 +486,7 @@ type commitsResult struct {
 	Commits []commitEntry `json:"commits"`
 }
 
-// dispatchListCommits mirrors the daemon newest-first history read. The
+// dispatchListCommits reads newest-first history. The
 // pushed flag classifies exactly the displayed window through one more
 // local rev-list call; a repository without commits reads back empty.
 func dispatchListCommits(ctx context.Context, root *confinedRoot, operation json.RawMessage) (json.RawMessage, error) {
@@ -657,8 +657,8 @@ type commitStatsResult struct {
 	Stats commitStats `json:"stats"`
 }
 
-// dispatchReadCommitStats mirrors the daemon single-commit numstat read:
-// NUL-delimited, binary files count as files without line counts.
+// dispatchReadCommitStats reads one commit with numstat: NUL-delimited,
+// binary files count as files without line counts.
 func dispatchReadCommitStats(ctx context.Context, root *confinedRoot, operation json.RawMessage) (json.RawMessage, error) {
 	defer root.close()
 	var op readCommitStatsOp

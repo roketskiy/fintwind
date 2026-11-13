@@ -15,9 +15,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// ProtocolVersion is the wire version this client speaks. It must match the
-// Rust daemon's fintwind-protocol PROTOCOL_VERSION; the launcher refuses a
-// daemon that reports anything else.
+// ProtocolVersion is the wire version this client speaks. The launcher
+// refuses a daemon that reports anything else.
 const ProtocolVersion = 25
 
 const zeroUUID = "00000000-0000-0000-0000-000000000000"

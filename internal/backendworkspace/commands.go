@@ -123,7 +123,7 @@ func dispatchDiscoverSlashCommands(ctx context.Context, root *confinedRoot, oper
 }
 
 // scanCommandFiles collects "*.md" command files. Subdirectories namespace
-// the name ("a/b.md" becomes "a/b"), matching the daemon discovery.
+// the name ("a/b.md" becomes "a/b").
 func scanCommandFiles(ctx context.Context, root *confinedRoot, dir, scope string, out *[]slashCommand) {
 	type frame struct {
 		rel       string
@@ -307,8 +307,8 @@ func firstLineSummary(body string) string {
 	return ""
 }
 
-// builtinCommands mirrors the daemon's own templates. Descriptions fall
-// back to plain English because the localized catalog is daemon-owned.
+// builtinCommands is the fixed built-in set. Descriptions fall back to
+// plain English; this module owns no localized catalog.
 func builtinCommands() []slashCommand {
 	template := func(value string) *string { return &value }
 	return []slashCommand{
@@ -341,7 +341,7 @@ func builtinCommands() []slashCommand {
 	}
 }
 
-// scopeResolutionRank mirrors the protocol declaration order, which is
+// scopeResolutionRank follows the protocol declaration order, which is
 // the resolution precedence and intentionally differs from display order.
 func scopeResolutionRank(scope string) int {
 	switch scope {

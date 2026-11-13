@@ -9,7 +9,7 @@ import (
 )
 
 // CrychicUI adapter points (vendor/CrychicUI, MyGo v0.8.3 compat). The pixel
-// source stays the Rust right panel: fixed heights (48 header, 28 tabs, 42
+// source stays fixed heights (48 header, 28 tabs, 42
 // file header), the palette.* ramp, and 10.5/16 mono body text. Library
 // pieces slot in only where their chrome can be overridden to those pixels:
 //
@@ -20,7 +20,7 @@ import (
 //     second for the non-visual E2E.
 //   - File editor uses editor.View directly: code.CodeEditor adds a themed
 //     header plus status bar at a fixed t.Space(80) height and cannot fill
-//     the panel; the Rust header (42px path row) plus dirty/conflict states
+//     the panel; the 42px path header plus dirty/conflict states
 //     stay local. Language highlighting comes from editor.LanguageFor.
 //   - Terminal uses terminal.View on the tab's live pty: code.Terminal only
 //     renders static lines and cannot carry input, scrollback, or a remote
@@ -151,7 +151,7 @@ func (a *app) terminalExitedBar(c *ui.Context, tab *nativeTerminalTab) {
 	})
 }
 
-// fileEditorSurface is one open file tab: the Rust 42px path header with
+// fileEditorSurface is one open file tab: the 42px path header with
 // Save state, an explicit disk-conflict dialog, and the editable MyGo editor
 // widget filling the rest.
 func (a *app) fileEditorSurface(c *ui.Context, ed *nativeFileEditor) {

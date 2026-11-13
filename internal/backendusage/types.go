@@ -30,8 +30,8 @@ type Entry struct {
 	SubagentModels   []SubagentModel `json:"subagentModels,omitempty"`
 }
 
-// Rust's Option<Vec<_>> distinguishes no verified split from an explicitly
-// verified empty split. Preserve that distinction on the wire.
+// A nil split means unverified. An empty split means verified empty.
+// Preserve that distinction on the wire.
 func (e Entry) MarshalJSON() ([]byte, error) {
 	type alias Entry
 	var days *[]DayShare

@@ -78,21 +78,20 @@ type sourceControlState struct {
 	Stats                           reviewAreaStats
 	StatsGen                        uint64
 	StatsLoading                    bool
-	// Directory folding mirrors Rust's SOURCE_CONTROL_TREE_INDENT tree:
+	// Directory folding:
 	// collapsed dirs hide their files, group headers carry counts.
 	CollapsedDirs map[string]bool
 	// CollapsedGroups folds whole groups (staged/changes/untracked) under
 	// their header, like the review file group.
 	CollapsedGroups map[string]bool
-	// Ignored section mirrors Rust's toggleable ignored block.
+	// Ignored section is toggleable.
 	IgnoredOpen    bool
 	IgnoredLoading bool
 	Ignored        []scFile
 	IgnoredError   string
 }
 
-// reviewSource mirrors ReviewDiffSource in
-// legacy/rust/crates/fintwind-protocol/src/workspace.rs: the live area the toolbar shows
+// reviewSource is the live area the toolbar shows
 // plus the checkpoint source used for turn review.
 type reviewSource string
 
@@ -384,8 +383,7 @@ func (a *app) scRefresh(manual bool) {
 	}()
 }
 
-// scSetSource retargets the review source like Rust's
-// set_review_diff_source. The live sources reload the shown file and area
+// scSetSource retargets the review source. The live sources reload the shown file and area
 // totals; the committed and branch ranges are whole-source snapshots, which
 // the review surface loads once and reads without touching Git again.
 func (a *app) scSetSource(source reviewSource) {
@@ -410,7 +408,7 @@ func (a *app) scSetSource(source reviewSource) {
 }
 
 // scLoadStats fetches the toolbar capsule totals for the current source,
-// mirroring refresh_review_stats: one figure for the whole area beside the
+// one figure for the whole area beside the
 // source pill.
 func (a *app) scLoadStats() {
 	st := &a.sourceControl
@@ -450,14 +448,14 @@ func (a *app) scLoadStats() {
 }
 
 // scRefreshSurface reloads the shown file and the area totals so the
-// toolbar number never lags the reader, mirroring refresh_review_surface.
+// toolbar number never lags the reader.
 // scRefresh's callback reloads both, so one call suffices.
 func (a *app) scRefreshSurface() {
 	a.scRefresh(true)
 }
 
 // scGrowContext requests 100 more context lines around the live file's
-// hunks, the re-request half of Rust's gap expansion.
+// hunks, re-requested from the daemon.
 func (a *app) scGrowContext() {
 	st := &a.sourceControl
 	next := min(100000, st.Reader.Context+100)
@@ -468,8 +466,7 @@ func (a *app) scGrowContext() {
 	a.scLoadDiff()
 }
 
-// scStepFile moves the reader to the previous/next changed file, mirroring
-// step_source_control_file: the list resets to the top on switch.
+// scStepFile moves the reader to the previous/next changed file; the list resets to the top on switch.
 func (a *app) scStepFile(delta int) {
 	st := &a.sourceControl
 	if len(st.Rows) == 0 {
@@ -851,7 +848,7 @@ func scGroupLabel(group string) string {
 }
 
 // scGroupColor tints only the group header row: staged green, unstaged
-// amber, untracked gray, mirroring the letter colors.
+// amber, untracked gray, matching the file status letters.
 func scGroupColor(group string) ui.Color {
 	switch group {
 	case "staged":

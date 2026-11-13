@@ -52,9 +52,9 @@ type jobBasicLimits struct {
 	schedulingClass         uint32
 }
 
-// jobExtendedLimits mirrors the repo's proven Job shape: class 9 with the
-// full extended struct. A bare class 2 call was rejected on this machine,
-// so Start supplies the full class 9 structure before resuming the child.
+// jobExtendedLimits is the Job shape Start uses: class 9 with the full
+// extended struct. A bare class 2 call was rejected on this machine, so
+// Start supplies the full class 9 structure before resuming the child.
 type jobExtendedLimits struct {
 	basic                jobBasicLimits
 	ioInfo               [6]uint64
@@ -94,8 +94,8 @@ type processInfo struct {
 
 // Start launches executable inside a kill-on-close Job and returns before the
 // child can run outside it: CREATE_SUSPENDED, assign to Job, then resume.
-// stdio lands in roundDir files. extra carries explicit keys like the daemon
-// token. It never kills by PID and never touches other processes.
+// stdio lands in roundDir files. extra carries explicit keys such as the
+// daemon token. It never kills by PID and never touches other processes.
 func Start(executable string, args []string, roundDir string, extra map[string]string) (*Owned, error) {
 	return StartWithEnvironment(executable, args, roundDir, roundDir, BuildEnv(roundDir, extra))
 }

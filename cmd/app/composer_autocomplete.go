@@ -14,10 +14,6 @@ import (
 // parsing over the draft plus caret, prefetched slash/file indexes, fuzzy
 // filtering, keyboard accept, and click accept.
 //
-// Rust parity: src/app/autocomplete.rs (popup over prefetched indexes,
-// first row selected, up/down/enter/tab/esc) + composer_complete.rs
-// (detect_trigger rules, FILTER_CAP=64, @ lists skills then files).
-//
 // mygo constraint: TextKey exposes only Text()/SetText(), never the caret.
 // The view caches TextSelection() (rune offsets) every frame; OnTextKey
 // reuses that cache because navigation keys never move the caret before
@@ -51,7 +47,7 @@ type autocompleteRow struct {
 
 // slashCommand is the popup's command view: discovered plus reported plus
 // builtins. Template presence decides nothing here; the popup inserts the
-// name and the daemon expands it at submit, mirroring the Rust send path.
+// name and the daemon expands it at submit.
 type slashCommand struct {
 	name        string
 	description string
@@ -469,7 +465,7 @@ func (a *app) filterAutocompleteRows(trigger *autocompleteTrigger) []autocomplet
 		return rows
 	}
 	rows := make([]autocompleteRow, 0, autocompleteCap)
-	// Skills first, up to half the cap, mirroring Rust's @ rows.
+	// Skills first, up to half the cap.
 	skills := make([]string, 0)
 	skillIdx := make([]int, 0)
 	for i, cmd := range a.slashIndex {
@@ -502,7 +498,7 @@ func (a *app) filterAutocompleteRows(trigger *autocompleteTrigger) []autocomplet
 				break
 			}
 			f := a.mentionFiles[fi]
-			// Rust draws basename prominently with the parent dir as the
+			// Basename prominently with the parent dir as the
 			// secondary line; insertion still uses the full path.
 			trimmed := strings.TrimSuffix(f.path, "/")
 			base := trimmed
@@ -589,8 +585,7 @@ func applyAutocompleteInsert(draft string, trigger *autocompleteTrigger, insert 
 
 // renderAutocompleteList builds the popup body: rows only, no shell. The
 // caller mounts it in a PopoverBase anchored to the composer card so it
-// floats above the card like render_composer_autocomplete instead of pushing
-// the layout. Row geometry mirrors the Rust rows: 30 high, 7 radius, 8 gap.
+// floats above the card instead of pushing the layout. Row geometry: 30 high, 7 radius, 8 gap.
 func (a *app) renderAutocompleteList(c *ui.Context, trigger *autocompleteTrigger, rows []autocompleteRow) {
 	ui.Scroll(c).FillWidth().MaxHeight(autocompleteListH).Children(func() {
 		ui.Column(c).FillWidth().Padding(4).Gap(2).Children(func() {

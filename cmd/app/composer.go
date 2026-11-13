@@ -49,8 +49,7 @@ func (a *app) composer(c *ui.Context) {
 					MinHeight(composerInputHeight).FixedLineHeight(uiPx(composerInputLine)).
 					Placeholder(tr("Do anything…")).
 					Label(tr("Message")).FontSize(uiPx(composerInputText)).TextColor(palette.text)
-				// One-shot Rust parity (new_session_action / select_session /
-				// first session page): only the first composer frame after a
+				// Only the first composer frame after a
 				// session change takes the keyboard. Later frames must not
 				// steal it back from wherever the user clicked. Choosing a
 				// model or closing a menu returns focus the same way.
@@ -771,9 +770,7 @@ func (a *app) modelChip(c *ui.Context) {
 	if mark != "" {
 		name = mark
 	}
-	// MenuChip geometry from legacy/rust/src/ui/mod.rs (CHIP_* consts + RenderOnce):
-	// 28 high, 9 insets, 7 radius, 7 gap, 12.5/16 text; the model mark
-	// draws at 10.5 per render_provider_model_control; open reads overlay.
+	// MenuChip geometry: the model mark draws at 10.5; open reads overlay.
 	chip := ui.ButtonBase(c).Label(label).Height(composerChipHeight).
 		Padding(0, composerChipInset).Radius(composerChipRadius).
 		Gap(composerChipGap).AlignItems(ui.Center).Disabled(a.detail == nil)

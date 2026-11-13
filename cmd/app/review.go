@@ -16,7 +16,7 @@ import (
 // reviewKind tells which whole-source snapshot the review surface shows: the
 // checkpoint of one turn, or a committed / branch range of the workspace.
 // Both load with one collectReviewDiff call and move between files without
-// touching Git again, mirroring Rust's LastTurn review page.
+// touching Git again.
 type reviewKind uint8
 
 const (
@@ -65,7 +65,7 @@ func (a *app) openTurnReview(turnID string) {
 		return
 	}
 	// sourceControl.LayoutSel is the one layout switch for every surface,
-	// like Rust's source_control_diff_split; readers seed from it so the
+	// readers seed from it so the
 	// segmented control never disagrees with the rendered layout.
 	split := a.sourceControl.LayoutSel == 1
 	a.review = reviewState{Active: true, Kind: reviewKindTurn, Scope: scope, TurnID: turnID, TurnCount: turn.TurnCount, Generation: a.review.Generation + 1, Loading: true, Reader: reviewReader{Split: split}}
@@ -74,7 +74,7 @@ func (a *app) openTurnReview(turnID string) {
 }
 
 // openSourceReview shows the whole-source diff of the committed or branch
-// range, like Rust's set_review_diff_source for the non-live sources: one
+// range for the non-live sources: one
 // snapshot for every file, read-only, no checkpoint validation.
 func (a *app) openSourceReview(source reviewSource) {
 	scope := a.scScope()
@@ -177,7 +177,7 @@ func (a *app) reviewLoad() {
 }
 
 // reviewTurnFiles validates one turn's checkpoint and lists its files, the
-// load half of Rust's LastTurn review: the checkpoint must be ready and its
+// load half: the checkpoint must be ready and its
 // ref must name this session and turn.
 func reviewTurnFiles(session *scWireSession, scope scScope, turnID string, count *int, files *[]scFile) error {
 	if session == nil {
@@ -567,8 +567,7 @@ func (a *app) reviewLoadStats() {
 	}()
 }
 
-// reviewStep moves the snapshot reader to the previous/next file, mirroring
-// step_source_control_file for history snapshots.
+// reviewStep moves the snapshot reader to the previous/next file for history snapshots.
 func (a *app) reviewStep(delta int) {
 	st := &a.review
 	if len(st.Rows) == 0 {

@@ -243,8 +243,7 @@ func (a *app) saveTerminalEnv() {
 	a.savePreference(settingsKeyTerminalEnv, a.settings.termEnv)
 }
 
-// schemeSwatch resolves one scheme's palette preview for the appearance
-// currently in force, the way Rust's scheme_choice does.
+// schemeSwatch resolves one scheme's palette preview for the appearance currently in force.
 func (a *app) schemeSwatch(value string) []ui.Color {
 	colors := schemeSwatchColors(value, activeAppearance.dark)
 	return colors[:]
@@ -328,10 +327,10 @@ func settingsButton(c *ui.Context, key, label string) ui.Element {
 	return action.Button(c, label, action.ButtonProps{Variant: action.Default, Size: theme.Small}).Height(32)
 }
 
-// generalSettings is render_general_settings: four groups of rows and the
+// generalSettings shows four groups of rows and the
 // version caption. The OpenCode shell, todo list, image generation, and
 // default model rows read the daemon's runtime configuration and save it
-// immediately on every edit, like Rust's rows write straight through.
+// immediately on every edit.
 func (a *app) generalSettings(c *ui.Context) {
 	lobeThemed(c, func() {
 		a.settingsGroupCard(c, tr("Runtime environment"), func() {
@@ -452,8 +451,7 @@ func (a *app) generalSettings(c *ui.Context) {
 	})
 }
 
-// settingsFooter is the version caption under the General page, like Rust's
-// settings.app_version. It reads the daemon's handshake version and hides
+// settingsFooter is the version caption under the General page. It reads the daemon's handshake version and hides
 // itself when the daemon did not send one.
 func (a *app) settingsFooter(c *ui.Context) {
 	version := ""

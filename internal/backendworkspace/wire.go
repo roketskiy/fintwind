@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// WorkspaceOperation uses snake_case fields in Rust, unlike the enclosing
+// WorkspaceOperation accepts snake_case fields, unlike the enclosing
 // Command. Older Go callers already send camelCase; accept either spelling
 // without accepting contradictory duplicate aliases.
 func normalizeOperation(raw json.RawMessage) (json.RawMessage, error) {

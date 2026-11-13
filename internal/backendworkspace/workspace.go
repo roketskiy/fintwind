@@ -1,9 +1,8 @@
 // Package backendworkspace is a local-only workspace capability module.
 //
-// It speaks the daemon wire shapes from
-// legacy/rust/crates/fintwind-protocol/src/workspace.rs (WorkspaceOperation and
-// WorkspaceResult JSON with a "type" tag) but runs against one isolated
-// directory tree only. The caller passes that tree as root; every local input
+// It speaks the daemon wire shapes (WorkspaceOperation and WorkspaceResult
+// JSON with a "type" tag) but runs against one isolated directory tree only.
+// The caller passes that tree as root; every local input
 // path must resolve inside root. Explicit Git remote operations use a separate
 // sanitized Git directory and validated targets, not repository transport
 // helpers or inherited credentials. No shell interprets caller input.
@@ -17,7 +16,7 @@
 //
 //   - root must be an absolute local path: no UNC, no missing directory.
 //   - Relative inputs accept only normal components (no ".", "..",
-//     no absolute paths, no NUL), mirroring the daemon resolver, and
+//     no absolute paths, no NUL), and
 //     all opens go through os.Root so a symlink swap cannot escape root.
 //   - File content and directory listings carry byte and entry caps;
 //     over-limit reads fail instead of loading the whole file.

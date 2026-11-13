@@ -9,9 +9,8 @@ import (
 	"time"
 )
 
-// Scheduled task wire types mirror
-// legacy/rust/crates/fintwind-protocol/src/scheduled_task.rs. The daemon speaks
-// camelCase with a tagged "kind"; only the fields the settings page reads
+// Scheduled task wire types. The daemon speaks camelCase with a tagged
+// "kind"; only the fields the settings page reads
 // and writes are kept.
 
 type schedLaunch struct {

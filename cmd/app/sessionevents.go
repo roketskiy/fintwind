@@ -260,6 +260,12 @@ func (a *app) applyBackgroundWorkEvent(session *model.Session, payload json.RawM
 	if json.Unmarshal(payload, &decoded) != nil {
 		return false
 	}
+	// The capsule reads its items and the open surface's transcript from
+	// this fold; mark both stale instead of re-decoding per frame.
+	a.capsule.ItemsValid = false
+	if session == a.detail && a.capsule.AgentKey != "" {
+		a.capsule.AgentDirty = true
+	}
 	ext := a.extension(session)
 	switch kind, _ := decoded["type"].(string); kind {
 	case "upsert":

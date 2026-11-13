@@ -105,6 +105,7 @@ func (a *app) composer(c *ui.Context) {
 	labels := a.composerLabelPlan(c)
 	ui.Column(c).FillWidth().Shrink(0).Padding(0, 20).Children(func() {
 		a.composerGoal(c)
+		a.capsuleAnchor(c)
 		card := ui.Column(c.Key("composer-card")).Bind(&a.composerCard).FillWidth().MaxWidth(transcriptWidth).Margin(0, ui.Auto).
 			Background(palette.composer).Border(1, palette.cardBorder).Radius(cardRadius).
 			PaddingY(10)

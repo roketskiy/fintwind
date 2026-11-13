@@ -68,6 +68,11 @@ func (a *app) rightPanel(c *ui.Context) {
 			a.rightPanelResizeHandle(c)
 			return
 		}
+		if _, ok := backgroundKeyFromKind(a.activeKind()); ok {
+			a.backgroundSurface(c, a.activeKind())
+			a.rightPanelResizeHandle(c)
+			return
+		}
 		switch a.activeKind() {
 		case rightPanelContext:
 			a.contextSurface(c)
@@ -281,6 +286,9 @@ func surfaceIcon(kind string) string {
 	case kind == rightPanelFiles:
 		return "folder"
 	}
+	if _, ok := backgroundKeyFromKind(kind); ok {
+		return backgroundSurfaceIcon(kind)
+	}
 	return "file"
 }
 
@@ -292,6 +300,9 @@ func (a *app) surfaceTabTitle(kind string) string {
 			return tab.title
 		}
 		return "Terminal"
+	}
+	if _, ok := backgroundKeyFromKind(kind); ok {
+		return a.backgroundSurfaceTitle(kind)
 	}
 	return surfaceLabel(kind)
 }

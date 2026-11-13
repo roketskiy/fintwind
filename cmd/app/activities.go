@@ -56,14 +56,14 @@ func (a *app) activityCluster(c *ui.Context, blockIndex int, liveTurn bool, late
 
 	ui.Column(c).FillWidth().MinWidth(0).Gap(4).Children(func() {
 		header := ui.ButtonBase(c).Label(headerTitle).Opacity(activityOpacity).
-			FillWidth().MinWidth(0).Height(30).Gap(6).AlignItems(ui.Center)
+			FillWidth().MinWidth(0).Height(30).Gap(6).Justify(ui.Start).AlignItems(ui.Center)
 		header.Children(func() {
 			hovered := header.Hovered() || header.Pressed()
 			color := palette.textSecondary
 			if hovered {
 				color = palette.text
 			}
-			ui.Row(c).MinWidth(0).Grow(1).Children(func() {
+			ui.Row(c).MinWidth(0).Shrink(1).Children(func() {
 				ui.Text(c, headerTitle).FontSize(uiPx(13)).FixedLineHeight(uiPx(17)).
 					FontWeight(500).TextColor(color).SingleLine().Ellipsis("...")
 			})
@@ -83,9 +83,9 @@ func (a *app) activityCluster(c *ui.Context, blockIndex int, liveTurn bool, late
 		if !expanded {
 			return
 		}
-		ui.Column(c).FillWidth().MinWidth(0).Margin(0, 0, 0, 6).Padding(0, 0, 2, 12).
+		ui.Column(c).FillWidth().MinWidth(0).Padding(0, 0, 2, 18).
 			Gap(8).Children(func() {
-			ui.Row(c).Absolute().Left(0).Top(0).Bottom(0).Width(1).
+			ui.Row(c).Absolute().Left(6).Top(0).Bottom(0).Width(1).
 				Background(palette.border)
 			display := mergeConsecutiveReasoning(activities, liveReasoningID,
 				a.mergesReasoning())
@@ -287,7 +287,7 @@ func mergeConsecutiveReasoning(activities []model.ActivityItem, liveReasoningID 
 func (a *app) activityCard(c *ui.Context, merged mergedActivity) {
 	activity := merged.Item
 	reasoning := activity.Reasoning
-	reasoningLive := merged.Live
+	reasoningLive := merged.Live || reasoning != nil && !activity.Complete && !activity.Failed
 	hasDetail := false
 	if reasoning != nil {
 		hasDetail = strings.TrimSpace(reasoning.Content) != ""
@@ -323,15 +323,15 @@ func (a *app) activityCard(c *ui.Context, merged mergedActivity) {
 	statsAdditions, statsDeletions, hasStats := activityFileChangeStats(&activity)
 
 	card := ui.Column(c).FillWidth().MinWidth(0).Clip().
-		Background(palette.raised).Opacity(activityOpacity)
+		BorderWidth(0, 0, 0, 3).BorderColor(rail).Background(palette.raised)
 	card.Children(func() {
 		row := ui.ButtonBase(c).Label(label).FillWidth().Height(32).Padding(0, 12).
 			Gap(8).Justify(ui.Start).AlignItems(ui.Center)
 		if hasDetail {
 			if row.Pressed() {
-				row.Background(hex(0x3E3E3E))
+				row.Background(palette.overlayStrong.Over(palette.raised))
 			} else if row.Hovered() {
-				row.Background(hex(0x363636))
+				row.Background(palette.overlay.Over(palette.raised))
 			}
 		}
 		row.Children(func() {
@@ -426,10 +426,6 @@ func (a *app) activityCard(c *ui.Context, merged mergedActivity) {
 				}
 			}
 		}
-		// The rail is the card's own left edge, painted after the fill and
-		// the row so hover and detail can never cover it.
-		ui.Row(c).Absolute().Left(0).Top(0).Bottom(0).Width(3).
-			Background(rail)
 	})
 }
 
@@ -626,7 +622,7 @@ func activityHeaderTitle(activities []model.ActivityItem, liveTurn bool, liveRea
 	if liveTurn && len(activities) > 0 {
 		last := &activities[len(activities)-1]
 		if last.Reasoning != nil {
-			return reasoningActivityTitle(last.Reasoning, liveReasoningID != "" && liveReasoningID == last.ID)
+			return reasoningActivityTitle(last.Reasoning, liveReasoningID != "" && liveReasoningID == last.ID || !last.Complete && !last.Failed)
 		}
 		return activityDisplayTitle(last)
 	}
@@ -660,7 +656,7 @@ func activitySummary(activities []model.ActivityItem) string {
 		if entry.total != 1 {
 			noun = plural
 		}
-		parts = append(parts, fmt.Sprintf("%d %s", entry.total, noun))
+		parts = append(parts, fmt.Sprintf(tr(noun), entry.total))
 	}
 	running := false
 	for index := range activities {
@@ -671,38 +667,38 @@ func activitySummary(activities []model.ActivityItem) string {
 	}
 	joined := strings.Join(parts, " · ")
 	if running {
-		return "Running " + joined
+		return fmt.Sprintf(tr("Running %s"), joined)
 	}
-	return "Ran " + joined
+	return fmt.Sprintf(tr("Ran %s"), joined)
 }
 
 func activityNoun(kind string) (string, string) {
 	switch kind {
 	case model.KindReasoning:
-		return "thought", "thoughts"
+		return "%d thought", "%d thoughts"
 	case model.KindCommand:
-		return "command", "commands"
+		return "%d command", "%d commands"
 	case model.KindFileChange:
-		return "file edit", "file edits"
+		return "%d file edit", "%d file edits"
 	case model.KindFileRead:
-		return "file read", "file reads"
+		return "%d file read", "%d file reads"
 	case model.KindFileSearch:
-		return "file search", "file searches"
+		return "%d file search", "%d file searches"
 	case model.KindFileList:
-		return "file listing", "file listings"
+		return "%d file listing", "%d file listings"
 	case model.KindSearch:
-		return "search", "searches"
+		return "%d search", "%d searches"
 	case model.KindPlan:
-		return "plan step", "plan steps"
+		return "%d plan step", "%d plan steps"
 	default:
-		return "tool call", "tool calls"
+		return "%d tool call", "%d tool calls"
 	}
 }
 
 func activityDisplayTitle(activity *model.ActivityItem) string {
 	if activity.Kind == model.KindReasoning {
 		if activity.Reasoning != nil {
-			return reasoningActivityTitle(activity.Reasoning, false)
+			return reasoningActivityTitle(activity.Reasoning, !activity.Complete && !activity.Failed)
 		}
 		return activityActionLabel(activity)
 	}
@@ -716,7 +712,7 @@ func activityDisplayTitle(activity *model.ActivityItem) string {
 
 func activityActionLabel(activity *model.ActivityItem) string {
 	if activity.Kind == model.KindReasoning {
-		return "thinking"
+		return tr("Thinking")
 	}
 	title := strings.TrimSpace(activity.Title)
 	if title == "" {
@@ -747,7 +743,7 @@ func activityRowDetail(activity *model.ActivityItem, reasoningLive bool) string 
 		case 1:
 			return activity.FileChanges[0].DisplayName()
 		default:
-			return fmt.Sprintf("%d files", len(activity.FileChanges))
+			return fmt.Sprintf(tr("%d files"), len(activity.FileChanges))
 		}
 	case model.KindFileRead, model.KindFileList:
 		if activity.DisplayTarget != nil {
@@ -776,13 +772,13 @@ func reasoningActivityTitle(reasoning *model.ReasoningBlock, live bool) string {
 }
 
 func reasoningGroupTitle(reasoning *model.ReasoningBlock, live bool, groupCount int) string {
-	base := "Thinking"
+	base := tr("Thinking")
 	if !live {
-		seconds := (reasoning.FinishedAtMs - reasoning.StartedAtMs + 999) / 1000
-		if seconds < 1 {
-			seconds = 1
+		base = tr("Thought")
+		if reasoning.StartedAtMs > 0 && reasoning.FinishedAtMs > reasoning.StartedAtMs {
+			seconds := (reasoning.FinishedAtMs - reasoning.StartedAtMs + 999) / 1000
+			base = fmt.Sprintf(tr("Thought for %s"), formatWorkedDuration(seconds))
 		}
-		base = "Thought for " + formatWorkedDuration(seconds)
 	}
 	if groupCount > 1 {
 		return fmt.Sprintf("%s (×%d)", base, groupCount)
@@ -793,27 +789,27 @@ func reasoningGroupTitle(reasoning *model.ReasoningBlock, live bool, groupCount 
 func formatWorkedDuration(seconds uint64) string {
 	unit := func(value uint64, singular, plural string) string {
 		if value == 1 {
-			return fmt.Sprintf("%d %s", value, singular)
+			return fmt.Sprintf(tr(singular), value)
 		}
-		return fmt.Sprintf("%d %s", value, plural)
+		return fmt.Sprintf(tr(plural), value)
 	}
 	switch {
 	case seconds < 60:
-		return unit(seconds, "second", "seconds")
+		return unit(seconds, "%d second", "%d seconds")
 	case seconds < 3600:
 		minutes := seconds / 60
 		rest := seconds % 60
 		if rest == 0 {
-			return unit(minutes, "minute", "minutes")
+			return unit(minutes, "%d minute", "%d minutes")
 		}
-		return unit(minutes, "minute", "minutes") + " " + unit(rest, "second", "seconds")
+		return unit(minutes, "%d minute", "%d minutes") + " " + unit(rest, "%d second", "%d seconds")
 	default:
 		hours := seconds / 3600
 		minutes := (seconds % 3600) / 60
 		if minutes == 0 {
-			return unit(hours, "hour", "hours")
+			return unit(hours, "%d hour", "%d hours")
 		}
-		return unit(hours, "hour", "hours") + " " + unit(minutes, "minute", "minutes")
+		return unit(hours, "%d hour", "%d hours") + " " + unit(minutes, "%d minute", "%d minutes")
 	}
 }
 

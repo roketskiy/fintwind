@@ -33,9 +33,16 @@ func buildTranscriptRows(session *model.Session, expandedTurns map[string]bool) 
 		return nil
 	}
 	messageCount := len(session.Messages)
+	duplicates, anchors := legacyDuplicateReasoningBlocks(session)
 	blocksAfter := make([][]int, messageCount+1)
 	for index := range session.TranscriptBlocks {
+		if duplicates[index] {
+			continue
+		}
 		anchor := session.TranscriptBlocks[index].AfterMessage
+		if replacement, ok := anchors[index]; ok {
+			anchor = replacement
+		}
 		if anchor < 0 {
 			anchor = 0
 		}
@@ -62,7 +69,7 @@ func buildTranscriptRows(session *model.Session, expandedTurns map[string]bool) 
 		if turn.Status == "running" {
 			continue
 		}
-		rows := turnRows(session, turn.ID)
+		rows := turnRowsFiltered(session, turn.ID, duplicates, anchors)
 		answerStart := turnAnswerStart(session, rows)
 		if answerStart <= 0 {
 			continue
@@ -125,6 +132,33 @@ func buildTranscriptRows(session *model.Session, expandedTurns map[string]bool) 
 	return rows
 }
 
+func legacyDuplicateReasoningBlocks(session *model.Session) (map[int]bool, map[int]int) {
+	duplicates := make(map[int]bool)
+	anchors := make(map[int]int)
+	for index := 0; index+1 < len(session.TranscriptBlocks); index++ {
+		first, second := &session.TranscriptBlocks[index], &session.TranscriptBlocks[index+1]
+		if first.TurnID == nil || second.TurnID == nil || *first.TurnID != *second.TurnID ||
+			len(first.Activities) != 1 || len(second.Activities) != 1 ||
+			first.AfterMessage < 0 || second.AfterMessage != first.AfterMessage+1 || first.AfterMessage >= len(session.Messages) {
+			continue
+		}
+		turn := session.TurnByID(*first.TurnID)
+		message := &session.Messages[first.AfterMessage]
+		if turn == nil || turn.Running() || message.Role != "assistant" || message.TurnID == nil || *message.TurnID != *first.TurnID {
+			continue
+		}
+		pending, completed := &first.Activities[0], &second.Activities[0]
+		if pending.Kind == model.KindReasoning && completed.Kind == model.KindReasoning &&
+			pending.SourceID == nil && completed.SourceID == nil && !pending.Complete && !pending.Failed && completed.Complete &&
+			pending.Reasoning != nil && completed.Reasoning != nil && pending.Reasoning.FinishedAtMs == 0 &&
+			pending.Reasoning.Content != "" && pending.Reasoning.Content == completed.Reasoning.Content {
+			duplicates[index] = true
+			anchors[index+1] = first.AfterMessage
+		}
+	}
+	return duplicates, anchors
+}
+
 // turnHasChangedFiles reports a settled turn whose checkpoint recorded edits.
 func turnHasChangedFiles(turn *model.AgentTurn) bool {
 	if turn.Status == "running" || turn.Checkpoint == nil {
@@ -164,6 +198,11 @@ func changedFilesInlineMessageIndex(session *model.Session, turnID string) int {
 // turnRows is the turn's own messages and anchored blocks in transcript
 // order. The opening user prompt stays outside the fold as its heading.
 func turnRows(session *model.Session, turnID string) []transcriptRow {
+	duplicates, anchors := legacyDuplicateReasoningBlocks(session)
+	return turnRowsFiltered(session, turnID, duplicates, anchors)
+}
+
+func turnRowsFiltered(session *model.Session, turnID string, duplicates map[int]bool, anchors map[int]int) []transcriptRow {
 	messageCount := len(session.Messages)
 	type anchored struct {
 		anchor int
@@ -171,11 +210,17 @@ func turnRows(session *model.Session, turnID string) []transcriptRow {
 	}
 	blocks := make([]anchored, 0, len(session.TranscriptBlocks))
 	for index := range session.TranscriptBlocks {
+		if duplicates[index] {
+			continue
+		}
 		block := &session.TranscriptBlocks[index]
 		if block.TurnID == nil || *block.TurnID != turnID {
 			continue
 		}
 		anchor := block.AfterMessage
+		if replacement, ok := anchors[index]; ok {
+			anchor = replacement
+		}
 		if anchor < 0 {
 			anchor = 0
 		}

@@ -812,7 +812,7 @@ func modelOptionState(explicit, def *string, options []providerModelOption) (str
 
 func reasoningOptionLabel(session *model.Session, model *providerModel) string {
 	if session.ReasoningEffort == nil && model.DefaultReasoningEffort == nil {
-		return tr("Thinking")
+		return tr("Reasoning effort")
 	}
 	_, label, _ := modelOptionState(session.ReasoningEffort, model.DefaultReasoningEffort, model.ReasoningEfforts)
 	return label

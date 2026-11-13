@@ -2094,6 +2094,7 @@
   "There is no pending authentication prompt": "保留中の認証要求がありません",
   "These attachments were restored without an environment and cannot be sent to this remote session. Attach them again to send.": "これらの添付ファイルは環境情報なしで復元されたため、このリモートセッションには送信できません。添付し直してから送信してください。",
   "Think": "思考",
+  "Reasoning effort": "推論の強度",
   "Thinking": "思考中",
   "This also deletes its linked provider conversation. Project files are kept.": "関連するプロバイダーの会話も削除されます。プロジェクトファイルは保持されます。",
   "This branch has no commits to show": "このブランチに表示できるコミットがありません",

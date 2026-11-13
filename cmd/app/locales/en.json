@@ -2059,6 +2059,7 @@
   "There is no pending authentication prompt": "There is no pending authentication prompt",
   "These attachments were restored without an environment and cannot be sent to this remote session. Attach them again to send.": "These attachments were restored without an environment and cannot be sent to this remote session. Attach them again to send.",
   "Think": "Think",
+  "Reasoning effort": "Reasoning effort",
   "Thinking": "Thinking",
   "This also deletes its linked provider conversation. Project files are kept.": "This also deletes its linked provider conversation. Project files are kept.",
   "This branch has no commits to show": "This branch has no commits to show",

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"math"
 	"strings"
 	"time"
 
@@ -58,6 +59,19 @@ func (a *app) submitSessionSubmission(submission sessionSubmission) bool {
 			a.status = tr("Wait for the attachments to finish importing")
 		}
 		return false
+	}
+	if a.stateForSession(session).goalBusy {
+		a.status = tr("Goal command in progress")
+		return false
+	}
+	if action, ok := parseGoalCommand(text); ok && session.Provider == "opencode" {
+		if action["type"] == "start" {
+			action["attachments"] = submissionFilesForAttachments(attachments)
+		} else if len(attachments) > 0 {
+			a.status = tr("Attachments are only supported when starting a goal")
+			return false
+		}
+		return a.controlGoal(session, action, &submission)
 	}
 	if session.Busy() {
 		if !a.enqueueSessionSubmission(session, text, attachments) {
@@ -169,6 +183,7 @@ func (a *app) enqueueSessionSubmission(session *model.Session, text string, atta
 		CreatedAt:   now,
 	}
 	session.QueuedMessages = append(session.QueuedMessages, row)
+	a.stateForSession(session).queueScroll.Y = math.MaxFloat32
 	a.automaticQueueEntries(session)[row.ID] = true
 	session.UpdatedAt = now
 	a.saveSessionSnapshot(session)

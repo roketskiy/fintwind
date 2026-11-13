@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"time"
 
 	"fintwind-go/internal/daemon"
@@ -21,6 +22,7 @@ type sessionState struct {
 	permission           *pendingPermission
 	question             *userInputState
 	list                 ui.ListState
+	queueScroll          ui.ScrollState
 	expandedTurns        map[string]bool
 	clusterDisclosure    map[int]int
 	expandedActivities   map[string]bool
@@ -45,6 +47,8 @@ type sessionState struct {
 	edit                 *messageEditState
 	retiredRuntimes      map[string]bool
 	contextCompact       *contextCompactRequest
+	goalExpanded         bool
+	goalBusy             bool
 }
 
 type transcriptPosition struct{ messages, blocks int }
@@ -60,6 +64,7 @@ func (a *app) stateForSession(session *model.Session) *sessionState {
 		state = &sessionState{
 			cursors:            make(map[string]daemon.ReplayCursor),
 			list:               ui.ListState{FollowEnd: true},
+			queueScroll:        ui.ScrollState{Y: math.MaxFloat32},
 			expandedTurns:      make(map[string]bool),
 			clusterDisclosure:  make(map[int]int),
 			expandedActivities: make(map[string]bool),

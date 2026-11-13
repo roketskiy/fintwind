@@ -96,6 +96,8 @@ type app struct {
 	diagrams       map[[32]byte]*diagramState
 	diagramWorkers chan struct{}
 	draft          string
+	composerCard   ui.Handle
+	composerWidths [5]composerLabelWidth
 	surfaces       []string
 	activeSurface  int
 	settings       settingsState

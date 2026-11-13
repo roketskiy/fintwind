@@ -58,9 +58,51 @@ func (a *app) applyExtendedSessionEvent(session *model.Session, event daemon.Eve
 		return true
 	case "goalUpdated":
 		return a.applyGoalUpdated(session, event.Payload)
+	case "goalCompleted":
+		var message model.Message
+		if json.Unmarshal(event.Payload, &message) != nil || message.ID == "" || message.Role != "goal_complete" {
+			return false
+		}
+		for _, existing := range session.Messages {
+			if existing.ID == message.ID {
+				return true
+			}
+		}
+		session.Messages = append(session.Messages, message)
+		return true
 	case "goalStatusReported":
-		// A response channel for goal status requests this client never
-		// issues; the desktop ignores it without a pending request too.
+		var report struct {
+			OK  json.RawMessage `json:"Ok"`
+			Err string          `json:"Err"`
+		}
+		if json.Unmarshal(event.Payload, &report) != nil {
+			return false
+		}
+		if report.Err != "" && a.detail == session {
+			a.status = tr("Goal command failed: ") + report.Err
+		} else if len(report.OK) > 0 {
+			if !a.applyGoalUpdated(session, report.OK) {
+				return false
+			}
+			if string(report.OK) == "null" && a.detail == session {
+				a.status = tr("No goal")
+			}
+		}
+		return true
+	case "goalTurnStarted":
+		var started struct {
+			Turn    model.AgentTurn `json:"turn"`
+			Message *model.Message  `json:"message"`
+		}
+		if json.Unmarshal(event.Payload, &started) != nil || started.Turn.ID == "" {
+			return false
+		}
+		if session.TurnByID(started.Turn.ID) == nil {
+			session.Turns = append(session.Turns, started.Turn)
+			if started.Message != nil {
+				session.Messages = append(session.Messages, *started.Message)
+			}
+		}
 		return true
 	case "goalCommandFailed":
 		var message string
@@ -149,6 +191,7 @@ func (a *app) reconcileActiveTranscript(session *model.Session, transcript model
 	// positions; a match restores the local stable id, typed text, display
 	// content and attachments over the native row.
 	users := make([]model.Message, 0, 2)
+	var goalMessages []model.Message
 	firstUserID := ""
 	for _, message := range session.Messages {
 		if message.Role == "user" && message.TurnID != nil && *message.TurnID == turnID {
@@ -159,6 +202,8 @@ func (a *app) reconcileActiveTranscript(session *model.Session, transcript model
 	for _, message := range session.Messages[messageStart:] {
 		if message.Role == "user" {
 			users = append(users, message)
+		} else if message.Role == "goal_complete" {
+			goalMessages = append(goalMessages, message)
 		}
 	}
 	for index := range transcript.Messages {
@@ -194,6 +239,7 @@ func (a *app) reconcileActiveTranscript(session *model.Session, transcript model
 		transcript.Blocks[index].AfterMessage += messageStart
 	}
 	session.Messages = append(session.Messages[:messageStart], transcript.Messages...)
+	session.Messages = append(session.Messages, goalMessages...)
 	session.TranscriptBlocks = append(session.TranscriptBlocks[:blockStart], transcript.Blocks...)
 	session.UpdatedAt = uint64(time.Now().Unix())
 	// The old part indexes point into the replaced suffix.
@@ -353,7 +399,7 @@ func (a *app) applySubmissionUpdated(session *model.Session, payload json.RawMes
 	if receipt.State == "notSent" || receipt.State == "rejected" {
 		if turns := session.Turns; len(turns) > 0 {
 			turn := &turns[len(turns)-1]
-			if turn.ID == receipt.ID {
+			if turn.ID == receipt.ID && !(receipt.State == "notSent" && turn.Status == "interrupted") {
 				turn.Status = "failed"
 				completed := uint64(time.Now().Unix())
 				turn.CompletedAt = &completed
@@ -500,10 +546,15 @@ func (a *app) applyGoalUpdated(session *model.Session, payload json.RawMessage) 
 	if json.Unmarshal(payload, &decoded) != nil {
 		return false
 	}
-	revision, _ := decoded["revision"].(float64)
+	if decoded == nil {
+		a.extension(session)["goal"] = nil
+		a.rawSession(session)["goal"] = nil
+		return true
+	}
+	revision := goalRevision(decoded["revision"])
 	sessionID, _ := decoded["sessionId"].(string)
 	if previous, ok := a.rawSession(session)["goal"].(map[string]any); ok {
-		oldRevision, _ := previous["revision"].(float64)
+		oldRevision := goalRevision(previous["revision"])
 		oldSession, _ := previous["sessionId"].(string)
 		if oldSession == sessionID && oldRevision > revision {
 			return true

@@ -317,7 +317,9 @@ func (a *app) activityCard(c *ui.Context, merged mergedActivity, liveTurn bool) 
 	}
 	running := liveTurn && (reasoningLive || (!activity.Complete && !activity.Failed))
 	rail := palette.textTertiary
-	if running {
+	if activity.Failed {
+		rail = palette.danger
+	} else if running {
 		rail = palette.accent
 	}
 	statsAdditions, statsDeletions, hasStats := activityFileChangeStats(&activity)

@@ -16,6 +16,7 @@ const (
 	transcriptWorking
 	transcriptChangedFiles
 	transcriptCompacting
+	transcriptStopped
 )
 
 type transcriptRow struct {
@@ -64,6 +65,7 @@ func buildTranscriptRows(session *model.Session, expandedTurns map[string]bool) 
 
 	foldAnchors := make(map[transcriptRow]string)
 	hidden := make(map[transcriptRow]bool)
+	stoppedAfter := make(map[int]string)
 	for index := range session.Turns {
 		turn := &session.Turns[index]
 		if turn.Status == "running" {
@@ -72,6 +74,15 @@ func buildTranscriptRows(session *model.Session, expandedTurns map[string]bool) 
 		rows := turnRowsFiltered(session, turn.ID, duplicates, anchors)
 		answerStart := turnAnswerStart(session, rows)
 		if answerStart <= 0 {
+			if turn.Status == "interrupted" {
+				for messageIndex := range session.Messages {
+					message := &session.Messages[messageIndex]
+					if message.Role == "user" && message.TurnID != nil && *message.TurnID == turn.ID {
+						stoppedAfter[messageIndex] = turn.ID
+						break
+					}
+				}
+			}
 			continue
 		}
 		hiddenRows := rows[:answerStart]
@@ -90,6 +101,11 @@ func buildTranscriptRows(session *model.Session, expandedTurns map[string]bool) 
 		expanded := expandedTurns[rowTurnID(session, row)]
 		if expanded || !hidden[row] {
 			rows = append(rows, row)
+		}
+		if row.Kind == transcriptMessage {
+			if turnID, ok := stoppedAfter[row.MessageIndex]; ok {
+				rows = append(rows, transcriptRow{Kind: transcriptStopped, TurnID: turnID})
+			}
 		}
 	}
 	if session.Busy() && session.ActiveTurnID() != "" {
@@ -312,6 +328,8 @@ func rowTurnID(session *model.Session, row transcriptRow) string {
 				return *turnID
 			}
 		}
+	case transcriptFold, transcriptStopped, transcriptChangedFiles:
+		return row.TurnID
 	}
 	return ""
 }

@@ -262,7 +262,9 @@ func (a *app) transcriptRowView(c *ui.Context, index int) {
 				latest := row.BlockIndex+1 == len(a.detail.TranscriptBlocks)
 				a.activityCluster(c, row.BlockIndex, liveTurn, latest)
 			case transcriptFold:
-				a.turnFoldRow(c, row.TurnID)
+				a.turnFoldRow(c, row.TurnID, true)
+			case transcriptStopped:
+				a.turnFoldRow(c, row.TurnID, false)
 			case transcriptWorking:
 				a.workingRow(c)
 			case transcriptChangedFiles:
@@ -274,7 +276,7 @@ func (a *app) transcriptRowView(c *ui.Context, index int) {
 	})
 }
 
-func (a *app) turnFoldRow(c *ui.Context, turnID string) {
+func (a *app) turnFoldRow(c *ui.Context, turnID string, expandable bool) {
 	expanded := a.expandedTurns[turnID]
 	label := tr("Worked")
 	for index := range a.detail.Turns {
@@ -286,7 +288,10 @@ func (a *app) turnFoldRow(c *ui.Context, turnID string) {
 		if turn.CompletedAt != nil {
 			end = *turn.CompletedAt
 		}
-		seconds := end - turn.StartedAt
+		seconds := uint64(0)
+		if end > turn.StartedAt {
+			seconds = end - turn.StartedAt
+		}
 		if seconds < 1 {
 			seconds = 1
 		}
@@ -300,6 +305,12 @@ func (a *app) turnFoldRow(c *ui.Context, turnID string) {
 	}
 	ui.Row(c).FillWidth().Height(28).Gap(10).AlignItems(ui.Center).Children(func() {
 		ui.Row(c).Height(1).Grow(1).Background(palette.border)
+		if !expandable {
+			ui.Text(c, label).FontSize(uiPx(12.5)).FixedLineHeight(uiPx(17)).FontWeight(500).
+				TextColor(palette.textTertiary)
+			ui.Row(c).Height(1).Grow(1).Background(palette.border)
+			return
+		}
 		button := ui.ButtonBase(c).Label(label).Height(28).Padding(0, 3).Shrink(0).
 			Gap(5).AlignItems(ui.Center)
 		button.Children(func() {
@@ -508,7 +519,9 @@ func (a *app) messageView(c *ui.Context, messageIndex int) {
 		}
 		_ = a.messageCopyMenu(column, m.ID, "assistant", menuCopy)
 	case "system":
-		a.systemMessage(c, text)
+		a.systemMessage(c, "", text, palette.danger)
+	case "goal_complete":
+		a.systemMessage(c, tr("Goal met"), text, ui.RGB(47, 143, 82))
 	case "compaction":
 		a.compactionMessage(c, m.ID, text)
 	default:
@@ -821,20 +834,14 @@ func (a *app) messageTime(c *ui.Context, at uint64) {
 		TextColor(palette.textMuted).Height(27).Padding(0, 4).Shrink(0)
 }
 
-func (a *app) systemMessage(c *ui.Context, text string) {
-	ui.Row(c).FillWidth().Justify(ui.Center).Children(func() {
-		card := ui.Row(c).MaxWidth(560).MinWidth(0).Padding(6, 10, 6, 10).Radius(8).
-			Background(palette.dangerSoft).Border(1, palette.danger).Gap(7).
-			AlignItems(ui.Start)
-		card.Children(func() {
-			ui.Row(c).Shrink(0).Padding(1, 0, 0, 0).Children(func() {
-				icon(c, "alert", 13, palette.danger)
-			})
-			ui.Row(c).Grow(1).MinWidth(0).Children(func() {
-				ui.Text(c, text).FontSize(uiPx(11.5)).FixedLineHeight(uiPx(16)).
-					TextColor(palette.text).Wrap()
-			})
-		})
+func (a *app) systemMessage(c *ui.Context, title, text string, color ui.Color) {
+	ui.Column(c).FillWidth().MinWidth(0).BorderWidth(0, 0, 0, 3).
+		BorderColor(color).Background(palette.raised).Padding(9, 12).Gap(4).Children(func() {
+		if title != "" {
+			ui.Text(c, title).FontSize(uiPx(12.5)).FontWeight(600).TextColor(palette.text)
+		}
+		ui.Text(c, text).FontSize(uiPx(12.5)).FixedLineHeight(uiPx(18)).
+			TextColor(palette.text).Wrap().Selectable()
 	})
 }
 

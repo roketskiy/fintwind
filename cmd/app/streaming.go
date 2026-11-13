@@ -256,11 +256,33 @@ func (a *app) applyEvent(event daemon.Event) error {
 		if text == "" {
 			text = string(event.Payload)
 		}
+		var details struct {
+			ID        string `json:"id"`
+			TurnID    string `json:"turnId"`
+			CreatedAt uint64 `json:"createdAt"`
+		}
+		_ = json.Unmarshal(event.Payload, &details)
+		if details.ID == "" {
+			details.ID = uuid.NewString()
+		}
+		for _, message := range session.Messages {
+			if message.ID == details.ID {
+				return nil
+			}
+		}
+		if details.CreatedAt == 0 {
+			details.CreatedAt = uint64(time.Now().Unix())
+		}
+		var turnID *string
+		if details.TurnID != "" {
+			turnID = &details.TurnID
+		}
 		session.Messages = append(session.Messages, model.Message{
-			ID:        uuid.NewString(),
+			ID:        details.ID,
+			TurnID:    turnID,
 			Role:      "system",
 			Content:   text,
-			CreatedAt: uint64(time.Now().Unix()),
+			CreatedAt: details.CreatedAt,
 		})
 		a.rebuildTranscript()
 	case "processExited":

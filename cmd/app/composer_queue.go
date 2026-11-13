@@ -90,6 +90,40 @@ func findQueuedMessage(session *model.Session, messageID string) int {
 	return -1
 }
 
+type queuedMessageDrag struct {
+	sessionID string
+	messageID string
+}
+
+func (a *app) reorderQueuedMessage(sessionID, messageID, targetID string) {
+	if a.sessionActionBlocksInput(sessionID) {
+		return
+	}
+	session := a.eventSession(sessionID)
+	from, to := findQueuedMessage(session, messageID), findQueuedMessage(session, targetID)
+	if from < 0 || to < 0 || from == to {
+		return
+	}
+	message := session.QueuedMessages[from]
+	if from < to {
+		copy(session.QueuedMessages[from:to], session.QueuedMessages[from+1:to+1])
+	} else {
+		copy(session.QueuedMessages[to+1:from+1], session.QueuedMessages[to:from])
+	}
+	session.QueuedMessages[to] = message
+	session.UpdatedAt = uint64(time.Now().Unix())
+	a.saveSessionSnapshot(session)
+}
+
+func (a *app) moveQueuedMessage(sessionID, messageID string, direction int) {
+	session := a.eventSession(sessionID)
+	index := findQueuedMessage(session, messageID)
+	if index < 0 || index+direction < 0 || index+direction >= len(session.QueuedMessages) {
+		return
+	}
+	a.reorderQueuedMessage(sessionID, messageID, session.QueuedMessages[index+direction].ID)
+}
+
 // removeQueuedMessage drops one follow-up and persists the queue, mirroring
 // runtime.rs remove_queued_message (which saves).
 func (a *app) removeQueuedMessage(sessionID, messageID string) {
@@ -127,10 +161,18 @@ func (a *app) editQueuedMessage(sessionID, messageID string) {
 		return
 	}
 	message := session.QueuedMessages[index]
+	state := a.stateForSession(session)
+	if a.detail == session {
+		if strings.TrimSpace(a.draft) != "" || len(a.pendingAttachments) > 0 || len(a.pendingReferences) > 0 {
+			a.status = tr("Clear the composer before editing a queued message")
+			return
+		}
+	} else if strings.TrimSpace(state.draft) != "" || len(state.attachments) > 0 || len(state.references) > 0 {
+		return
+	}
 	session.QueuedMessages = append(session.QueuedMessages[:index], session.QueuedMessages[index+1:]...)
 	delete(a.automaticQueueEntries(session), messageID)
 	session.UpdatedAt = uint64(time.Now().Unix())
-	state := a.stateForSession(session)
 	state.draft = queuedPrompt(message)
 	state.attachments = draftAttachmentsFromModel(message.Attachments)
 	if a.detail == session {

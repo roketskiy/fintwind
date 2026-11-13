@@ -25,17 +25,94 @@ const (
 	composerSendSize    = 30.0
 )
 
+type composerLabelWidth struct {
+	text, font  string
+	size, width float32
+}
+
+type composerLabels struct {
+	model, reasoning, tier, access, interaction bool
+}
+
+func (a *app) composerLabelPlan(c *ui.Context) composerLabels {
+	plan := composerLabels{true, true, true, true, true}
+	width := a.composerCard.Bounds(c).W
+	if width <= 0 {
+		return plan
+	}
+	mode := "fullAccess"
+	if a.detail != nil {
+		switch a.detail.RuntimeMode {
+		case "ask", "plan":
+			mode = "ask"
+		case "autoAcceptEdits":
+			mode = "autoAcceptEdits"
+		}
+	}
+	access, _ := accessLabel(mode)
+	interaction := tr("Build")
+	if a.detail != nil && a.detail.InteractionMode == "plan" {
+		interaction = tr("Plan")
+	}
+	labels := [5]string{"", "", interaction, access, a.modelDisplayName()}
+	if model := a.currentProviderModel(); model != nil {
+		if len(model.ReasoningEfforts) > 0 {
+			labels[0] = reasoningOptionLabel(a.detail, model)
+		}
+		_, labels[1], _ = modelOptionState(a.detail.ServiceTier, model.DefaultServiceTier, model.ServiceTiers)
+	}
+	count := 5
+	for _, label := range labels[:2] {
+		if label == "" {
+			count--
+		}
+	}
+	used := float32(20 + 60 + composerRowGap*float32(count+1) + 30*float32(count))
+	if a.detail != nil && a.detail.Busy() && (strings.TrimSpace(a.draft) != "" || len(a.pendingAttachments) > 0 || len(a.pendingReferences) > 0) {
+		used += composerSendSize + composerRowGap
+	}
+	widths := [5]float32{}
+	for index, label := range labels {
+		if label == "" {
+			continue
+		}
+		cached := &a.composerWidths[index]
+		size := uiPx(composerChipText)
+		if cached.text != label || cached.font != activeAppearance.font || cached.size != size {
+			measured, _ := c.MeasureText(0, ui.Span{Text: label, Font: activeAppearance.font, Size: size})
+			*cached = composerLabelWidth{text: label, font: activeAppearance.font, size: size, width: measured}
+		}
+		widths[index] = cached.width + composerChipGap
+		if index == 4 {
+			widths[index] = min(cached.width, modelChipLabelWidth) + composerChipGap
+		}
+		used += widths[index]
+	}
+	for index, show := range []*bool{&plan.reasoning, &plan.tier, &plan.interaction, &plan.access, &plan.model} {
+		if used <= width {
+			break
+		}
+		if labels[index] != "" {
+			*show = false
+			used -= widths[index]
+		}
+	}
+	return plan
+}
+
 func (a *app) composer(c *ui.Context) {
 	a.refreshAutocompleteSources()
+	labels := a.composerLabelPlan(c)
 	ui.Column(c).FillWidth().Shrink(0).Padding(0, 20).Children(func() {
-		if a.detail != nil && len(a.detail.QueuedMessages) > 0 {
-			a.queuedMessages(c)
-		}
-		card := ui.Column(c).FillWidth().MaxWidth(transcriptWidth).Margin(0, ui.Auto).
+		a.composerGoal(c)
+		card := ui.Column(c.Key("composer-card")).Bind(&a.composerCard).FillWidth().MaxWidth(transcriptWidth).Margin(0, ui.Auto).
 			Background(palette.composer).Border(1, palette.cardBorder).Radius(cardRadius).
 			PaddingY(10)
 		card = cardShadow(card)
 		card.Children(func() {
+			if a.detail != nil && len(a.detail.QueuedMessages) > 0 {
+				a.queuedMessages(c)
+			}
 			if len(a.pendingReferences) > 0 || len(a.pendingAttachments) > 0 {
 				ui.Row(c).FillWidth().Padding(2, 14, 6, 14).Wrap().Gap(6).Children(func() {
 					a.pendingReferenceChips(c)
@@ -162,11 +239,11 @@ func (a *app) composer(c *ui.Context) {
 			a.composerUploadNotice(c)
 			ui.Row(c).FillWidth().Padding(8, 10, 0, 10).Gap(composerRowGap).Wrap().
 				AlignItems(ui.Center).Children(func() {
-				a.modelChip(c)
-				a.reasoningEffortChip(c)
-				a.serviceTierChip(c)
-				a.accessChip(c)
-				a.interactionChip(c)
+				a.modelChip(c, labels.model)
+				a.reasoningEffortChip(c, labels.reasoning)
+				a.serviceTierChip(c, labels.tier)
+				a.accessChip(c, labels.access)
+				a.interactionChip(c, labels.interaction)
 				a.attachButton(c)
 				ui.Row(c).Grow(1)
 				busy := a.detail != nil && a.detail.Busy()
@@ -199,7 +276,7 @@ func (a *app) composer(c *ui.Context) {
 						if a.runtimePreferences().BusySendSteer && a.detail.Status == "working" && a.runtimes[a.detail.ID] != "" {
 							label = tr("Send as steer")
 						}
-						queue := ui.ButtonBase(c).Label(label).Tooltip(label).
+						queue := ui.ButtonBase(c).Label(label).
 							Size(composerSendSize, composerSendSize).Radius(15).Center().
 							Background(palette.inverse).Disabled(uploading)
 						if queue.Hovered() {
@@ -294,106 +371,136 @@ func (a *app) composer(c *ui.Context) {
 	})
 }
 
-// queuedMessages lists the follow-ups waiting for the running turn. It sits
-// above the composer card, its own header toggling the list.
 func (a *app) queuedMessages(c *ui.Context) {
 	session := a.detail
 	if session == nil {
 		return
 	}
 	collapsed := a.queuedCollapsed(session.ID)
-	section := ui.Column(c).FillWidth().MaxWidth(transcriptWidth).Margin(0, ui.Auto).
-		Padding(0, 10, 8, 10).Margin(0, ui.Auto, 6, 0).
-		BorderWidth(0, 0, 1, 0).BorderColor(palette.border)
-	section.Children(func() {
-		header := ui.ButtonBase(c).Label(tr("Queued")).Height(28).Padding(0, 8).
-			Radius(6).Gap(6).AlignItems(ui.Center)
-		if header.Hovered() {
-			header.Background(palette.overlay)
-		}
-		header.Children(func() {
-			icon(c, "queue", 14, palette.textSecondary)
-			ui.Text(c, fmt.Sprintf(tr("Queued · %d"), len(session.QueuedMessages))).
-				FontSize(uiPx(12)).TextColor(palette.textSecondary)
-			chevron := "chevron-up"
-			if collapsed {
-				chevron = "chevron-down"
+	var dragged queuedMessageDrag
+	var targetID string
+	ui.Column(c).FillWidth().Padding(0, 10, 8, 10).Children(func() {
+		ui.Column(c).FillWidth().Padding(4).Radius(8).
+			Background(palette.raised).Border(1, palette.cardBorder).Children(func() {
+			header := ui.ButtonBase(c).Label(tr("Queued")).Height(28).Padding(0, 8).
+				Radius(6).Gap(6).AlignItems(ui.Center)
+			if header.Hovered() {
+				header.Background(palette.overlay)
 			}
-			icon(c, chevron, 11, palette.textTertiary)
-		})
-		if header.Clicked() {
-			a.setQueuedCollapsed(session.ID, !collapsed)
-		}
-		if collapsed {
-			return
-		}
-		ui.Scroll(c).FillWidth().MaxHeight(160).Children(func() {
-			ui.Column(c).FillWidth().Padding(5, 0, 0, 0).Gap(4).Children(func() {
-				for _, message := range session.QueuedMessages {
-					// The Steer control only shows while the turn can take it,
-					// mirroring the steerable gate in render_queued_messages.
-					steerable := a.queuedSteerable(session)
-					row := ui.Row(c).FillWidth().Padding(6, 8).Radius(8).
-						Border(1, palette.border).Background(palette.raised).
-						Gap(8).AlignItems(ui.Center)
-					if row.Hovered() {
-						row.Background(palette.overlay.Over(palette.raised))
-					}
-					row.Children(func() {
-						icon(c, "grip-vertical", 13, palette.textTertiary)
-						ui.Row(c).Grow(1).MinWidth(0).Children(func() {
-							ui.Text(c, queuedContent(message)).FontSize(uiPx(13)).
-								TextColor(palette.text).SingleLine().Ellipsis("...")
-						})
-						ui.Row(c).Gap(2).AlignItems(ui.Center).Children(func() {
-							if steerable {
-								steer := ui.ButtonBase(c).Label(tr("Steer")).
-									Height(22).Padding(0, 8).Radius(5).Center().
-									Border(1, palette.border)
-								if steer.Hovered() {
-									steer.Background(palette.overlay)
-								}
-								if steer.Pressed() {
-									steer.Background(palette.overlayStrong)
-								}
-								steer.Children(func() {
-									ui.Text(c, tr("Steer")).FontSize(uiPx(11.5)).FontWeight(500).
-										TextColor(palette.text)
-								})
-								if steer.Clicked() {
-									a.steerQueuedMessage(session.ID, message.ID)
-								}
-							}
-							edit := ui.ButtonBase(c).Label(tr("Edit in composer")).
-								Tooltip(tr("Edit in composer")).Size(22, 22).
-								Radius(5).Center()
-							if edit.Hovered() {
-								edit.Background(palette.overlayStrong)
-							}
-							edit.Children(func() {
-								icon(c, "pencil", 13, palette.textTertiary)
-							})
-							if edit.Clicked() {
-								a.editQueuedMessage(session.ID, message.ID)
-							}
-							remove := ui.ButtonBase(c).Label(tr("Remove from queue")).
-								Tooltip(tr("Remove from queue")).Size(22, 22).
-								Radius(5).Center()
-							if remove.Hovered() {
-								remove.Background(palette.overlayStrong)
-							}
-							remove.Children(func() {
-								icon(c, "trash", 13, palette.textTertiary)
-							})
-							if remove.Clicked() {
-								a.removeQueuedMessage(session.ID, message.ID)
-							}
-						})
-					})
+			header.Children(func() {
+				icon(c, "queue", 14, palette.textSecondary)
+				ui.Text(c, fmt.Sprintf(tr("Queued · %d"), len(session.QueuedMessages))).
+					FontSize(uiPx(12)).TextColor(palette.textSecondary)
+				chevron := "chevron-up"
+				if collapsed {
+					chevron = "chevron-down"
 				}
+				icon(c, chevron, 11, palette.textTertiary)
+			})
+			if header.Clicked() {
+				a.setQueuedCollapsed(session.ID, !collapsed)
+			}
+			if collapsed {
+				return
+			}
+			ui.Scroll(c).FillWidth().MaxHeight(160).TrackScroll(&a.stateForSession(session).queueScroll).Children(func() {
+				ui.Column(c).FillWidth().Padding(5, 0, 0, 0).Gap(4).Children(func() {
+					for index := len(session.QueuedMessages) - 1; index >= 0; index-- {
+						message := session.QueuedMessages[index]
+						// The Steer control only shows while the turn can take it,
+						// mirroring the steerable gate in render_queued_messages.
+						steerable := a.queuedSteerable(session)
+						row := ui.Row(c.Key("queued-"+message.ID)).FillWidth().Padding(6, 8).Radius(6).
+							Gap(8).AlignItems(ui.Center).Focusable().TabStop(true).
+							Label(tr("Reorder queued message")).Description(tr("Drag to reorder; Ctrl+Up/Down to move")).
+							Cursor(ui.CursorGrab).Drag(queuedMessageDrag{sessionID: session.ID, messageID: message.ID}).
+							OnShortcut(ui.Ctrl, ui.KeyUp, func() { a.moveQueuedMessage(session.ID, message.ID, 1) }).
+							OnShortcut(ui.Ctrl, ui.KeyDown, func() { a.moveQueuedMessage(session.ID, message.ID, -1) })
+						if over, ok := ui.DragOver[queuedMessageDrag](row); ok && over.sessionID == session.ID && over.messageID != message.ID {
+							row.Background(palette.overlayStrong)
+						} else if row.Hovered() {
+							row.Background(palette.overlay)
+						}
+						if value, ok := ui.Drop[queuedMessageDrag](row); ok {
+							dragged, targetID = value, message.ID
+						}
+						row.Children(func() {
+							icon(c, "grip-vertical", 13, palette.textTertiary)
+							ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
+								if strings.TrimSpace(message.Content) != "" || message.DisplayContent != nil && strings.TrimSpace(*message.DisplayContent) != "" {
+									ui.Text(c, queuedContent(message)).FontSize(uiPx(13)).
+										TextColor(palette.text).SingleLine().Ellipsis("...")
+								}
+								if len(message.Attachments) > 0 {
+									ui.Row(c).FillWidth().Wrap().Gap(4).Children(func() {
+										for _, attachment := range message.Attachments {
+											ui.Row(c).MaxWidth(200).Padding(2, 6).Radius(5).Gap(4).AlignItems(ui.Center).Background(palette.overlay).Tooltip(attachment.Path).Children(func() {
+												if attachment.IsDir {
+													icon(c, "folder", 12, palette.textSecondary)
+												} else if attachment.IsImage {
+													icon(c, "modality-image", 12, palette.textSecondary)
+												} else {
+													brandIcon(c, fileTypeIcon(attachment.Name), 12)
+												}
+												ui.Text(c, attachment.Name).FontSize(uiPx(11)).TextColor(palette.textSecondary).SingleLine().Ellipsis("...")
+											})
+										}
+									})
+								}
+							})
+							ui.Row(c).Gap(2).AlignItems(ui.Center).Children(func() {
+								if steerable {
+									steer := ui.ButtonBase(c).Label(tr("Steer")).
+										Height(22).Padding(0, 8).Radius(5).Center().
+										Border(1, palette.border)
+									if steer.Hovered() {
+										steer.Background(palette.overlay)
+									}
+									if steer.Pressed() {
+										steer.Background(palette.overlayStrong)
+									}
+									steer.Children(func() {
+										ui.Text(c, tr("Steer")).FontSize(uiPx(11.5)).FontWeight(500).
+											TextColor(palette.text)
+									})
+									if steer.Clicked() {
+										a.steerQueuedMessage(session.ID, message.ID)
+									}
+								}
+								edit := ui.ButtonBase(c).Label(tr("Edit in composer")).
+									Size(22, 22).
+									Radius(5).Center()
+								if edit.Hovered() {
+									edit.Background(palette.overlayStrong)
+								}
+								edit.Children(func() {
+									icon(c, "pencil", 13, palette.textTertiary)
+								})
+								if edit.Clicked() {
+									a.editQueuedMessage(session.ID, message.ID)
+								}
+								remove := ui.ButtonBase(c).Label(tr("Remove from queue")).
+									Size(22, 22).
+									Radius(5).Center()
+								if remove.Hovered() {
+									remove.Background(palette.overlayStrong)
+								}
+								remove.Children(func() {
+									icon(c, "trash", 13, palette.textTertiary)
+								})
+								if remove.Clicked() {
+									a.removeQueuedMessage(session.ID, message.ID)
+								}
+							})
+						})
+					}
+				})
 			})
 		})
 	})
+	if dragged.sessionID == session.ID && targetID != "" {
+		a.reorderQueuedMessage(session.ID, dragged.messageID, targetID)
+	}
 }
 
 func queuedContent(message model.QueuedMessage) string {
@@ -755,7 +862,7 @@ func (a *app) composerChip(c *ui.Context, iconName string, iconColor ui.Color, l
 	return chip
 }
 
-func (a *app) modelChip(c *ui.Context) {
+func (a *app) modelChip(c *ui.Context, showLabel bool) {
 	// The chip shows the catalog name, not the raw id, so make sure the
 	// catalog is on its way the first time a session renders. The request is
 	// idempotent, throttled on failure, and never blocks the frame.
@@ -787,10 +894,12 @@ func (a *app) modelChip(c *ui.Context) {
 	}
 	chip.Children(func() {
 		markIcon(c, name, composerModelIcon, palette.neutral)
-		ui.Row(c).MinWidth(0).MaxWidth(modelChipLabelWidth).Children(func() {
-			ui.Text(c, label).FontSize(uiPx(composerChipText)).FixedLineHeight(uiPx(16)).
-				TextColor(palette.textSecondary).SingleLine().Ellipsis("...")
-		})
+		if showLabel {
+			ui.Row(c).MinWidth(0).MaxWidth(modelChipLabelWidth).Children(func() {
+				ui.Text(c, label).FontSize(uiPx(composerChipText)).FixedLineHeight(uiPx(16)).
+					TextColor(palette.textSecondary).SingleLine().Ellipsis("...")
+			})
+		}
 	})
 	if chip.Clicked() {
 		a.modelMenuOpen = !a.modelMenuOpen
@@ -818,7 +927,7 @@ func (a *app) modelChip(c *ui.Context) {
 
 // accessChip mirrors RuntimeMode::access and its labels, and opens the three
 // access levels in a menu above the chip.
-func (a *app) accessChip(c *ui.Context) {
+func (a *app) accessChip(c *ui.Context, showLabel bool) {
 	mode := "fullAccess"
 	if a.detail != nil {
 		switch a.detail.RuntimeMode {
@@ -829,7 +938,7 @@ func (a *app) accessChip(c *ui.Context) {
 		}
 	}
 	label, iconName := accessLabel(mode)
-	chip := ui.ButtonBase(c).Label(label).Tooltip(label+tr(" — ")+accessDescription(mode)).Height(composerChipHeight).
+	chip := ui.ButtonBase(c).Label(label).Description(tr(accessDescription(mode))).Height(composerChipHeight).
 		Padding(0, composerChipInset).Radius(composerChipRadius).
 		Gap(composerChipGap).AlignItems(ui.Center).Disabled(a.detail == nil)
 	if a.accessMenuOpen {
@@ -843,8 +952,10 @@ func (a *app) accessChip(c *ui.Context) {
 	}
 	chip.Children(func() {
 		icon(c, iconName, composerChipIcon, palette.textTertiary)
-		ui.Text(c, label).FontSize(uiPx(composerChipText)).FixedLineHeight(uiPx(16)).
-			TextColor(palette.textSecondary)
+		if showLabel {
+			ui.Text(c, label).FontSize(uiPx(composerChipText)).FixedLineHeight(uiPx(16)).
+				TextColor(palette.textSecondary)
+		}
 	})
 	if chip.Clicked() {
 		a.accessMenuOpen = !a.accessMenuOpen
@@ -922,21 +1033,21 @@ func (a *app) setRuntimeMode(mode string) {
 }
 
 // interactionChip is the build/plan toggle: no caret, accent while planning.
-func (a *app) interactionChip(c *ui.Context) {
+func (a *app) interactionChip(c *ui.Context, showLabel bool) {
 	plan := a.detail != nil && a.detail.InteractionMode == "plan"
 	iconName := "wrench"
 	iconColor := palette.textTertiary
 	textColor := palette.textSecondary
 	label := tr("Build")
-	tip := tr("Build: run commands and edits")
+	description := tr("Build: run commands and edits")
 	if plan {
 		label = tr("Plan")
 		iconName = "list"
 		iconColor = palette.accent
 		textColor = palette.accent
-		tip = tr("Plan: propose first, apply later")
+		description = tr("Plan: propose first, apply later")
 	}
-	chip := ui.ButtonBase(c).Label(label).Tooltip(tip).Height(composerChipHeight).
+	chip := ui.ButtonBase(c).Label(label).Description(description).Height(composerChipHeight).
 		Padding(0, composerChipInset).Radius(composerChipRadius).
 		Gap(composerChipGap).AlignItems(ui.Center).Disabled(a.detail == nil)
 	if chip.Hovered() {
@@ -947,8 +1058,10 @@ func (a *app) interactionChip(c *ui.Context) {
 	}
 	chip.Children(func() {
 		icon(c, iconName, composerChipIcon, iconColor)
-		ui.Text(c, label).FontSize(uiPx(composerChipText)).FixedLineHeight(uiPx(16)).
-			TextColor(textColor)
+		if showLabel {
+			ui.Text(c, label).FontSize(uiPx(composerChipText)).FixedLineHeight(uiPx(16)).
+				TextColor(textColor)
+		}
 	})
 	if chip.Clicked() && a.detail != nil {
 		if plan {

@@ -80,6 +80,7 @@ func builtinSlashCommands() []slashCommand {
 		{name: "review", description: "Review pending changes, ordered by severity", scope: "builtin"},
 		{name: "commit", description: "Stage and commit with a clear message", scope: "builtin"},
 		{name: "compact", description: "Free up context", scope: "builtin"},
+		{name: "goal", description: "Set or view a goal", scope: "builtin"},
 		{name: "reload-server", description: "Hot-reload the native OpenCode server", scope: "builtin"},
 	}
 }
@@ -301,6 +302,9 @@ func (a *app) refreshAutocompleteSources() {
 							skill:    cmd.Scope == "skill" || cmd.Scope == "Skill",
 							template: cmd.Template,
 						})
+					}
+					if !seen["goal"] {
+						commands = append(commands, slashCommand{name: "goal", description: "Set or view a goal", scope: "builtin"})
 					}
 				}
 			}

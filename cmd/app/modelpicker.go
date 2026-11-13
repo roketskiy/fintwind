@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"fintwind-go/internal/daemon"
+	"fintwind-go/internal/model"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -142,6 +143,9 @@ func (a *app) currentPickerTab() string {
 	if model := a.currentProviderModel(); model != nil {
 		return "provider:" + pickerProviderLabel(model.SubProvider)
 	}
+	if a.modelProbe != nil && len(a.modelProbe.Models) > 0 {
+		return "provider:" + pickerProviderLabel(a.modelProbe.Models[0].SubProvider)
+	}
 	return "provider:OpenCode"
 }
 
@@ -220,32 +224,11 @@ func (a *app) revealPickerSelected() {
 	if a.detail != nil && a.detail.Model != nil {
 		current = *a.detail.Model
 	}
-	searching := strings.TrimSpace(a.modelQuery) != ""
 	selected := 0
-	if !searching {
-		// Row 0 is the Default row when not searching.
-		selected = len(models) + 1
-		for i, candidate := range models {
-			if candidate.ID == current {
-				selected = i + 1
-				break
-			}
-		}
-		if current == "" {
-			selected = 0
-		}
-		if total := len(models) + 1; selected >= total {
-			selected = 0
-		}
-	} else {
-		for i, candidate := range models {
-			if candidate.ID == current {
-				selected = i
-				break
-			}
-		}
-		if selected >= len(models) {
-			selected = 0
+	for i, candidate := range models {
+		if candidate.ID == current {
+			selected = i
+			break
 		}
 	}
 	a.modelHighlight = selected
@@ -406,14 +389,25 @@ func (a *app) requestModelProbe() {
 			}
 			a.modelProbe = probe
 			a.modelProbeLoad = false
+			if a.modelMenuOpen && a.modelPickerTab != "favorites" {
+				found := false
+				for _, tab := range a.visiblePickerTabs() {
+					if a.tabKey(tab) == a.modelPickerTab {
+						found = true
+						break
+					}
+				}
+				if !found {
+					a.modelPickerTab = a.currentPickerTab()
+					a.revealPickerSelected()
+				}
+			}
 			a.reconcileContextWindow()
 		})
 	}()
 }
 
-// chooseModel mirrors App::choose_model in src/app/sessions.rs: the default
-// row clears the model to nil, any other row writes its id, then the choice
-// is applied to the live runtime and persisted. Like
+// chooseModel applies the selected model to the live runtime and persists it. Like
 // remember_selected_model_traits, switching models drops the old model's
 // explicit traits so the chips follow the new model's defaults.
 func (a *app) chooseModel(id string) {
@@ -421,15 +415,7 @@ func (a *app) chooseModel(id string) {
 		a.modelMenuOpen = false
 		return
 	}
-	if id == modelPickerDefaultID {
-		if a.detail.Model != nil {
-			a.rememberContextWindow()
-			a.detail.Model = nil
-			a.detail.ContextWindow = nil
-			a.syncSummary(a.detail)
-			a.applySessionOptions()
-		}
-	} else if a.detail.Model == nil || *a.detail.Model != id {
+	if id != "" && (a.detail.Model == nil || *a.detail.Model != id) {
 		a.rememberContextWindow()
 		model := id
 		a.detail.Model = &model
@@ -466,12 +452,7 @@ func (a *app) modelPickerMenu(c *ui.Context) {
 	if a.detail != nil && a.detail.Model != nil {
 		current = *a.detail.Model
 	}
-	// Row order mirrors rendering: Default first when not searching, then
-	// the filtered catalog. The highlight is an index into that order.
 	total := len(models)
-	if !searching {
-		total++
-	}
 	if a.modelHighlight < 0 {
 		a.modelHighlight = 0
 	}
@@ -540,17 +521,6 @@ func (a *app) modelPickerMenu(c *ui.Context) {
 								if total == 0 {
 									return true
 								}
-								if !searching {
-									if a.modelHighlight == 0 {
-										a.chooseModel(modelPickerDefaultID)
-										return true
-									}
-									if a.modelHighlight-1 < len(models) {
-										a.chooseModel(models[a.modelHighlight-1].ID)
-										return true
-									}
-									return true
-								}
 								if a.modelHighlight < len(models) {
 									a.chooseModel(models[a.modelHighlight].ID)
 								}
@@ -567,18 +537,11 @@ func (a *app) modelPickerMenu(c *ui.Context) {
 			})
 			ui.Scroll(c).FillWidth().Grow(1).TrackScroll(&a.modelListScroll).Children(func() {
 				ui.Column(c).FillWidth().Padding(9, 9, 9, 9).Children(func() {
-					index := 0
-					if !searching {
-						a.modelPickerRow(c, modelPickerDefaultID, "Default",
-							"OpenCode default model", current == "", index == a.modelHighlight, false)
-						index++
-					}
-					for _, candidate := range models {
+					for index, candidate := range models {
 						candidate := candidate
 						highlighted := index == a.modelHighlight
 						a.modelPickerRow(c, candidate.ID, candidate.Name,
 							candidate.ID, candidate.ID == current, highlighted, true)
-						index++
 					}
 					if len(models) == 0 {
 						a.modelPickerEmpty(c, searching)
@@ -624,10 +587,7 @@ func (a *app) modelPickerSidebar(c *ui.Context, tabs []pickerTab, favoritesSelec
 					tab := tab
 					key := a.tabKey(tab)
 					selected := key == a.modelPickerTab && !searching
-					mark := companyIconFor(tab.label)
-					if mark == "" {
-						mark = "bot"
-					}
+					mark := providerMark(tab.label)
 					btn := ui.ButtonBase(c).Label(tab.label).Size(40, 40).Radius(8).Center()
 					iconColor := alpha(palette.text, 0.82)
 					if btn.Pressed() {
@@ -691,7 +651,7 @@ func (a *app) modelPickerRow(c *ui.Context, id, name, secondary string, selected
 		row.Background(palette.overlay)
 	}
 	row.Children(func() {
-		choose := ui.ButtonBase(c).Label(name).Tooltip(secondary).Grow(1).MinWidth(0).
+		choose := ui.ButtonBase(c).Label(name).Description(secondary).Grow(1).MinWidth(0).
 			Height(modelPickerRowH).Radius(modelPickerRowR).Gap(10).
 			Justify(ui.Start).AlignItems(ui.Center)
 		if choose.Pressed() {
@@ -850,6 +810,14 @@ func modelOptionState(explicit, def *string, options []providerModelOption) (str
 	return id, id, true
 }
 
+func reasoningOptionLabel(session *model.Session, model *providerModel) string {
+	if session.ReasoningEffort == nil && model.DefaultReasoningEffort == nil {
+		return tr("Thinking")
+	}
+	_, label, _ := modelOptionState(session.ReasoningEffort, model.DefaultReasoningEffort, model.ReasoningEfforts)
+	return label
+}
+
 // modelOptionMenuOpen remembers which per-model chip menu is open. Package
 // level because main.go carries no field for them and the window is single.
 var modelOptionMenuOpen = map[string]*bool{}
@@ -868,7 +836,7 @@ func modelOptionMenu(id string) *bool {
 // same 28-high MenuChip geometry as the model chip. The effective value
 // (explicit, else model default) carries the check; the Default row is
 // checked only while the session leaves the value unset.
-func (a *app) modelOptionChip(c *ui.Context, id, label string, options []providerModelOption, clear bool, choose func(string)) {
+func (a *app) modelOptionChip(c *ui.Context, id, label string, options []providerModelOption, clear, showLabel bool, choose func(string)) {
 	chip := ui.ButtonBase(c).Label(label).Height(composerChipHeight).
 		Padding(0, composerChipInset).Radius(composerChipRadius).
 		Gap(composerChipGap).AlignItems(ui.Center).Disabled(a.detail == nil)
@@ -880,14 +848,23 @@ func (a *app) modelOptionChip(c *ui.Context, id, label string, options []provide
 		chip.Background(palette.overlayStrong)
 	}
 	chip.Children(func() {
-		ui.Text(c, label).FontSize(uiPx(composerChipText)).FixedLineHeight(uiPx(16)).
-			TextColor(palette.textSecondary).SingleLine().Ellipsis("...")
+		if showLabel {
+			ui.Text(c, label).FontSize(uiPx(composerChipText)).FixedLineHeight(uiPx(16)).
+				TextColor(palette.textSecondary).SingleLine().Ellipsis("...")
+		} else {
+			name := "zap"
+			if id == "service-tier" {
+				name = "settings"
+			}
+			icon(c, name, composerChipIcon, palette.textTertiary)
+		}
 	})
 	if chip.Clicked() {
+		wasOpen := *open
 		for _, key := range modelOptionMenuOpen {
 			*key = false
 		}
-		*open = !*open
+		*open = !wasOpen
 	}
 	ui.PopoverBase(c, chip, open, func(panel ui.Element) {
 		panel.Background(palette.raised).Border(1, palette.borderStrong).Radius(9).
@@ -942,7 +919,7 @@ func (a *app) modelOptionChip(c *ui.Context, id, label string, options []provide
 					if option.Description != nil && *option.Description != "" {
 						tip = option.Label + " — " + *option.Description
 					}
-					row := ui.ButtonBase(c).Label(option.Label).Tooltip(tip).FillWidth().Height(28).
+					row := ui.ButtonBase(c).Label(option.Label).Description(tip).FillWidth().Height(28).
 						Padding(0, 8).Radius(7).Gap(8).Justify(ui.Start).AlignItems(ui.Center)
 					if row.Hovered() {
 						row.Background(palette.overlay)
@@ -991,20 +968,17 @@ func (a *app) detailReasoningValue(id string) string {
 // reasoningEffortChip and serviceTierChip only render when the catalog lists
 // choices for the current model, matching the Rust composer's conditional
 // secondary chips.
-func (a *app) reasoningEffortChip(c *ui.Context) {
+func (a *app) reasoningEffortChip(c *ui.Context, showLabel bool) {
 	model := a.currentProviderModel()
 	if model == nil || len(model.ReasoningEfforts) == 0 {
 		return
 	}
-	_, label, ok := modelOptionState(a.detail.ReasoningEffort, model.DefaultReasoningEffort, model.ReasoningEfforts)
-	if !ok {
-		return
-	}
-	a.modelOptionChip(c, "reasoning-effort", label, model.ReasoningEfforts, true,
+	label := reasoningOptionLabel(a.detail, model)
+	a.modelOptionChip(c, "reasoning-effort", label, model.ReasoningEfforts, false, showLabel,
 		func(value string) { a.chooseReasoningEffort(value) })
 }
 
-func (a *app) serviceTierChip(c *ui.Context) {
+func (a *app) serviceTierChip(c *ui.Context, showLabel bool) {
 	model := a.currentProviderModel()
 	if model == nil || len(model.ServiceTiers) == 0 {
 		return
@@ -1013,7 +987,7 @@ func (a *app) serviceTierChip(c *ui.Context) {
 	if !ok {
 		return
 	}
-	a.modelOptionChip(c, "service-tier", label, model.ServiceTiers, true,
+	a.modelOptionChip(c, "service-tier", label, model.ServiceTiers, true, showLabel,
 		func(value string) { a.chooseServiceTier(value) })
 }
 

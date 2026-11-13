@@ -355,11 +355,26 @@ func (a *app) reasoningForPart(session *model.Session, part string) *model.Activ
 	if position, ok := state.reasoningParts[part]; ok && position.block < len(session.TranscriptBlocks) && position.item < len(session.TranscriptBlocks[position.block].Activities) {
 		return &session.TranscriptBlocks[position.block].Activities[position.item]
 	}
+	for blockIndex := range session.TranscriptBlocks {
+		activities := session.TranscriptBlocks[blockIndex].Activities
+		for itemIndex := range activities {
+			activity := &session.TranscriptBlocks[blockIndex].Activities[itemIndex]
+			if activity.Kind == model.KindReasoning && activity.SourceID != nil && *activity.SourceID == part {
+				state.reasoningParts[part] = activityPosition{block: blockIndex, item: itemIndex}
+				return activity
+			}
+		}
+	}
 	block := a.ensureActivityBlock(session)
 	activity := model.ActivityItem{ID: uuid.NewString(), SourceID: &part, Kind: model.KindReasoning, Title: "Reasoning",
 		Reasoning: &model.ReasoningBlock{StartedAtMs: uint64(time.Now().UnixMilli())}}
 	block.Activities = append(block.Activities, activity)
-	state.reasoningParts[part] = activityPosition{block: len(session.TranscriptBlocks) - 1, item: len(block.Activities) - 1}
+	for index := range session.TranscriptBlocks {
+		if &session.TranscriptBlocks[index] == block {
+			state.reasoningParts[part] = activityPosition{block: index, item: len(block.Activities) - 1}
+			break
+		}
+	}
 	return &block.Activities[len(block.Activities)-1]
 }
 
@@ -541,6 +556,7 @@ func payloadString(payload json.RawMessage, key string) string {
 		Text  string `json:"text"`
 		Delta string `json:"delta"`
 		Msg   string `json:"message"`
+		Part  string `json:"part"`
 	}
 	_ = json.Unmarshal(payload, &value)
 	switch key {
@@ -548,6 +564,8 @@ func payloadString(payload json.RawMessage, key string) string {
 		return value.Text
 	case "delta":
 		return value.Delta
+	case "part":
+		return value.Part
 	case "message":
 		if value.Msg != "" {
 			return value.Msg

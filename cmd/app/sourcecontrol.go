@@ -42,7 +42,7 @@ func (a *app) sourceControlView(c *ui.Context) {
 					a.secondaryResizeHandle(c, &a.scSecWidth)
 				})
 			}
-			a.scMain(c)
+			workspaceFrame(c, func() { a.scMain(c) })
 		})
 	})
 	// The themed wrapper is a plain column; without an explicit fill it
@@ -56,7 +56,13 @@ func (a *app) scSecondary(c *ui.Context) {
 	// Workspace block: project directory + branch row, like
 	// render_source_control_workspace_block.
 	ui.Column(c).FillWidth().Padding(12, 12, 10, 12).Gap(4).Children(func() {
-		ui.Text(c, projectBaseName(st.Root)).FontSize(uiPx(12.5)).TextColor(palette.textSecondary).SingleLine().Ellipsis("...").Tooltip(st.Root)
+		root := st.Root
+		if root == "" {
+			root = st.Scope.ProjectRoot
+		}
+		if root != "" {
+			ui.Text(c, projectBaseName(root)).FontSize(uiPx(12.5)).TextColor(palette.textSecondary).SingleLine().Ellipsis("...").Tooltip(root)
+		}
 		if st.Loading && st.Root == "" {
 			reviewNote(c, tr("Reading Git status…"), false)
 		}
@@ -74,8 +80,16 @@ func (a *app) scSecondary(c *ui.Context) {
 				reviewNote(c, tr("Git result unknown. Refresh status and inspect history before another write."), true)
 			}
 		}
-		a.scBranchRow(c)
+		if st.IsRepo {
+			a.scBranchRow(c)
+		} else if st.Scope.Client != nil {
+			refresh := action.ActionIcon(c, assets.SVG("rotate-cw"), action.ActionIconProps{Size: theme.Small, Title: tr("Refresh")})
+			refresh.Disabled(st.Loading).OnClick(func() { a.scRefreshSurface() })
+		}
 	})
+	if !st.IsRepo {
+		return
+	}
 	// VSCode-style commit box, always visible.
 	a.scCommitBox(c)
 	if st.Discard != nil {
@@ -271,9 +285,19 @@ func (a *app) scCommitBox(c *ui.Context) {
 	}
 	ui.Column(c).FillWidth().Padding(10, 12, 8, 12).Children(func() {
 		ui.Column(c).FillWidth().Radius(12).Border(1, palette.borderStrong).Background(palette.raised).Padding(10).Gap(8).Children(func() {
-			c.Key("sc-commit-message")
-			msg := field.TextArea(c, &st.CommitMessage, field.TextAreaProps{Placeholder: placeholder, MinRows: 2, MaxRows: 10, Variant: field.InputOutlined})
-			msg.Label(tr("Commit message")).ReadOnly(!writable)
+			tokens := theme.TokensOf(c)
+			messageBox := ui.Column(c).FillWidth().Radius(tokens.BorderRadius).Background(tokens.BgContainer).
+				Border(1, tokens.BorderSecondary)
+			messageBox.Children(func() {
+				c.Key("sc-commit-message")
+				msg := field.TextArea(c, &st.CommitMessage, field.TextAreaProps{Placeholder: placeholder, MinRows: 2, MaxRows: 10, Variant: field.InputBorderless})
+				msg.Label(tr("Commit message")).ReadOnly(!writable)
+				if msg.Focused() {
+					messageBox.BorderColor(palette.accent.Mix(tokens.BgContainer, 0.5))
+				} else if messageBox.Hovered() {
+					messageBox.BorderColor(tokens.Border)
+				}
+			})
 			c.OnShortcut(ui.Ctrl, ui.KeyEnter, func() { a.scAcceptInput() })
 			ui.Row(c).FillWidth().Gap(6).Children(func() {
 				primary := action.Button(c, "", action.ButtonProps{Variant: choice(primaryReady, action.Primary, action.Filled), Size: theme.Middle})
@@ -501,7 +525,7 @@ func (a *app) scListRowView(c *ui.Context, row scListRow) {
 				st.CollapsedGroups[row.Group] = !st.CollapsedGroups[row.Group]
 				st.buildListRows()
 			})
-			ui.Text(c, fmt.Sprintf(tr("%s (%d)"), scGroupLabel(row.Group), row.Count)).FontSize(uiPx(11)).TextColor(scGroupColor(row.Group))
+			ui.Text(c, fmt.Sprintf(tr("%s (%d)"), scGroupLabel(row.Group), row.Count)).FontSize(uiPx(11.5)).TextColor(scGroupColor(row.Group))
 			ui.Row(c).Grow(1).Children(func() {})
 			if writable {
 				if row.Group == "staged" {
@@ -548,9 +572,9 @@ func (a *app) scListRowView(c *ui.Context, row scListRow) {
 			} else {
 				icon(c, "chevron-right", 10, palette.textGhost)
 			}
-			ui.Text(c, tr("Ignored")).FontSize(uiPx(11)).TextColor(palette.textTertiary)
+			ui.Text(c, tr("Ignored")).FontSize(uiPx(11.5)).TextColor(palette.textTertiary)
 			if st.IgnoredLoading {
-				ui.Text(c, tr("Loading…")).FontSize(uiPx(11)).TextColor(palette.textTertiary)
+				ui.Text(c, tr("Loading…")).FontSize(uiPx(11.5)).TextColor(palette.textTertiary)
 			}
 		})
 		entry.OnClick(func() {
@@ -581,7 +605,7 @@ func (a *app) scListRowView(c *ui.Context, row scListRow) {
 // muted contrast the header's label has.
 func (a *app) scGroupAction(c *ui.Context, group, label string, unstage bool) {
 	c.Key("sc-group-action-" + group)
-	b := reviewMutedButton(c, label)
+	b := reviewMutedButton(c, label).FontSize(uiPx(11.5))
 	b.OnClick(func() {
 		st := &a.sourceControl
 		paths := make([]string, 0, len(st.Files))
@@ -622,17 +646,17 @@ func (a *app) scFileRow(c *ui.Context, file scFile, depth int) {
 			name = file.Path[index+1:]
 		}
 		ui.Text(c, name).FontSize(uiPx(11.5)).TextColor(palette.textSecondary).Grow(1).MinWidth(0).SingleLine().Ellipsis("...")
-		ui.Text(c, file.Letter).FontSize(uiPx(10.5)).TextColor(scLetterColor(file.Letter))
+		ui.Text(c, file.Letter).FontSize(uiPx(11.5)).TextColor(scLetterColor(file.Letter))
 		if st.writable() {
 			f := file
 			stageLabel := tr("Stage")
 			if f.Group == "staged" {
 				stageLabel = tr("Unstage")
 			}
-			stage := reviewMutedButton(c, stageLabel)
+			stage := reviewMutedButton(c, stageLabel).FontSize(uiPx(11.5))
 			stage.OnClick(func() { a.scStage(f, f.Group == "staged") })
 			if f.Group != "staged" {
-				discard := reviewMutedButton(c, tr("Discard…"))
+				discard := reviewMutedButton(c, tr("Discard…")).FontSize(uiPx(11.5))
 				discard.OnClick(func() { st.Discard = &f })
 			}
 		}
@@ -677,21 +701,31 @@ func (a *app) scDiscardDialog(c *ui.Context) {
 }
 
 func (a *app) scMain(c *ui.Context) {
-	main := ui.Column(c).Grow(1).MinWidth(0).FillHeight().Background(palette.surface).
-		BorderWidth(0, 0, 0, 1).BorderColor(palette.sidebarBorder).Radius(workspaceRadius, 0, 0, workspaceRadius).Clip()
-	main = workspaceShadow(main)
+	main := ui.Column(c).Grow(1).MinWidth(0).FillHeight().Background(palette.surface)
 	main.Children(func() {
-		a.scToolbar(c)
 		st := &a.sourceControl
+		if st.Scope.Client == nil {
+			reviewEmpty(c, tr("No local workspace selected"), false)
+			return
+		}
+		if st.Loading && (!st.Loaded || st.Error != "") {
+			reviewLoading(c, tr("Reading Git status…"))
+			return
+		}
 		if st.Error != "" {
 			reviewEmpty(c, st.Error, true)
 			return
 		}
+		if st.Loaded && !st.IsRepo {
+			reviewEmptyIcon(c, "git-branch", tr("Not a Git repository"))
+			return
+		}
+		a.scToolbar(c)
 		if file := st.selectedFile(); file != nil {
 			a.reviewReaderView(c, file.Path, &st.Reader, false)
 			return
 		}
-		reviewEmpty(c, tr("Select a file to review"), false)
+		reviewEmpty(c, tr("No uncommitted changes"), false)
 	})
 }
 

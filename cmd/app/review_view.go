@@ -9,6 +9,7 @@ import (
 	"github.com/egoist/mygo/ui/editor"
 	"github.com/lobehub/lobe-mygo/pkg/action"
 	"github.com/lobehub/lobe-mygo/pkg/display"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"github.com/lobehub/lobe-mygo/pkg/overlay"
 	"github.com/lobehub/lobe-mygo/pkg/theme"
 )
@@ -29,15 +30,13 @@ func (a *app) reviewView(c *ui.Context) {
 				a.secondaryResizeHandle(c, &a.scSecWidth)
 			})
 		}
-		a.reviewMain(c)
+		workspaceFrame(c, func() { a.reviewMain(c) })
 	})
 }
 
 func (a *app) reviewMain(c *ui.Context) {
 	st := &a.review
-	main := ui.Column(c).Grow(1).MinWidth(0).FillHeight().Background(palette.surface).
-		BorderWidth(0, 0, 0, 1).BorderColor(palette.sidebarBorder).Radius(workspaceRadius, 0, 0, workspaceRadius).Clip()
-	main = workspaceShadow(main)
+	main := ui.Column(c).Grow(1).MinWidth(0).FillHeight().Background(palette.surface)
 	main.Children(func() {
 		if st.Kind == reviewKindTurn {
 			a.reviewBanner(c)
@@ -47,8 +46,12 @@ func (a *app) reviewMain(c *ui.Context) {
 			reviewEmpty(c, tr("Review source changed"), false)
 			return
 		}
-		if st.Loading {
-			reviewEmpty(c, tr("Loading checkpoint…"), false)
+		if st.Loading && len(st.Files) == 0 {
+			label := tr("Loading diff…")
+			if st.Kind == reviewKindTurn {
+				label = tr("Loading checkpoint…")
+			}
+			reviewLoading(c, label)
 			return
 		}
 		if st.Error != "" {
@@ -57,6 +60,10 @@ func (a *app) reviewMain(c *ui.Context) {
 		}
 		if a.sourceControl.Discard != nil {
 			a.scDiscardDialog(c)
+		}
+		if st.Selected == "" {
+			reviewEmpty(c, tr("No changes"), false)
+			return
 		}
 		a.reviewReaderView(c, st.Selected, &st.Reader, true)
 	})
@@ -81,7 +88,7 @@ func (a *app) reviewSecondary(c *ui.Context) {
 		reviewNote(c, tr("The selected session or connection changed. Reopen the turn to review it."), true)
 		return
 	}
-	if st.Loading {
+	if st.Loading && len(st.Files) == 0 {
 		reviewNote(c, tr("Loading checkpoint…"), false)
 		return
 	}
@@ -110,7 +117,7 @@ func (a *app) reviewSecondary(c *ui.Context) {
 		} else {
 			icon(c, "chevron-down", 10, palette.textGhost)
 		}
-		ui.Text(c, trf("%d files", len(st.Rows))).FontSize(uiPx(11)).TextColor(palette.textTertiary)
+		ui.Text(c, trf("%d files", len(st.Rows))).FontSize(uiPx(11.5)).TextColor(palette.textTertiary)
 	})
 	// OnClick, not Clicked: like the source control group fold, hiding rows
 	// must wait until the frame ends or the list panics past the end.
@@ -139,8 +146,8 @@ func (a *app) reviewSecondary(c *ui.Context) {
 			ui.Row(c).Width(10).Shrink(0).Children(func() {})
 			brandIcon(c, fileTypeIcon(file.Path), 13)
 			ui.Text(c, file.Path).FontSize(uiPx(11.5)).TextColor(palette.textSecondary).Grow(1).MinWidth(0).SingleLine().Ellipsis("...").Tooltip(file.Path)
-			ui.Text(c, file.Letter).FontSize(uiPx(10)).TextColor(scLetterColor(file.Letter))
-			ui.Text(c, trf("+%d −%d", file.Additions, file.Deletions)).FontSize(uiPx(10)).TextColor(palette.textTertiary)
+			ui.Text(c, file.Letter).FontSize(uiPx(11.5)).TextColor(scLetterColor(file.Letter))
+			ui.Text(c, trf("+%d −%d", file.Additions, file.Deletions)).FontSize(uiPx(11.5)).TextColor(palette.textTertiary)
 			if writable {
 				a.reviewRowActions(c, file)
 			}
@@ -256,6 +263,12 @@ func (a *app) reviewFileNav(c *ui.Context, total, current int, step func(int)) {
 }
 
 func (a *app) reviewRefreshButton(c *ui.Context, history bool) {
+	if history && a.review.Loading {
+		ui.Row(c).Size(24, 24).Center().Children(func() {
+			feedback.Spin(c, feedback.SpinProps{Size: theme.Small}, nil).AlignSelf(ui.Center)
+		})
+		return
+	}
 	// No loading look: the 5s background refresh would blink the icon, and
 	// the data updating is feedback enough.
 	c.Key("review-diff-refresh")
@@ -487,7 +500,7 @@ func reviewLayoutToggle(c *ui.Context, layoutSel *int, reader *reviewReader) {
 func (a *app) reviewReaderView(c *ui.Context, path string, reader *reviewReader, history bool) {
 	a.reviewFileHeader(c, path, reader, history)
 	if reader.Loading && reader.Viewer == nil {
-		reviewEmpty(c, tr("Loading diff…"), false)
+		reviewLoading(c, tr("Loading diff…"))
 		return
 	}
 	if reader.Error != "" {
@@ -531,7 +544,18 @@ func reviewEmpty(c *ui.Context, text string, failure bool) {
 	if failure {
 		iconName = "alert"
 	}
-	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Padding(24).AlignItems(ui.Center).Children(func() {
+	reviewEmptyIcon(c, iconName, text)
+}
+
+func reviewEmptyIcon(c *ui.Context, iconName, text string) {
+	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Padding(24).Center().Children(func() {
 		display.Empty(c, display.EmptyProps{Icon: assets.SVG(iconName), Title: text})
+	})
+}
+
+func reviewLoading(c *ui.Context, text string) {
+	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Padding(24).Center().Gap(12).Children(func() {
+		feedback.Spin(c, feedback.SpinProps{Size: theme.Large}, nil).AlignSelf(ui.Center)
+		ui.Text(c, text).FontSize(uiPx(12)).TextColor(palette.textSecondary)
 	})
 }

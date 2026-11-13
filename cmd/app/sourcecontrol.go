@@ -48,7 +48,7 @@ func (a *app) sourceControlView(c *ui.Context) {
 	// The themed wrapper is a plain column; without an explicit fill it
 	// shrinks to its content and the whole page reflows whenever a label
 	// changes width.
-	themed.FillWidth().FillHeight().Grow(1).MinWidth(0)
+	themed.FillWidth().FillHeight().Grow(1).MinWidth(0).Background(palette.rail)
 }
 
 func (a *app) scSecondary(c *ui.Context) {

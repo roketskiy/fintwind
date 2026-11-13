@@ -26,6 +26,59 @@ func credentialRows(ctx context.Context, api API) ([]backendstore.Object, error)
 	return rows, err
 }
 
+func logoutProvider(ctx context.Context, api API, provider string) error {
+	if provider == "" {
+		return errors.New("provider ID required")
+	}
+	raw, err := api.RoundTrip(ctx, "GET", "/api/integration", nil)
+	if err != nil {
+		return err
+	}
+	value, err := data(raw)
+	if err != nil {
+		return err
+	}
+	var integrations []backendstore.Object
+	if err := json.Unmarshal(value, &integrations); err != nil || integrations == nil {
+		return errors.New("invalid integration list")
+	}
+	ids := map[string]bool{}
+	found := false
+	for _, integration := range integrations {
+		if integration.String("id") != provider {
+			continue
+		}
+		found = true
+		var connections []backendstore.Object
+		if err := json.Unmarshal(integration["connections"], &connections); err != nil && string(integration["connections"]) != "null" && len(integration["connections"]) > 0 {
+			return errors.New("invalid integration connections")
+		}
+		for _, connection := range connections {
+			if id := connection.String("id"); connection.String("type") == "credential" && id != "" {
+				ids[id] = true
+			}
+		}
+	}
+	if !found {
+		rows, err := credentialRows(ctx, api)
+		if err != nil {
+			return err
+		}
+		prefix := "fintwind-custom:" + provider + ":"
+		for _, row := range rows {
+			if id := row.String("id"); row.String("integrationID") == provider && strings.HasPrefix(id, prefix) {
+				ids[id] = true
+			}
+		}
+	}
+	for id := range ids {
+		if _, err := api.RoundTrip(ctx, "DELETE", "/api/credential/"+url.PathEscape(id), nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func storeCredential(ctx context.Context, api API, provider, key string) error {
 	if provider == "" || strings.TrimSpace(key) == "" {
 		return errors.New("provider and API key required")

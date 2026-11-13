@@ -75,6 +75,7 @@ type Server struct {
 	queryClosed      bool
 	queryWork        sync.WaitGroup
 	loadLogged       sync.Once
+	modelCatalog     modelCatalogCache
 	queryLifetime    context.Context
 	queryCancel      context.CancelFunc
 	scheduledCancel  context.CancelFunc
@@ -465,6 +466,9 @@ func (s *Server) dispatch(ctx context.Context, sessionID, runtimeID string, raw 
 	}
 	if command.String("type") == "probeProvider" {
 		return s.probeProvider(ctx, command)
+	}
+	if command.String("type") == "fetchModelsDevCatalog" {
+		return s.fetchModelsDevCatalog(ctx)
 	}
 	if response, handled, err := s.services.Handle(ctx, raw); handled {
 		if err != nil {

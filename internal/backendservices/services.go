@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
-	"strings"
 
 	"fintwind-go/internal/backendstore"
 	"fintwind-go/internal/model"
@@ -135,6 +134,10 @@ func (s *Service) dispatch(ctx context.Context, api API, c backendstore.Object) 
 		imageModels := []backendstore.Object{}
 		count := 0
 		for _, entry := range entries {
+			var enabled bool
+			if raw := entry["enabled"]; len(raw) > 0 && json.Unmarshal(raw, &enabled) == nil && !enabled {
+				continue
+			}
 			id := entry.String("id")
 			owner := entry.String("providerID")
 			if owner == "" {
@@ -160,7 +163,7 @@ func (s *Service) dispatch(ctx context.Context, api API, c backendstore.Object) 
 			if label == "" {
 				label = id
 			}
-			models = append(models, backendstore.Fields(map[string]any{"id": owner + "/" + id, "name": label, "sub_provider": owner, "reasoning_efforts": []any{}, "service_tiers": []any{}, "context_windows": []any{}}))
+			models = append(models, backendstore.Fields(map[string]any{"id": owner + "/" + id, "name": label, "sub_provider": owner, "reasoning_efforts": modelVariants(entry), "default_reasoning_effort": modelDefaultVariant(entry), "service_tiers": []any{}, "context_windows": []any{}}))
 		}
 		if kind == "probeBuiltinProvider" {
 			if count == 0 {
@@ -328,7 +331,12 @@ func (s *Service) dispatch(ctx context.Context, api API, c backendstore.Object) 
 	case "storeCustomProviderKey":
 		err := storeCredential(ctx, api, c.String("providerId"), c.String("key"))
 		return backendstore.Reply("ack", nil), err
-	case "resolveCustomProviderKey", "logoutProvider":
+	case "logoutProvider":
+		if err := logoutProvider(ctx, api, c.String("providerId")); err != nil {
+			return nil, err
+		}
+		return backendstore.Reply("ack", nil), nil
+	case "resolveCustomProviderKey":
 		raw, err := call("GET", "/api/credential", nil)
 		if err != nil {
 			return nil, err
@@ -346,19 +354,10 @@ func (s *Service) dispatch(ctx context.Context, api API, c backendstore.Object) 
 			if row.String("integrationID") != c.String("providerId") {
 				continue
 			}
-			if kind == "logoutProvider" {
-				if strings.HasPrefix(row.String("id"), "fintwind-custom:"+c.String("providerId")+":") {
-					if _, err := call("DELETE", "/api/credential/"+url.PathEscape(row.String("id")), nil); err != nil {
-						return nil, err
-					}
-				}
-			} else if row.Bool("active") {
+			if row.Bool("active") {
 				secret, _ := backendstore.Decode(row["value"])
 				key = secret.Nullable("key")
 			}
-		}
-		if kind == "logoutProvider" {
-			return backendstore.Reply("ack", nil), nil
 		}
 		return backendstore.Reply("json", backendstore.Fields(map[string]any{"value": key})), nil
 	case "fetchIntegrations":

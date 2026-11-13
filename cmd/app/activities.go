@@ -324,7 +324,7 @@ func (a *app) activityCard(c *ui.Context, merged mergedActivity, liveTurn bool) 
 	}
 	statsAdditions, statsDeletions, hasStats := activityFileChangeStats(&activity)
 
-	card := ui.Column(c).FillWidth().MinWidth(0).Clip().
+	card := ui.Column(c.Key("activity:"+activity.ID)).FillWidth().MinWidth(0).Clip().
 		BorderWidth(0, 0, 0, 3).BorderColor(rail).Background(palette.raised)
 	card.Children(func() {
 		row := ui.ButtonBase(c).Label(label).FillWidth().Height(32).Padding(0, 12).
@@ -373,7 +373,7 @@ func (a *app) activityCard(c *ui.Context, merged mergedActivity, liveTurn bool) 
 		}
 		if expanded {
 			if reasoning != nil && hasDetail {
-				ui.Column(c).FillWidth().MinWidth(0).MaxHeight(activitySectionMaxHeight).
+				ui.Scroll(c.Key("reasoning-content")).FillWidth().MinWidth(0).MaxHeight(activitySectionMaxHeight).
 					Clip().Padding(8, 12).Children(func() {
 					ui.Row(c).Absolute().Left(0).Right(0).Top(0).Height(1).
 						Background(palette.borderStrong)
@@ -384,7 +384,7 @@ func (a *app) activityCard(c *ui.Context, merged mergedActivity, liveTurn bool) 
 			} else {
 				sections := activityDisclosureSections(&activity)
 				if len(sections) > 0 || len(activity.ImageURLs) > 0 {
-					ui.Column(c).FillWidth().MinWidth(0).MaxHeight(activityDetailMaxHeight).
+					ui.Scroll(c.Key("tool-content")).FillWidth().MinWidth(0).MaxHeight(activityDetailMaxHeight).
 						Clip().Padding(8, 12).Gap(8).Children(func() {
 						ui.Row(c).Absolute().Left(0).Right(0).Top(0).Height(1).
 							Background(palette.borderStrong)
@@ -431,7 +431,7 @@ func (a *app) activityCard(c *ui.Context, merged mergedActivity, liveTurn bool) 
 
 // activityDiff renders an edit's unified diff inside its card.
 func (a *app) activityDiff(c *ui.Context, activity *model.ActivityItem) {
-	ui.Column(c).FillWidth().MinWidth(0).MaxHeight(activityDiffMaxHeight).Clip().
+	ui.Scroll(c.Key("diff-content")).FillWidth().MinWidth(0).MaxHeight(activityDiffMaxHeight).Clip().
 		Children(func() {
 			ui.Row(c).Absolute().Left(0).Right(0).Top(0).Height(1).
 				Background(palette.borderStrong)

@@ -15,6 +15,21 @@ import (
 
 func (a *actor) extendedEvent(kind string, payload backendstore.Object) (bool, error) {
 	switch kind {
+	case "session.renamed", "session.updated":
+		if a.snapshot == nil {
+			return true, nil
+		}
+		title := strings.TrimSpace(childMetadata(payload).String("title"))
+		if title == "" || title == a.snapshot.String("auto_title") {
+			return true, nil
+		}
+		a.snapshot.Set("auto_title", title)
+		a.snapshot.Set("updated_at", time.Now().Unix())
+		a.dirty = true
+		if err := a.flush(); err != nil {
+			return true, err
+		}
+		return true, a.emit("autoTitleUpdated", title)
 	case "session.tool.input.started", "session.tool.called", "session.tool.progress", "session.tool.success", "session.tool.error", "session.tool.failed":
 		id := payload.String("id")
 		if id == "" {

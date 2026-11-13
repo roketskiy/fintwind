@@ -221,7 +221,7 @@ func run(ctx context.Context, binary string) (err error) {
 	}
 	tid := uuid.NewString()
 	turn, record := newTurn(tid, "literal request", 1)
-	session := map[string]any{"id": sid, "project_id": pid, "title": "fixture", "provider": "openCode", "status": "working", "created_at": now, "updated_at": now, "detail_loaded": true,
+	session := map[string]any{"id": sid, "project_id": pid, "title": "New task", "provider": "openCode", "status": "working", "created_at": now, "updated_at": now, "detail_loaded": true,
 		"messages": []any{newUser(tid, "literal request")},
 		"turns":    []any{turn}, "transcript_blocks": []any{}}
 	if err := admit(session, record); err != nil {
@@ -237,7 +237,7 @@ func run(ctx context.Context, binary string) (err error) {
 		}
 	}
 	checks["dispatch-cas-no-repost"] = true
-	text, success, err := waitTurn(ctx, client)
+	text, success, err := waitTurn(ctx, client, "literal conversation")
 	if err != nil {
 		return err
 	}
@@ -245,6 +245,17 @@ func run(ctx context.Context, binary string) (err error) {
 		return errors.New("stream literal mismatch")
 	}
 	checks["stream-order-and-finish"] = true
+	titleRaw, err := client.Request(ctx, map[string]any{"type": "hydrateSession", "sessionId": sid})
+	if err != nil {
+		return err
+	}
+	var titleSaved struct {
+		Session model.Session `json:"session"`
+	}
+	if json.Unmarshal(titleRaw, &titleSaved) != nil || titleSaved.Session.DisplayTitle() != "literal conversation" {
+		return fmt.Errorf("provider title was not persisted: %s", titleRaw)
+	}
+	checks["native-title-event-and-persistence"] = true
 	state, err := hydrateState(ctx, client, sid)
 	if err != nil {
 		return err
@@ -318,6 +329,14 @@ func run(ctx context.Context, binary string) (err error) {
 		return errors.New("second round reasoning was not appended")
 	}
 	checks["multi-round-transcript-durable"] = true
+	titleRaw, err = client.Request(ctx, map[string]any{"type": "hydrateSession", "sessionId": sid})
+	if err != nil {
+		return err
+	}
+	if json.Unmarshal(titleRaw, &titleSaved) != nil || titleSaved.Session.DisplayTitle() != "fixture" || titleSaved.Session.AutoTitle == nil || *titleSaved.Session.AutoTitle != "literal conversation" {
+		return errors.New("provider title did not preserve the user's custom title")
+	}
+	checks["native-title-preserves-user-title"] = true
 	tid3 := uuid.NewString()
 	turn3, record3 := newTurn(tid3, "hold for cancel", 3)
 	session3 := map[string]any{"id": sid, "project_id": pid, "title": "fixture", "provider": "openCode", "status": "working", "created_at": now, "updated_at": now, "detail_loaded": true,
@@ -512,8 +531,9 @@ func hydrateState(ctx context.Context, client *daemon.Client, sid string) (hydra
 	return out, nil
 }
 
-func waitTurn(ctx context.Context, client *daemon.Client) (string, bool, error) {
+func waitTurn(ctx context.Context, client *daemon.Client, wantTitle ...string) (string, bool, error) {
 	text := ""
+	title := ""
 	for {
 		select {
 		case <-ctx.Done():
@@ -521,6 +541,11 @@ func waitTurn(ctx context.Context, client *daemon.Client) (string, bool, error) 
 		case event, ok := <-client.Events():
 			if !ok {
 				return "", false, errors.New("client stream closed")
+			}
+			if event.Kind == "autoTitleUpdated" {
+				if err := json.Unmarshal(event.Payload, &title); err != nil {
+					return "", false, err
+				}
 			}
 			if event.Kind == "textDelta" {
 				var delta struct {
@@ -532,6 +557,9 @@ func waitTurn(ctx context.Context, client *daemon.Client) (string, bool, error) 
 				text += delta.Delta
 			}
 			if event.Kind == "turnFinished" {
+				if len(wantTitle) > 0 && title != wantTitle[0] {
+					return "", false, fmt.Errorf("native title event mismatch: got %q, want %q", title, wantTitle[0])
+				}
 				var done struct {
 					Success bool `json:"success"`
 				}
@@ -718,6 +746,9 @@ func fixture() {
 			} else if !suspended {
 				go func() {
 					emit([]map[string]any{
+						{"type": "session.updated", "data": map[string]any{"info": map[string]any{"id": "ses_fixture", "title": "interim title"}}},
+						{"type": "session.renamed", "data": map[string]any{"sessionID": "ses_fixture", "title": "literal conversation"}},
+						{"type": "session.updated", "data": map[string]any{"sessionID": "ses_fixture", "status": "busy"}},
 						{"type": "session.reasoning.started", "data": map[string]any{"sessionID": "ses_fixture", "assistantMessageID": "answer", "ordinal": 0}},
 						{"type": "session.reasoning.delta", "data": map[string]any{"sessionID": "ses_fixture", "assistantMessageID": "answer", "ordinal": 0, "delta": "literal reasoning"}},
 						{"type": "session.reasoning.ended", "data": map[string]any{"sessionID": "ses_fixture", "assistantMessageID": "answer", "ordinal": 0, "text": "literal reasoning"}},

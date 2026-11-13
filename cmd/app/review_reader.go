@@ -134,6 +134,10 @@ func reviewReaderForPatch(patch editor.FilePatch, complete, truncated bool, cont
 		if oldText, newText, ok := patchFullTexts(patch); ok {
 			viewer.Old = editor.NewBuffer(oldText)
 			viewer.New = editor.NewBuffer(newText)
+			if language := editor.LanguageFor(reviewPatchPath(patch)); language != nil {
+				viewer.Old.SetLanguage(language)
+				viewer.New.SetLanguage(language)
+			}
 			viewer.ContextLines = 3
 			viewer.ExpansionLines = 100
 			reader.Full = true

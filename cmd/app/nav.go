@@ -16,7 +16,7 @@ const (
 	navRailTickHeight   = 2.0
 	navRailTickGap      = 10.0
 	navRailTurnHeight   = navRailTickHeight + navRailTickGap
-	navRailInactiveOpac = 0.45
+	navRailInactiveOpac = 0.75
 	// Height of the rail's top/bottom fade masks, from transcript_view.rs
 	// NAVIGATION_RAIL_FADE_HEIGHT.
 	navRailFadeHeight = 20.0
@@ -183,12 +183,12 @@ func (a *app) navigationRail(c *ui.Context) {
 						scale = 0.44
 					}
 				}
-				color := alpha(palette.textGhost, navRailInactiveOpac)
+				color := alpha(palette.textSecondary, navRailInactiveOpac)
 				if index == hovered || index == activeTurn {
 					color = palette.text
-					if index == hovered {
-						color = hex(0xFFFFFF)
-					}
+				}
+				if index == activeTurn && scale < 0.44 {
+					scale = 0.44
 				}
 				hit := ui.Row(c).Width(navRailWidth).Height(navRailTurnHeight).
 					AlignItems(ui.Center).Label(fmt.Sprintf(tr("Go to message %d"), index+1))
@@ -200,7 +200,7 @@ func (a *app) navigationRail(c *ui.Context) {
 					a.navHover = index
 				}
 				if hit.Clicked() {
-					a.messageList.ScrollTo(turn.Row, ui.Center)
+					a.messageList.ScrollTo(turn.Row, ui.Start)
 				}
 			}
 			// Top/bottom fade masks over the ticks, mirroring
@@ -215,8 +215,8 @@ func (a *app) navigationRail(c *ui.Context) {
 					LinearGradient(ui.LinearGradient{From: transparent, To: palette.surface, Angle: 180}).
 					PassThrough()
 			}
-			if hovered >= 0 {
-				a.navPreview(c, turns[hovered], hovered, railHeight)
+			if a.navHover >= 0 {
+				a.navPreview(c, turns[a.navHover], a.navHover, railHeight)
 			}
 		})
 	})
@@ -245,12 +245,8 @@ func (a *app) navPreview(c *ui.Context, turn navTurn, index int, railHeight floa
 		ui.Text(c, turn.Prompt).FontSize(uiPx(14)).FixedLineHeight(uiPx(20)).FontWeight(600).
 			TextColor(palette.text).SingleLine().Ellipsis("…")
 		if turn.Response != "" {
-			ui.Row(c).MaxHeight(60).Clip().Children(func() {
-				ui.Column(c).Children(func() {
-					ui.Text(c, turn.Response).FontSize(uiPx(13)).FixedLineHeight(uiPx(20)).
-						TextColor(palette.textTertiary)
-				})
-			})
+			ui.Text(c, turn.Response).FillWidth().FontSize(uiPx(13)).FixedLineHeight(uiPx(20)).
+				TextColor(palette.textSecondary).MaxLines(3).Ellipsis("…")
 		}
 	})
 }

@@ -460,6 +460,7 @@ func (a *app) closeSurface(index int) {
 	if len(a.surfaces) == 0 {
 		a.activeSurface = -1
 		a.selectedFile = ""
+		a.rightOpen = false
 		return
 	}
 	if wasActive && closedFile {

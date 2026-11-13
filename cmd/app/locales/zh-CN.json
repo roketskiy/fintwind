@@ -44,6 +44,8 @@
   "%d second": "%d 秒",
   "%d seconds": "%d 秒",
   "%d sessions": "%d 个会话",
+  "%d step": "已进行 %d 步",
+  "%d steps": "已进行 %d 步",
   "%d thought": "%d 次思考",
   "%d thoughts": "%d 次思考",
   "%d tool call": "%d 次工具调用",

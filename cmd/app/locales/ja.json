@@ -44,6 +44,8 @@
   "%d second": "%d秒",
   "%d seconds": "%d秒",
   "%d sessions": "%d 件のセッション",
+  "%d step": "%dステップを実行",
+  "%d steps": "%dステップを実行",
   "%d thought": "%d回の思考",
   "%d thoughts": "%d回の思考",
   "%d tool call": "%d回のツール呼び出し",

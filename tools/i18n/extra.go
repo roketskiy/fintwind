@@ -1,6 +1,8 @@
 package main
 
 var extraTranslations = [][3]string{
+	{"%d step", "已进行 %d 步", "%dステップを実行"},
+	{"%d steps", "已进行 %d 步", "%dステップを実行"},
 	{"Running %s", "正在进行 %s", "%s を実行中"},
 	{"Ran %s", "已完成 %s", "%s を実行済み"},
 	{"Thought", "思考", "思考"},

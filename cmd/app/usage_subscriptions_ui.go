@@ -42,22 +42,56 @@ func (a *app) usageSubscriptionsSection(c *ui.Context) {
 			})
 			return
 		}
-		ui.Row(c).FillWidth().Wrap().Gap(14).AlignItems(ui.Start).Children(func() {
-			for _, subscription := range s.Cards {
-				c.Key("usage-subscription-" + subscription.ID)
-				usageSubscriptionCard(c, subscription)
+		var subscriptions, balances []usageSubscription
+		for _, card := range s.Cards {
+			if card.Quota != nil && len(card.Quota.Windows) == 0 && len(card.Quota.Balances) > 0 {
+				balances = append(balances, card)
+			} else {
+				subscriptions = append(subscriptions, card)
 			}
+		}
+		ui.Column(c).FillWidth().Gap(14).Children(func() {
+			usageSubscriptionGrid(c, subscriptions)
+			usageSubscriptionGrid(c, balances)
 		})
 	})
 }
 
-func usageSubscriptionCard(c *ui.Context, subscription usageSubscription) {
+func usageSubscriptionGrid(c *ui.Context, cards []usageSubscription) {
+	if len(cards) == 0 {
+		return
+	}
+	width, _ := c.Size()
+	available := min(float32(1280), width-modeRailWidth-48)
+	columns := min(len(cards), max(1, int((available+14)/(370+14))))
+	rows := (len(cards) + columns - 1) / columns
+	tracks := columns
+	if columns == 3 {
+		tracks = 6
+	}
+	rowTracks := make([]ui.Track, rows)
+	for index := range rowTracks {
+		rowTracks[index] = ui.Fr(1)
+	}
+	ui.Grid(c).FillWidth().Columns(tracks).RowTracks(rowTracks...).Gap(14).Children(func() {
+		for index, card := range cards {
+			c.Key("usage-subscription-" + card.ID)
+			span := tracks / columns
+			if remaining := len(cards) % columns; remaining > 0 && index >= len(cards)-remaining {
+				span = tracks / remaining
+			}
+			usageSubscriptionCard(c, card).ColumnSpan(span)
+		}
+	})
+}
+
+func usageSubscriptionCard(c *ui.Context, subscription usageSubscription) ui.Element {
 	quota := subscription.Quota
 	meta := ""
 	if quota != nil {
 		meta = usageOptionalText(quota.Plan)
 	}
-	usagePanel(c, "gauge", subscription.Name, meta, func() {
+	return usagePanelBody(c, "gauge", subscription.Name, meta, true, func() {
 		if quota != nil {
 			identity := usageOptionalText(quota.Service)
 			if account := usageOptionalText(quota.Account); account != "" {
@@ -111,7 +145,7 @@ func usageSubscriptionCard(c *ui.Context, subscription usageSubscription) {
 			ui.Text(c, trf("Retry after %s", time.Unix(*quota.RetryAt, 0).Local().Format("Jan 2, 15:04"))).
 				FontSize(uiPx(10.5)).TextColor(palette.textTertiary)
 		}
-	}).Grow(1).Basis(370).MinWidth(0)
+	})
 }
 
 func usageQuotaWindowCard(c *ui.Context, window usageQuotaWindow) {

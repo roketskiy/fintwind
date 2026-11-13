@@ -8,6 +8,10 @@ import (
 )
 
 func usagePanel(c *ui.Context, iconName, title, meta string, content func()) ui.Element {
+	return usagePanelBody(c, iconName, title, meta, false, content)
+}
+
+func usagePanelBody(c *ui.Context, iconName, title, meta string, fill bool, content func()) ui.Element {
 	return ui.Column(c).FillWidth().MinWidth(0).Radius(12).Background(palette.overlay).Padding(4).Children(func() {
 		ui.Row(c).FillWidth().Height(30).Padding(0, 9).Gap(7).AlignItems(ui.Center).Children(func() {
 			icon(c, iconName, 12, palette.textTertiary)
@@ -18,8 +22,12 @@ func usagePanel(c *ui.Context, iconName, title, meta string, content func()) ui.
 					TextAlign(ui.End).SingleLine().Ellipsis("...")
 			}
 		})
-		ui.Column(c).FillWidth().MinWidth(0).Radius(9).Background(palette.raised).
-			Border(1, palette.cardBorder).Padding(16).Gap(14).Children(content)
+		body := ui.Column(c).FillWidth().MinWidth(0).Radius(9).Background(palette.raised).
+			Border(1, palette.cardBorder).Padding(16).Gap(14)
+		if fill {
+			body.Grow(1)
+		}
+		body.Children(content)
 	})
 }
 

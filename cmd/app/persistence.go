@@ -16,24 +16,20 @@ import (
 // (workspace, goal, usage, runtime cursor) survive the round trip; only the
 // keys the client owns are patched.
 
-// captureRawSession keeps the session object exactly as the daemon sent it.
-func (a *app) captureRawSession(payload json.RawMessage) {
+func decodeRawSession(payload json.RawMessage) map[string]any {
 	var holder map[string]json.RawMessage
 	if json.Unmarshal(payload, &holder) != nil {
-		a.detailRaw = nil
-		return
+		return nil
 	}
 	raw, ok := holder["session"]
 	if !ok {
-		a.detailRaw = nil
-		return
+		return nil
 	}
 	var session map[string]any
 	if json.Unmarshal(raw, &session) != nil {
-		a.detailRaw = nil
-		return
+		return nil
 	}
-	a.detailRaw = session
+	return session
 }
 
 // preserveLocalSessionFields keeps facts this client learned live (provider

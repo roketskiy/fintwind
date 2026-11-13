@@ -1,6 +1,8 @@
 package main
 
 var extraTranslations = [][3]string{
+	{"New task (%d)", "新建任务（%d）", "新しいタスク（%d）"},
+	{"What should we build in {project}?", "在{project}中构建什么？", "{project}で何を作りましょうか？"},
 	{"%d step", "已进行 %d 步", "%dステップを実行"},
 	{"%d steps", "已进行 %d 步", "%dステップを実行"},
 	{"Running %s", "正在进行 %s", "%s を実行中"},

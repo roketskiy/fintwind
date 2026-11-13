@@ -72,7 +72,7 @@ func (a *app) sessionTab(c *ui.Context, sessionID string) {
 	title := tr("New task")
 	status := tr("idle")
 	if session != nil {
-		title = session.DisplayTitle()
+		title = sidebarSessionTitle(session)
 		status = a.sessionStatus(sessionID)
 	}
 	attention := ""
@@ -345,7 +345,7 @@ func (a *app) closeTab(sessionID string) {
 		a.openSession(next)
 		return
 	}
-	a.generation++
+	a.advanceSessionGeneration()
 	a.switchNativeSession(a.selectedID, "")
 	a.resetSessionView()
 	a.selectedID = ""
@@ -361,7 +361,7 @@ func (a *app) newTab() {
 	a.rememberSession()
 	a.switchNativeSession(a.selectedID, "")
 	a.resetSessionView()
-	a.generation++
+	a.advanceSessionGeneration()
 	a.selectedID = ""
 	a.detail = nil
 	a.detailErr = ""

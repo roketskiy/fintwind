@@ -163,7 +163,7 @@ func (a *app) removeSessionLocal(id string) {
 		a.openSession(next)
 		return
 	}
-	a.generation++
+	a.advanceSessionGeneration()
 	a.selectedID = ""
 	a.detail = nil
 	a.detailErr = ""
@@ -256,7 +256,7 @@ func (a *app) removeProjectLocal(id string) {
 			a.openSession(next)
 			return
 		}
-		a.generation++
+		a.advanceSessionGeneration()
 		a.selectedID = ""
 		a.detail = nil
 		a.detailErr = ""

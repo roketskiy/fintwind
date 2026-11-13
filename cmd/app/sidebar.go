@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -349,6 +350,12 @@ func sidebarSessionTitle(session *model.Session) string {
 	title := session.DisplayTitle()
 	if title == "New task" {
 		return tr(title)
+	}
+	if session.Title == "New task" && session.AutoTitle != nil && *session.AutoTitle == title && strings.HasPrefix(title, "New task (") && strings.HasSuffix(title, ")") {
+		number := strings.TrimSuffix(strings.TrimPrefix(title, "New task ("), ")")
+		if n, err := strconv.Atoi(number); err == nil && n > 0 && strconv.Itoa(n) == number {
+			return fmt.Sprintf(tr("New task (%d)"), n)
+		}
 	}
 	return title
 }

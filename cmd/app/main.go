@@ -56,16 +56,17 @@ type app struct {
 	byID     map[string]*model.Session
 	rows     []sidebarRow
 
-	selectedID    string
-	openTabs      []string
-	lastProject   string
-	detail        *model.Session
-	generation    int
-	loading       bool
-	detailLoading bool
-	status        string
-	fatalErr      string
-	detailErr     string
+	selectedID        string
+	openTabs          []string
+	lastProject       string
+	detail            *model.Session
+	generation        int
+	sessionLoadCancel context.CancelFunc
+	loading           bool
+	detailLoading     bool
+	status            string
+	fatalErr          string
+	detailErr         string
 
 	sidebarOpen bool
 	rightOpen   bool
@@ -559,6 +560,14 @@ func (a *app) navigateHistory(delta int) {
 	a.loadSession(a.navHistory[next])
 }
 
+func (a *app) advanceSessionGeneration() {
+	if a.sessionLoadCancel != nil {
+		a.sessionLoadCancel()
+		a.sessionLoadCancel = nil
+	}
+	a.generation++
+}
+
 func (a *app) loadSession(id string) {
 	if id == "" {
 		return
@@ -568,7 +577,7 @@ func (a *app) loadSession(id string) {
 	}
 	a.rememberSession()
 	a.switchNativeSession(a.selectedID, id)
-	a.generation++
+	a.advanceSessionGeneration()
 	generation := a.generation
 	a.selectedID = id
 	delete(a.tabUnread, id)
@@ -620,8 +629,9 @@ func (a *app) loadSession(id string) {
 		}
 	}
 	binary := a.settingsStr("opencode_binary_path", "opencode")
+	ctx, cancel := context.WithTimeout(a.lifetime, 90*time.Second)
+	a.sessionLoadCancel = cancel
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
 		payload, err := client.Request(ctx, map[string]any{
 			"type":          "hydrateSession",
@@ -677,39 +687,35 @@ func (a *app) loadSession(id string) {
 			}
 			session.Messages, session.TranscriptBlocks, session.Turns = native.Transcript.Messages, native.Transcript.Blocks, native.Transcript.Turns
 		}
+		rawSession := decodeRawSession(payload)
+		var usageSession, usageDirectory string
 		if session := detail.Session; session != nil && session.NativeSessionID != nil && *session.NativeSessionID != "" && (session.ContextUsage == nil || !session.ContextUsage.Measured) {
-			directory := projectPath
+			usageSession = *session.NativeSessionID
+			usageDirectory = projectPath
 			if session.Workspace.Kind == "worktree" && session.Workspace.Path != "" {
-				directory = session.Workspace.Path
-			}
-			if directory != "" {
-				if data, err := client.Request(ctx, map[string]any{"type": "fetchNativeUsage", "binary": binary, "directory": directory, "sessionId": *session.NativeSessionID}); err == nil {
-					var result struct {
-						Usage *model.ContextUsage `json:"usage"`
-					}
-					if json.Unmarshal(data, &result) == nil && result.Usage != nil {
-						if old := session.ContextUsage; old != nil {
-							result.Usage.Window, result.Usage.Composition = old.Window, old.Composition
-							result.Usage.FirstTokenMs, result.Usage.FirstTokenTurns = old.FirstTokenMs, old.FirstTokenTurns
-						}
-						session.ContextUsage = result.Usage
-					}
-				}
+				usageDirectory = session.Workspace.Path
 			}
 		}
-		a.post(func() {
+		var usageCursor *model.RuntimeEventCursor
+		if err := a.onUI(func() error {
 			if generation != a.generation {
-				return
+				return context.Canceled
 			}
+			defer func() {
+				if a.detail != nil && a.detail.RuntimeEventCursor != nil {
+					cursor := *a.detail.RuntimeEventCursor
+					usageCursor = &cursor
+				}
+			}()
 			a.detailLoading = false
 			if a.restoreSession(id) {
 				a.ensureContextSources()
 				a.rebuildTranscript()
 				a.refreshTree()
 				a.refreshBranch()
-				return
+				return nil
 			}
-			a.captureRawSession(payload)
+			a.detailRaw = rawSession
 			a.preserveLocalSessionFields(detail.Session)
 			if detail.Session != nil {
 				a.detail = detail.Session
@@ -731,6 +737,36 @@ func (a *app) loadSession(id string) {
 			a.ensureContextSources()
 			a.messageList = ui.ListState{FollowEnd: true}
 			a.rememberSession()
+			return nil
+		}); err != nil || usageSession == "" || usageDirectory == "" {
+			return
+		}
+		data, err := client.Request(ctx, map[string]any{"type": "fetchNativeUsage", "binary": binary, "directory": usageDirectory, "sessionId": usageSession})
+		if err != nil {
+			return
+		}
+		var result struct {
+			Usage *model.ContextUsage `json:"usage"`
+		}
+		if json.Unmarshal(data, &result) != nil || result.Usage == nil {
+			return
+		}
+		a.post(func() {
+			if generation != a.generation || a.client != client || a.detail == nil || a.detail.ID != id || a.detail.Busy() || a.detail.NativeSessionID == nil || *a.detail.NativeSessionID != usageSession {
+				return
+			}
+			currentCursor := a.detail.RuntimeEventCursor
+			if (usageCursor == nil) != (currentCursor == nil) || usageCursor != nil && *usageCursor != *currentCursor {
+				return
+			}
+			if old := a.detail.ContextUsage; old != nil {
+				if old.Measured {
+					return
+				}
+				result.Usage.Window, result.Usage.Composition = old.Window, old.Composition
+				result.Usage.FirstTokenMs, result.Usage.FirstTokenTurns = old.FirstTokenMs, old.FirstTokenTurns
+			}
+			a.detail.ContextUsage = result.Usage
 		})
 	}()
 }

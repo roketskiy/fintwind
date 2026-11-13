@@ -44,7 +44,8 @@ func (a *app) sessionsView(c *ui.Context) {
 		}
 		messages := a.detail.Messages
 		if len(messages) == 0 {
-			a.emptyState(c, false)
+			a.newSessionView(c)
+			return
 		} else {
 			ui.Column(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
 				ui.List(c, &a.messageList, len(a.transcriptRows), func(index int) {
@@ -150,11 +151,11 @@ func (a *app) emptyState(c *ui.Context, centered bool) {
 				TextColor(palette.text)
 			return
 		}
-		ui.Row(c).AlignItems(ui.Baseline).Gap(4).Children(func() {
-			ui.Text(c, tr("What should we build in")).FontSize(uiPx(20)).FontWeight(500).
-				TextColor(palette.text)
+		before, after, _ := strings.Cut(tr("What should we build in {project}?"), "{project}")
+		ui.Row(c).AlignItems(ui.Baseline).Children(func() {
+			ui.Text(c, before).FontSize(uiPx(20)).FontWeight(500).TextColor(palette.text)
 			a.emptyProjectSelector(c, project)
-			ui.Text(c, tr("?")).FontSize(uiPx(20)).FontWeight(500).TextColor(palette.text)
+			ui.Text(c, after).FontSize(uiPx(20)).FontWeight(500).TextColor(palette.text)
 		})
 	})
 }

@@ -21,6 +21,12 @@ func icon(c *ui.Context, name string, size float32, color ui.Color) ui.Element {
 // ui::file_icon / model_mark_element's Company arm (untinted images).
 // Monochrome UI glyphs keep going through icon().
 func brandIcon(c *ui.Context, name string, size float32) ui.Element {
+	if name == "company-openai" || name == "company-openai-dark" {
+		name = "company-openai"
+		if activeAppearance.dark {
+			name = "company-openai-dark"
+		}
+	}
 	svg := assets.SVG(name)
 	if svg == nil {
 		return ui.Text(c, "").Size(size, size)

@@ -197,7 +197,7 @@ func (a *app) sidebarSession(c *ui.Context, rows []sidebarRow, index int, sessio
 						if renaming {
 							a.sessionRenameCell(c)
 						} else {
-							ui.Text(c, sidebarSessionTitle(session)).Grow(1).MinWidth(0).FontSize(uiPx(13.5)).
+							ui.Text(c, sidebarSessionTitle(session)).Grow(1).MinWidth(0).FontSize(uiPx(12.5)).FontWeight(400).
 								TextColor(palette.text).SingleLine().Ellipsis("…")
 						}
 						switch session.Status {
@@ -452,6 +452,8 @@ func companyIconFor(value string) string {
 		return "company-xiaomi"
 	case has("beam", "reflection"):
 		return "company-reflection-dark"
+	case has("opencode"):
+		return "provider-opencode"
 	}
 	return ""
 }

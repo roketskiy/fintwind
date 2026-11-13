@@ -187,8 +187,6 @@ func (a *app) addSurfaceButton(c *ui.Context) {
 	})
 }
 
-// surfaceChooser is render_right_panel_chooser: a centered title over two
-// rows of 112 px cards.
 func (a *app) surfaceChooser(c *ui.Context) {
 	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Center().Padding(0, 20, 32, 20).
 		Children(func() {
@@ -197,15 +195,15 @@ func (a *app) surfaceChooser(c *ui.Context) {
 				ui.Text(c, tr("Choose what to show in the right panel")).FontSize(uiPx(11)).
 					TextColor(palette.textTertiary).Margin(5, 0, 0, 0)
 				ui.Row(c).FillWidth().Gap(8).Margin(18, 0, 0, 0).Children(func() {
-					a.surfaceCard(c, rightPanelTerminal, "Start a shell in this workspace")
-					a.surfaceCard(c, rightPanelFiles, "Browse and read workspace files")
+					a.surfaceCard(c, rightPanelTerminal)
+					a.surfaceCard(c, rightPanelFiles)
 				})
 			})
 		})
 }
 
-func (a *app) surfaceCard(c *ui.Context, kind, description string) {
-	card := ui.ButtonBase(c).Label(surfaceLabel(kind)).Height(112).Grow(1).
+func (a *app) surfaceCard(c *ui.Context, kind string) {
+	card := ui.ButtonBase(c).Label(surfaceLabel(kind)).Height(84).Grow(1).
 		MinWidth(0).Padding(14).Radius(8).Border(1, palette.borderStrong).
 		Background(palette.composer).Justify(ui.Start).AlignItems(ui.Stretch)
 	if card.Pressed() {
@@ -219,9 +217,6 @@ func (a *app) surfaceCard(c *ui.Context, kind, description string) {
 			icon(c, surfaceIcon(kind), 18, palette.textSecondary)
 			ui.Text(c, surfaceLabel(kind)).FontSize(uiPx(12.5)).FontWeight(500).
 				TextColor(palette.text).Margin(12, 0, 0, 0)
-			ui.Text(c, description).FontSize(uiPx(10.5)).FixedLineHeight(uiPx(15)).
-				TextColor(palette.textTertiary).Wrap().MaxHeight(30).Clip().
-				Margin(4, 0, 0, 0)
 		})
 	})
 	if card.Clicked() {

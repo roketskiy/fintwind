@@ -242,50 +242,45 @@ func (a *app) attachButton(c *ui.Context) {
 	}
 }
 
-// pendingAttachmentChips is the staged-attachment row between the input and
-// the control row: one 28-high, 7-radius chip per file (12 icon, 12 text with
-// ellipsis, hover overlay, x to remove). It renders nothing when empty so no
-// space is taken, matching the source's conditional row.
 func (a *app) pendingAttachmentChips(c *ui.Context) {
-	if len(a.pendingAttachments) == 0 {
-		return
-	}
-	ui.Row(c).FillWidth().Padding(2, 14, 0, 14).Wrap().Gap(6).Children(func() {
-		for index := range a.pendingAttachments {
-			attachment := a.pendingAttachments[index]
-			index := index
-			chip := ui.Row(c).Height(28).Padding(0, 4, 0, 8).Radius(7).Gap(6).
-				AlignItems(ui.Center).Border(1, palette.border).Tooltip(attachment.Path)
-			if chip.Hovered() {
-				chip.Background(palette.overlay)
-			}
-			chip.Children(func() {
-				switch {
-				case attachment.IsDir:
-					icon(c, "folder", 12, palette.textSecondary)
-				case attachment.IsImage:
-					icon(c, "modality-image", 12, palette.textSecondary)
-				default:
-					brandIcon(c, fileTypeIcon(attachment.Name), 12)
-				}
-				ui.Row(c).MinWidth(0).MaxWidth(180).Children(func() {
-					ui.Text(c, attachment.Name).FontSize(uiPx(12)).FixedLineHeight(uiPx(16)).
-						TextColor(palette.textSecondary).SingleLine().Ellipsis("...")
-				})
-				remove := ui.ButtonBase(c).Label(tr("Remove attachment")).
-					Size(20, 20).Radius(5).Center()
-				if remove.Hovered() {
-					remove.Background(palette.overlayStrong)
-				}
-				remove.Children(func() {
-					icon(c, "x", 11, palette.textTertiary)
-				})
-				if remove.Clicked() {
-					a.removePendingAttachment(index)
-				}
-			})
+	removeIndex := -1
+	for index := range a.pendingAttachments {
+		attachment := a.pendingAttachments[index]
+		index := index
+		chip := ui.Row(c).Height(28).Padding(0, 4, 0, 8).Radius(7).Gap(6).
+			AlignItems(ui.Center).Border(1, palette.border).Tooltip(attachment.Path)
+		if chip.Hovered() {
+			chip.Background(palette.overlay)
 		}
-	})
+		chip.Children(func() {
+			switch {
+			case attachment.IsDir:
+				icon(c, "folder", 12, palette.textSecondary)
+			case attachment.IsImage:
+				icon(c, "modality-image", 12, palette.textSecondary)
+			default:
+				brandIcon(c, fileTypeIcon(attachment.Name), 12)
+			}
+			ui.Row(c).MinWidth(0).MaxWidth(180).Children(func() {
+				ui.Text(c, attachment.Name).FontSize(uiPx(12)).FixedLineHeight(uiPx(16)).
+					TextColor(palette.textSecondary).SingleLine().Ellipsis("...")
+			})
+			remove := ui.ButtonBase(c).Label(tr("Remove attachment")).
+				Size(20, 20).Radius(5).Center()
+			if remove.Hovered() {
+				remove.Background(palette.overlayStrong)
+			}
+			remove.Children(func() {
+				icon(c, "x", 11, palette.textTertiary)
+			})
+			if remove.Clicked() {
+				removeIndex = index
+			}
+		})
+	}
+	if removeIndex >= 0 {
+		a.removePendingAttachment(removeIndex)
+	}
 }
 
 // composerUploading reports in-flight attachment imports for the open

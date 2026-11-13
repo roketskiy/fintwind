@@ -142,44 +142,40 @@ func referencePreview(text string) string {
 	return ""
 }
 
-// pendingReferenceChips is the staged-quote row between the input and the
-// control row, mirroring pendingAttachmentChips with per-kind icons: the
-// selection arrow for code, the message glyph for transcript quotes.
 func (a *app) pendingReferenceChips(c *ui.Context) {
-	if len(a.pendingReferences) == 0 {
-		return
-	}
-	ui.Row(c).FillWidth().Padding(2, 14, 0, 14).Wrap().Gap(6).Children(func() {
-		for index := range a.pendingReferences {
-			ref := a.pendingReferences[index]
-			index := index
-			chip := ui.Row(c).Height(28).Padding(0, 4, 0, 8).Radius(7).Gap(6).
-				AlignItems(ui.Center).Border(1, palette.border).Tooltip(ref.label)
-			if chip.Hovered() {
-				chip.Background(palette.overlay)
-			}
-			chip.Children(func() {
-				quoteIcon := "file-bottom-left-arrow"
-				if ref.kind == referenceMessage {
-					quoteIcon = "message-square-text"
-				}
-				icon(c, quoteIcon, 12, palette.textSecondary)
-				ui.Row(c).MinWidth(0).MaxWidth(180).Children(func() {
-					ui.Text(c, ref.label).FontSize(uiPx(12)).FixedLineHeight(uiPx(16)).
-						TextColor(palette.textSecondary).SingleLine().Ellipsis("...")
-				})
-				remove := ui.ButtonBase(c).Label(tr("Remove reference")).
-					Size(20, 20).Radius(5).Center()
-				if remove.Hovered() {
-					remove.Background(palette.overlayStrong)
-				}
-				remove.Children(func() {
-					icon(c, "x", 11, palette.textTertiary)
-				})
-				if remove.Clicked() {
-					a.removePendingReference(index)
-				}
-			})
+	removeIndex := -1
+	for index := range a.pendingReferences {
+		ref := a.pendingReferences[index]
+		index := index
+		chip := ui.Row(c).Height(28).Padding(0, 4, 0, 8).Radius(7).Gap(6).
+			AlignItems(ui.Center).Border(1, palette.border).Tooltip(ref.label)
+		if chip.Hovered() {
+			chip.Background(palette.overlay)
 		}
-	})
+		chip.Children(func() {
+			quoteIcon := "file-bottom-left-arrow"
+			if ref.kind == referenceMessage {
+				quoteIcon = "message-square-text"
+			}
+			icon(c, quoteIcon, 12, palette.textSecondary)
+			ui.Row(c).MinWidth(0).MaxWidth(180).Children(func() {
+				ui.Text(c, ref.label).FontSize(uiPx(12)).FixedLineHeight(uiPx(16)).
+					TextColor(palette.textSecondary).SingleLine().Ellipsis("...")
+			})
+			remove := ui.ButtonBase(c).Label(tr("Remove reference")).
+				Size(20, 20).Radius(5).Center()
+			if remove.Hovered() {
+				remove.Background(palette.overlayStrong)
+			}
+			remove.Children(func() {
+				icon(c, "x", 11, palette.textTertiary)
+			})
+			if remove.Clicked() {
+				removeIndex = index
+			}
+		})
+	}
+	if removeIndex >= 0 {
+		a.removePendingReference(removeIndex)
+	}
 }

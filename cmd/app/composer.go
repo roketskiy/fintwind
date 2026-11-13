@@ -36,9 +36,12 @@ func (a *app) composer(c *ui.Context) {
 			PaddingY(10)
 		card = cardShadow(card)
 		card.Children(func() {
-			// Quotes stage above the input like the source's reference
-			// chips; file attachments keep their row below it.
-			a.pendingReferenceChips(c)
+			if len(a.pendingReferences) > 0 || len(a.pendingAttachments) > 0 {
+				ui.Row(c).FillWidth().Padding(2, 14, 6, 14).Wrap().Gap(6).Children(func() {
+					a.pendingReferenceChips(c)
+					a.pendingAttachmentChips(c)
+				})
+			}
 			ui.Row(c).FillWidth().Padding(2, 14, 0, 14).Children(func() {
 				// Stable identity before construction: the draft keeps
 				// focus and text across rebuilds. IME composing keys never
@@ -156,7 +159,6 @@ func (a *app) composer(c *ui.Context) {
 					return true
 				})
 			})
-			a.pendingAttachmentChips(c)
 			a.composerUploadNotice(c)
 			ui.Row(c).FillWidth().Padding(8, 10, 0, 10).Gap(composerRowGap).Wrap().
 				AlignItems(ui.Center).Children(func() {

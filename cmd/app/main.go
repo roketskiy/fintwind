@@ -101,6 +101,7 @@ type app struct {
 	usage          usageState
 	review         reviewState
 	sourceControl  sourceControlState
+	remote         remoteState
 	help           helpState
 	optionsSync    map[string]*sessionOptionsSync
 	sessionActions sessionActionState

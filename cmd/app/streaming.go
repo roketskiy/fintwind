@@ -851,9 +851,15 @@ func (a *app) cancelTurn() {
 	if a.detail == nil || a.client == nil {
 		return
 	}
-	sessionID := a.detail.ID
+	a.cancelTurnForSession(a.detail)
+}
+
+func (a *app) cancelTurnForSession(session *model.Session) {
+	if session == nil || a.client == nil {
+		return
+	}
+	sessionID := session.ID
 	runtimeID := a.runtimes[sessionID]
-	session := a.detail
 	turnID := session.ActiveTurnID()
 	state := a.stateForSession(session)
 	state.stopped, state.preparing = true, false
@@ -866,11 +872,15 @@ func (a *app) cancelTurn() {
 	for index := range session.Messages {
 		session.Messages[index].Streaming = false
 	}
-	a.pendingPermission, a.pendingUserInput = nil, nil
+	if a.detail != nil && a.detail.ID == sessionID {
+		a.pendingPermission, a.pendingUserInput = nil, nil
+	}
 	state.permission, state.question = nil, nil
 	a.syncSummary(session)
 	a.rebuildRows()
-	a.rebuildTranscript()
+	if a.detail != nil && a.detail.ID == sessionID {
+		a.rebuildTranscript()
+	}
 	a.saveSessionSnapshot(session)
 	a.stopSessionSubmission(sessionID, turnID, runtimeID)
 }

@@ -205,6 +205,40 @@ func run(ctx context.Context, binary string) (err error) {
 		return fmt.Errorf("engine cwd refusal named the wrong boundary: %v", err)
 	}
 	checks["engine-cwd-outside-workspace-refused"] = true
+	plugin, err := os.ReadFile(filepath.Join(round, "home", "opencode", "plugins", "fintwind-context.ts"))
+	if err != nil {
+		return fmt.Errorf("context plugin was not materialized: %w", err)
+	}
+	if !strings.Contains(string(plugin), "fintwind.context") {
+		return errors.New("materialized context plugin has unexpected content")
+	}
+	checks["context-plugin-materialized"] = true
+	envRecord, err := os.ReadFile(filepath.Join(round, "home", "context-env.json"))
+	if err != nil {
+		return fmt.Errorf("engine env record missing: %w", err)
+	}
+	var engineEnv struct {
+		ContextDir string `json:"contextDir"`
+	}
+	if json.Unmarshal(envRecord, &engineEnv) != nil || engineEnv.ContextDir != filepath.Join(round, "data", "context") {
+		return fmt.Errorf("engine did not receive the context snapshot dir: %s", envRecord)
+	}
+	checks["engine-context-dir-env"] = true
+	snapshotRaw, err := json.Marshal(map[string]any{
+		"version": 1, "sessionID": "ses_fixture", "model": "fixture/literal", "agent": "build",
+		"system": 80, "tools": 200, "messages": 120, "reasoning": 0,
+		"toolCalls": 60, "files": 40, "toolResults": 150, "memory": 90,
+		"opaqueReasoning": false, "opaqueMemory": true,
+	})
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Join(round, "data", "context"), 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(round, "data", "context", "ses_fixture.json"), snapshotRaw, 0o600); err != nil {
+		return fmt.Errorf("write composition snapshot: %w", err)
+	}
 	now := uint64(time.Now().Unix())
 	project := map[string]any{"id": pid, "name": "fixture", "path": workspace, "created_at": now}
 	newTurn := func(tid, prompt string, count int) (map[string]any, model.SubmissionRecord) {
@@ -311,13 +345,20 @@ func run(ctx context.Context, binary string) (err error) {
 	if _, err := client.RequestFor(ctx, sid, rid, map[string]any{"type": "dispatchSubmission", "submissionId": tid2, "workspace": map[string]string{"kind": "local"}}); err != nil {
 		return fmt.Errorf("dispatch second round: %w", err)
 	}
-	text, success, err = waitTurn(ctx, client)
+	text, success, composition, compositionSeen, err := waitTurnRecording(ctx, client)
 	if err != nil {
 		return err
 	}
 	if text != "literal answer" || !success {
 		return errors.New("second round stream mismatch")
 	}
+	if !compositionSeen {
+		return errors.New("context composition event was not emitted")
+	}
+	if composition["version"] != float64(2) || composition["model"] != "fixture/literal" || composition["memory"] != float64(90) || composition["opaqueMemory"] != true || composition["incomplete"] != true {
+		return fmt.Errorf("composition wire mismatch: %v", composition)
+	}
+	checks["context-composition-event"] = true
 	state, err = hydrateState(ctx, client, sid)
 	if err != nil {
 		return err
@@ -337,6 +378,10 @@ func run(ctx context.Context, binary string) (err error) {
 		return errors.New("provider title did not preserve the user's custom title")
 	}
 	checks["native-title-preserves-user-title"] = true
+	if usage := titleSaved.Session.ContextUsage; usage == nil || usage.Composition == nil || usage.Composition.Version != 2 || usage.Composition.Memory != 90 || usage.Composition.ToolResults != 150 || !usage.Composition.Incomplete {
+		return errors.New("hydrated session did not keep the composition snapshot")
+	}
+	checks["context-composition-hydrated"] = true
 	tid3 := uuid.NewString()
 	turn3, record3 := newTurn(tid3, "hold for cancel", 3)
 	session3 := map[string]any{"id": sid, "project_id": pid, "title": "fixture", "provider": "openCode", "status": "working", "created_at": now, "updated_at": now, "detail_loaded": true,
@@ -532,19 +577,28 @@ func hydrateState(ctx context.Context, client *daemon.Client, sid string) (hydra
 }
 
 func waitTurn(ctx context.Context, client *daemon.Client, wantTitle ...string) (string, bool, error) {
+	text, success, _, _, err := waitTurnRecording(ctx, client, wantTitle...)
+	return text, success, err
+}
+
+// waitTurnRecording waits for the turn to finish while recording whether a
+// context composition event arrived alongside the usage update.
+func waitTurnRecording(ctx context.Context, client *daemon.Client, wantTitle ...string) (string, bool, map[string]any, bool, error) {
 	text := ""
 	title := ""
+	var composition map[string]any
+	compositionSeen := false
 	for {
 		select {
 		case <-ctx.Done():
-			return "", false, ctx.Err()
+			return "", false, nil, false, ctx.Err()
 		case event, ok := <-client.Events():
 			if !ok {
-				return "", false, errors.New("client stream closed")
+				return "", false, nil, false, errors.New("client stream closed")
 			}
 			if event.Kind == "autoTitleUpdated" {
 				if err := json.Unmarshal(event.Payload, &title); err != nil {
-					return "", false, err
+					return "", false, nil, false, err
 				}
 			}
 			if event.Kind == "textDelta" {
@@ -552,24 +606,30 @@ func waitTurn(ctx context.Context, client *daemon.Client, wantTitle ...string) (
 					Delta string `json:"delta"`
 				}
 				if err := json.Unmarshal(event.Payload, &delta); err != nil {
-					return "", false, err
+					return "", false, nil, false, err
 				}
 				text += delta.Delta
 			}
+			if event.Kind == "contextCompositionUpdated" {
+				if json.Unmarshal(event.Payload, &composition) != nil {
+					return "", false, nil, false, fmt.Errorf("invalid composition payload: %s", event.Payload)
+				}
+				compositionSeen = true
+			}
 			if event.Kind == "turnFinished" {
 				if len(wantTitle) > 0 && title != wantTitle[0] {
-					return "", false, fmt.Errorf("native title event mismatch: got %q, want %q", title, wantTitle[0])
+					return "", false, nil, false, fmt.Errorf("native title event mismatch: got %q, want %q", title, wantTitle[0])
 				}
 				var done struct {
 					Success bool `json:"success"`
 				}
 				if err := json.Unmarshal(event.Payload, &done); err != nil {
-					return "", false, err
+					return "", false, nil, false, err
 				}
 				if event.Type == "event" {
 					client.Ack(event)
 				}
-				return text, done.Success, nil
+				return text, done.Success, composition, compositionSeen, nil
 			}
 			if event.Type == "event" {
 				client.Ack(event)
@@ -624,6 +684,12 @@ func fixture() {
 	subscribers := map[chan string]bool{}
 	credentials := map[string]bool{"account-one": true, "account-two": true, "other-account": true}
 	var busy, hold bool
+	if home := os.Getenv("OPENCODE_TEST_HOME"); home != "" {
+		// Record the composition snapshot directory the engine was launched
+		// with, so the driver can assert the plumbing reached the engine.
+		raw, _ := json.Marshal(map[string]string{"contextDir": os.Getenv("FINTWIND_CONTEXT_DIR")})
+		_ = os.WriteFile(filepath.Join(home, "context-env.json"), raw, 0o600)
+	}
 	emit := func(events []map[string]any) {
 		for _, event := range events {
 			raw, _ := json.Marshal(event)
@@ -756,6 +822,7 @@ func fixture() {
 						{"type": "session.text.started", "data": map[string]any{"sessionID": "ses_fixture", "assistantMessageID": "answer", "ordinal": 0}},
 						{"type": "session.text.delta", "data": map[string]any{"sessionID": "ses_fixture", "assistantMessageID": "answer", "ordinal": 0, "delta": "literal answer"}},
 						{"type": "session.text.ended", "data": map[string]any{"sessionID": "ses_fixture", "assistantMessageID": "answer", "ordinal": 0, "text": "literal answer"}},
+						{"type": "session.usage.updated", "data": map[string]any{"sessionID": "ses_fixture", "tokens": map[string]any{"input": 100, "output": 10, "reasoning": 0, "total": 110, "cache": map[string]any{"read": 0, "write": 0}}}},
 						{"type": "session.execution.succeeded", "data": map[string]any{"sessionID": "ses_fixture"}},
 					})
 					mu.Lock()

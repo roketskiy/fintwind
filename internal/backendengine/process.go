@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"fintwind-go/internal/backendengine/contextplugin"
 	"fintwind-go/internal/backendprivate"
 	"fintwind-go/internal/ownedprocess"
 
@@ -61,12 +62,22 @@ func Start(ctx context.Context, binary, root, workspace, settingsPath string, da
 		return nil, err
 	}
 	password := uuid.NewString()
+	contextDir := filepath.Join(root, "data", "context")
+	if err := os.MkdirAll(contextDir, 0o700); err != nil {
+		return nil, err
+	}
+	if configDir, err := contextplugin.ResolveConfigDir(daily, root); err == nil {
+		// Best-effort: the composition panel stays unavailable when the
+		// plugin cannot be written, and engine startup must not depend on it.
+		_ = contextplugin.Materialize(configDir)
+	}
 	extra := map[string]string{
 		"OPENCODE_SERVER_USERNAME": "opencode", "OPENCODE_SERVER_PASSWORD": password,
 		"OPENCODE_CONFIG_DIR":             filepath.Join(root, "home", "opencode"),
 		"OPENCODE_DB":                     filepath.Join(root, "data", "opencode.db"),
 		"OPENCODE_TEST_HOME":              filepath.Join(root, "home"),
 		"OPENCODE_DISABLE_PROJECT_CONFIG": "true",
+		"FINTWIND_CONTEXT_DIR":            contextDir,
 	}
 	// Real-provider E2E is opt-in at process launch, never through an RPC.
 	// The default launcher still drops every provider credential. Only this
@@ -88,7 +99,7 @@ func Start(ctx context.Context, binary, root, workspace, settingsPath string, da
 	}
 	environment := ownedprocess.BuildEnv(root, extra)
 	if daily {
-		values := map[string]string{"OPENCODE_SERVER_USERNAME": "opencode", "OPENCODE_SERVER_PASSWORD": password}
+		values := map[string]string{"OPENCODE_SERVER_USERNAME": "opencode", "OPENCODE_SERVER_PASSWORD": password, "FINTWIND_CONTEXT_DIR": contextDir}
 		raw, readErr := os.ReadFile(settingsPath)
 		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 			return nil, readErr

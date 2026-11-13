@@ -22,11 +22,11 @@ try {
     try {
         go build ./...
         if ($LASTEXITCODE -ne 0) { throw 'Go build failed' }
-        go vet ./internal/... ./cmd/daemon ./tools/e2e/backendcheck ./tools/export ./tools/e2e/enginecheck ./tools/e2e/runtimecheck ./tools/e2e/workspacecheck ./tools/e2e/replaycheck ./tools/e2e/attachmentcheck ./tools/e2e/servicescheck ./tools/e2e/gitwritecheck ./tools/e2e/scheduledcheck ./tools/e2e/skillscheck ./tools/e2e/nativecheck ./cmd/mygo ./tools/e2e/quotacheck ./tools/e2e/reviewcheck ./tools/e2e/listingcheck ./tools/e2e/worktreecheck ./tools/e2e/taskeditcheck ./tools/e2e/cleanupcheck ./tools/e2e/runtimeforkcheck ./tools/e2e/updatecheck ./tools/e2e/managementcheck
+        go vet ./internal/... ./cmd/daemon ./tools/e2e/backendcheck ./tools/export ./tools/e2e/enginecheck ./tools/e2e/runtimecheck ./tools/e2e/workspacecheck ./tools/e2e/replaycheck ./tools/e2e/attachmentcheck ./tools/e2e/servicescheck ./tools/e2e/gitwritecheck ./tools/e2e/scheduledcheck ./tools/e2e/skillscheck ./tools/e2e/nativecheck ./cmd/mygo ./tools/e2e/quotacheck ./tools/e2e/reviewcheck ./tools/e2e/listingcheck ./tools/e2e/worktreecheck ./tools/e2e/taskeditcheck ./tools/e2e/cleanupcheck ./tools/e2e/runtimeforkcheck ./tools/e2e/updatecheck ./tools/e2e/managementcheck ./tools/e2e/compositioncheck
         if ($LASTEXITCODE -ne 0) { throw 'Go vet failed' }
         go vet ./tools/e2e/usagecheck ./tools/e2e/capabilitycheck ./tools/e2e/mcpauthcheck ./tools/e2e/activitycheck ./tools/e2e/subagentcheck ./tools/e2e/metadatacheck ./tools/e2e/claudequotacheck ./tools/e2e/goalcheck ./tools/e2e/shellworkcheck ./tools/e2e/navigationcheck ./tools/e2e/workspaceservicecheck ./tools/e2e/gitremotecheck ./tools/e2e/skillattachcheck
         if ($LASTEXITCODE -ne 0) { throw 'Additional daemon checks vet failed' }
-        foreach ($name in @('daemon', 'backendcheck', 'backendexport', 'enginecheck', 'runtimecheck', 'workspacecheck', 'replaycheck', 'attachmentcheck', 'servicescheck', 'gitwritecheck', 'scheduledcheck', 'skillscheck', 'nativecheck', 'mygo', 'quotacheck', 'reviewcheck', 'listingcheck', 'worktreecheck', 'taskeditcheck', 'cleanupcheck', 'runtimeforkcheck', 'updatecheck', 'managementcheck')) {
+        foreach ($name in @('daemon', 'backendcheck', 'backendexport', 'enginecheck', 'runtimecheck', 'workspacecheck', 'replaycheck', 'attachmentcheck', 'servicescheck', 'gitwritecheck', 'scheduledcheck', 'skillscheck', 'nativecheck', 'mygo', 'quotacheck', 'reviewcheck', 'listingcheck', 'worktreecheck', 'taskeditcheck', 'cleanupcheck', 'runtimeforkcheck', 'updatecheck', 'managementcheck', 'compositioncheck')) {
             $source = switch ($name) {
                 'daemon' { './cmd/daemon' }
                 'mygo' { './cmd/mygo' }
@@ -83,6 +83,12 @@ try {
         & (Join-Path $output 'enginecheck.exe')
     }
     if ($LASTEXITCODE -ne 0) { throw 'Engine E2E failed' }
+    if ($OpenCodeBinary) {
+        & (Join-Path $output 'compositioncheck.exe') --opencode $OpenCodeBinary
+    } else {
+        & (Join-Path $output 'compositioncheck.exe')
+    }
+    if ($LASTEXITCODE -ne 0) { throw 'Context composition E2E failed' }
     & (Join-Path $output 'mygo.exe') --root $root --profile agent --backend go --verify --daemon (Join-Path $output 'daemon.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Go launcher E2E failed' }
     Write-Output '[OK] Isolated Go backend checks passed; inspect each report for unsupported or skipped scenarios.'

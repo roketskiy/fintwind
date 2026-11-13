@@ -284,6 +284,9 @@ func (a *actor) reconcile(ctx context.Context) error {
 	}
 	a.snapshot.Set("provider_cursor", map[string]string{"provider": "openCode", "sessionId": a.nativeID})
 	a.snapshot.Set("native_session_id", a.nativeID)
+	if snapshot := a.contextCompositionSnapshot(); snapshot != nil {
+		a.storeComposition(a.compositionWire(snapshot))
+	}
 	a.dirty = true
 	return nil
 }

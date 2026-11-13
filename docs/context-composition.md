@@ -19,9 +19,18 @@
 不向预估增加额外文本；即使 OpenCode 把压缩摘要降级为普通用户文本，压缩摘要
 仍保持独立。通过 shell 命令间接读取的文件计入其他工具结果。
 
+估算数据由 daemon 写入引擎配置目录的 `fintwind.context` 插件采集。插件订阅
+`session.context` 钩子，在每次主模型请求组装后按分类统计字符数并写入快照
+文件；daemon 读取快照换算成 token 并随用量更新上报。只有 Fintwind 启动的
+引擎携带 `FINTWIND_CONTEXT_DIR` 环境变量，直接使用 OpenCode CLI 时插件不做
+任何事。
+
 文本预估按每 4 个 ASCII 字符计 1 token（每块向上取整），每个非 ASCII 字符计
 1 token；不含传输封装、媒体与不透明供应商状态。加密推理与原生压缩状态记为
 不可测量，其编码长度不视为 token 数。伴随不透明状态的可见文本记为部分预估。
+
+分类拆解方法参考 [dsh-context](https://github.com/bowenliang123/dsh-context)
+（Apache-2.0），许可声明见 [dsh-context-Apache-2.0.txt](licenses/dsh-context-Apache-2.0.txt)。
 
 版本 2 快照拆分工具定义、调用、结果与推理。旧持久化快照仍可读，但详细图表
 等待新请求，不把旧合并口径当作新分类解读。

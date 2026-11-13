@@ -191,7 +191,10 @@ func (a *actor) extendedEvent(kind string, payload backendstore.Object) (bool, e
 			a.snapshot.Set("context_usage", usage)
 			a.dirty = true
 		}
-		return true, a.emit("usageUpdated", wire)
+		if err := a.emit("usageUpdated", wire); err != nil {
+			return true, err
+		}
+		return true, a.refreshComposition()
 	case "rpc.opencode.goal.changed", "session.goal.updated", "goal.updated":
 		raw, _ := json.Marshal(payload)
 		if nested := payload["goal"]; len(nested) > 0 {

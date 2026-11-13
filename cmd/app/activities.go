@@ -390,27 +390,25 @@ func (a *app) activityCard(c *ui.Context, merged mergedActivity) {
 							ui.Column(c).FillWidth().MinWidth(0).Gap(3).Children(func() {
 								if section.Label != "" {
 									header := ui.Row(c).Height(24).FillWidth().
-										Justify(ui.SpaceBetween).AlignItems(ui.Center)
+										Gap(4).AlignItems(ui.Center)
 									header.Children(func() {
 										ui.Text(c, section.Label).FontSize(uiPx(10.5)).
 											FixedLineHeight(uiPx(16)).FontWeight(500).
 											TextColor(palette.textSecondary)
-									})
-									if section.Content != "" {
-										copyButton := ui.ButtonBase(c).Label(tr("Copy ")+strings.ToLower(section.Label)).
-											Size(24, 24).Radius(6).Center()
-										if copyButton.Hovered() || copyButton.Pressed() {
-											copyButton.Background(palette.overlay)
-										}
-										header.Children(func() {
+										if section.Content != "" {
+											copyButton := ui.ButtonBase(c).Label(tr("Copy ")+strings.ToLower(section.Label)).
+												Size(24, 24).Radius(6).Center()
+											if copyButton.Hovered() || copyButton.Pressed() {
+												copyButton.Background(palette.overlay)
+											}
 											copyButton.Children(func() {
 												icon(c, "copy", 13, palette.textGhost)
 											})
-										})
-										if copyButton.Clicked() {
-											_ = mygo.Clipboard.Write(transfer.TextData(section.Content))
+											if copyButton.Clicked() {
+												_ = mygo.Clipboard.Write(transfer.TextData(section.Content))
+											}
 										}
-									}
+									})
 								}
 								if section.Content != "" {
 									ui.Text(c, section.Content).FontSize(codePx(10.5)).FixedLineHeight(codePx(16)).

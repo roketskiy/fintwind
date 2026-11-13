@@ -855,7 +855,7 @@ func (a *app) compactionMessage(c *ui.Context, messageID, text string) {
 		}
 	}
 	card := ui.Column(c).FillWidth().MinWidth(0).Radius(9).
-		Border(1, palette.borderStrong).Background(hex(0x2A2A2A))
+		Border(1, palette.borderStrong).Background(palette.raised)
 	card.Selectable()
 	card.Children(func() {
 		row := ui.ButtonBase(c).Label(tr("Compaction")).FillWidth().Height(30).

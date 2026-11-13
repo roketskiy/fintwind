@@ -154,13 +154,9 @@ func (a *app) usageMeter(c *ui.Context) {
 	if usage != nil && usage.Window != nil && *usage.Window > 0 {
 		label += "/" + formatTokens(*usage.Window)
 	}
-	tip := tr("Context") + " (Ctrl+U)"
-	if ok {
-		tip = tr("Context used") + ": " + formatPercent(percent) + " (Ctrl+U)"
-	}
 	c.Key("composer-usage")
 	action.Button(c, "", action.ButtonProps{Variant: action.Text, Size: theme.Small}).Height(24).Padding(0, 6).Radius(5).Gap(6).
-		AlignItems(ui.Center).Label(tr("Context")).Tooltip(tip).OnClick(a.toggleContextPanel).Children(func() {
+		AlignItems(ui.Center).Label(tr("Context")).OnClick(a.toggleContextPanel).Children(func() {
 		ui.Row(c).Width(usageMeterBarWidth).Height(4).Radius(2).
 			Background(palette.borderStrong).Children(func() {
 			if !ok {

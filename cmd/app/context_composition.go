@@ -80,7 +80,7 @@ func contextComposition(c *ui.Context, usage *model.ContextUsage) {
 			detail = tr("Partial estimate")
 		}
 		ui.Row(c.Key("context-composition-" + entry.name)).FillWidth().Gap(6).AlignItems(ui.Center).Focusable().
-			Label(tr(entry.name)).Description(detail + " · " + value).Tooltip(detail + " · " + value).Children(func() {
+			Label(tr(entry.name)).Description(detail + " · " + value).Children(func() {
 			ui.Box(c).Size(7, 7).Shrink(0).Radius(2).Background(entry.color)
 			ui.Column(c).Grow(1).MinWidth(0).Children(func() {
 				contextInspector(c, entry.name, value+" · "+detail)

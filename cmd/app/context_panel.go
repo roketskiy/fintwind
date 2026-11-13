@@ -85,7 +85,7 @@ func contextStatCard(c *ui.Context, key, title, value string) {
 	c.Key("context-stat-" + key)
 	ui.Column(c).Grow(1).Basis(110).MinWidth(0).Padding(10, 12).Gap(4).
 		Radius(10).Background(palette.overlay).Border(1, palette.cardBorder).
-		Label(tr(title)).Description(value).Tooltip(tr(title) + " · " + value).
+		Label(tr(title)).Description(value).
 		Children(func() {
 			ui.Text(c, tr(title)).FontSize(uiPx(11)).TextColor(palette.textSecondary).SingleLine().Ellipsis("…")
 			kit.Numeric(c, value).FontFeatures("tnum").FontSize(uiPx(18)).FontWeight(600).
@@ -256,8 +256,8 @@ func (a *app) contextSessionCard(c *ui.Context) {
 			ui.Text(c, id).MinWidth(0).Shrink(1).FontSize(uiPx(11.5)).TextColor(palette.text).
 				SingleLine().Ellipsis("…").Tooltip(id)
 			action.ActionIcon(c.Key("context-copy-session"), assets.SVG("copy"), action.ActionIconProps{
-				Size: theme.Small, Title: tr("Copy session ID"),
-			}).Shrink(0).OnClick(func() {
+				Size: theme.Small,
+			}).Label(tr("Copy session ID")).Shrink(0).OnClick(func() {
 				services.WriteClipboard(id)
 				a.status = tr("Copied")
 			})

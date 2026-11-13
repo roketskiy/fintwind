@@ -89,6 +89,9 @@ func run() error {
 		return err
 	}
 	defer store.Close()
+	if err := store.RecoverInterruptedSessions(ctx); err != nil {
+		return fmt.Errorf("recover interrupted sessions: %w", err)
+	}
 	listener, err := net.Listen("tcp", *bind)
 	if err != nil {
 		return err

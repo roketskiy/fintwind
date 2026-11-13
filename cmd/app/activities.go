@@ -135,7 +135,7 @@ func (a *app) activityCluster(c *ui.Context, blockIndex int, liveTurn bool, late
 			}
 			for index := start; index < len(display); index++ {
 				merged := display[index]
-				a.activityCard(c, merged)
+				a.activityCard(c, merged, liveTurn)
 			}
 		})
 	})
@@ -284,10 +284,10 @@ func mergeConsecutiveReasoning(activities []model.ActivityItem, liveReasoningID 
 
 // activityCard renders one activity: the row that names the action and, when
 // the activity carries more than a title, the expandable detail below it.
-func (a *app) activityCard(c *ui.Context, merged mergedActivity) {
+func (a *app) activityCard(c *ui.Context, merged mergedActivity, liveTurn bool) {
 	activity := merged.Item
 	reasoning := activity.Reasoning
-	reasoningLive := merged.Live || reasoning != nil && !activity.Complete && !activity.Failed
+	reasoningLive := liveTurn && (merged.Live || reasoning != nil && !activity.Complete && !activity.Failed)
 	hasDetail := false
 	if reasoning != nil {
 		hasDetail = strings.TrimSpace(reasoning.Content) != ""
@@ -315,7 +315,7 @@ func (a *app) activityCard(c *ui.Context, merged mergedActivity) {
 	if strings.TrimSpace(rowDetail) == "" {
 		rowDetail = activityPreview(&activity)
 	}
-	running := reasoningLive || (!activity.Complete && !activity.Failed)
+	running := liveTurn && (reasoningLive || (!activity.Complete && !activity.Failed))
 	rail := palette.textTertiary
 	if running {
 		rail = palette.accent
@@ -361,7 +361,7 @@ func (a *app) activityCard(c *ui.Context, merged mergedActivity) {
 			if !hasDetail && reasoning == nil {
 				if activity.Failed {
 					icon(c, "x", 11, palette.danger)
-				} else if !activity.Complete {
+				} else if running {
 					ui.Row(c).Size(5, 5).Radius(2.5).Background(palette.accent)
 				}
 			}

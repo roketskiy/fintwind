@@ -67,6 +67,34 @@ func (a *actor) reconcile(ctx context.Context) error {
 		return err
 	}
 	a.restoreNativeShells(transcript.DetachedShells)
+	preserveAt := len(transcript.Turns)
+	for index, turn := range a.turns {
+		if turn.String("status") == "interrupted" && index < preserveAt {
+			preserveAt = index
+			break
+		}
+	}
+	if preserveAt < len(transcript.Turns) {
+		preserved := make(map[string]bool, len(transcript.Turns)-preserveAt)
+		for _, turn := range transcript.Turns[preserveAt:] {
+			preserved[turn.ID] = true
+		}
+		messages := transcript.Messages[:0]
+		for _, message := range transcript.Messages {
+			if message.TurnID == nil || !preserved[*message.TurnID] {
+				messages = append(messages, message)
+			}
+		}
+		transcript.Messages = messages
+		blocks := transcript.Blocks[:0]
+		for _, block := range transcript.Blocks {
+			if block.TurnID == nil || !preserved[*block.TurnID] {
+				blocks = append(blocks, block)
+			}
+		}
+		transcript.Blocks = blocks
+		transcript.Turns = transcript.Turns[:preserveAt]
+	}
 	identities := map[string]string{}
 	for index := range transcript.Turns {
 		if index < len(a.turns) {
@@ -94,12 +122,68 @@ func (a *actor) reconcile(ctx context.Context) error {
 			}
 		}
 	}
-	a.snapshot.Set("messages", transcript.Messages)
-	a.snapshot.Set("turns", transcript.Turns)
+	messages := make([]json.RawMessage, 0, len(transcript.Messages)+len(a.messages))
+	for _, message := range transcript.Messages {
+		raw, err := json.Marshal(message)
+		if err != nil {
+			return err
+		}
+		messages = append(messages, raw)
+	}
+	turns := make([]json.RawMessage, 0, len(transcript.Turns)+len(a.turns))
+	for _, turn := range transcript.Turns {
+		raw, err := json.Marshal(turn)
+		if err != nil {
+			return err
+		}
+		turns = append(turns, raw)
+	}
 	blocks := make([]json.RawMessage, len(transcript.Blocks))
 	for index, block := range transcript.Blocks {
 		blocks[index] = block.Raw
 	}
+	if len(transcript.Turns) < len(a.turns) {
+		missing := make(map[string]bool, len(a.turns)-len(transcript.Turns))
+		for _, turn := range a.turns[len(transcript.Turns):] {
+			missing[turn.String("id")] = true
+			raw, err := json.Marshal(turn)
+			if err != nil {
+				return err
+			}
+			turns = append(turns, raw)
+		}
+		start := len(a.messages)
+		for index, message := range a.messages {
+			if missing[message.String("turn_id")] {
+				start = index
+				break
+			}
+		}
+		for _, message := range a.messages[start:] {
+			raw, err := json.Marshal(message)
+			if err != nil {
+				return err
+			}
+			messages = append(messages, raw)
+		}
+		for _, block := range a.blocks {
+			if !missing[block.String("turn_id")] {
+				continue
+			}
+			after, err := block.Int("after_message")
+			if err != nil {
+				return err
+			}
+			block.Set("after_message", max(0, len(transcript.Messages)+int(after)-start))
+			raw, err := json.Marshal(block)
+			if err != nil {
+				return err
+			}
+			blocks = append(blocks, raw)
+		}
+	}
+	a.snapshot.Set("messages", messages)
+	a.snapshot.Set("turns", turns)
 	a.snapshot.Set("transcript_blocks", blocks)
 	if err := a.loadSnapshot(); err != nil {
 		return err

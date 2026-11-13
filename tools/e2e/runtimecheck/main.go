@@ -323,6 +323,10 @@ func run(ctx context.Context, binary string) (err error) {
 		return err
 	}
 	checks["scheduled-manual-delivery-admission-order"] = true
+	if err := checkRestartRecovery(ctx, client, child, binary, self, round, workspace, token, project, sid, pid, rid); err != nil {
+		return err
+	}
+	checks["restart-interrupted-turn-can-continue"] = true
 	return nil
 }
 
@@ -337,8 +341,9 @@ type hydratedState struct {
 }
 
 type messageView struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	Streaming bool   `json:"streaming"`
 }
 
 type turnView struct {
@@ -534,6 +539,14 @@ func fixture() {
 			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]string{"id": "ses_fixture"}})
 			return
 		}
+		if r.URL.Path == "/api/session/ses_fixture/message" {
+			if raw, err := os.ReadFile(filepath.Join(os.Getenv("OPENCODE_TEST_HOME"), "native-message-fixture.json")); err == nil {
+				_, _ = w.Write(raw)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []any{}})
+			return
+		}
 		if r.URL.Path == "/api/session/ses_fixture/prompt" {
 			var body struct {
 				Text string `json:"text"`
@@ -548,18 +561,22 @@ func fixture() {
 			busy = true
 			hold = strings.HasPrefix(body.Text, "hold")
 			suspended := hold
-			textOnly := strings.HasPrefix(body.Text, "hold-after-text")
+			textOnly := strings.HasPrefix(body.Text, "hold-after-text") || strings.HasPrefix(body.Text, "hold-during-text")
+			unfinished := strings.HasPrefix(body.Text, "hold-during-text")
 			mu.Unlock()
 			if textOnly {
 				go func() {
-					emit([]map[string]any{
+					events := []map[string]any{
 						{"type": "session.reasoning.started", "data": map[string]any{"sessionID": "ses_fixture", "assistantMessageID": "answer", "ordinal": 0}},
 						{"type": "session.reasoning.delta", "data": map[string]any{"sessionID": "ses_fixture", "assistantMessageID": "answer", "ordinal": 0, "delta": "literal reasoning"}},
 						{"type": "session.reasoning.ended", "data": map[string]any{"sessionID": "ses_fixture", "assistantMessageID": "answer", "ordinal": 0, "text": "literal reasoning"}},
 						{"type": "session.text.started", "data": map[string]any{"sessionID": "ses_fixture", "assistantMessageID": "answer", "ordinal": 0}},
 						{"type": "session.text.delta", "data": map[string]any{"sessionID": "ses_fixture", "assistantMessageID": "answer", "ordinal": 0, "delta": "literal partial"}},
-						{"type": "session.text.ended", "data": map[string]any{"sessionID": "ses_fixture", "assistantMessageID": "answer", "ordinal": 0, "text": "literal partial"}},
-					})
+					}
+					if !unfinished {
+						events = append(events, map[string]any{"type": "session.text.ended", "data": map[string]any{"sessionID": "ses_fixture", "assistantMessageID": "answer", "ordinal": 0, "text": "literal partial"}})
+					}
+					emit(events)
 				}()
 			} else if !suspended {
 				go func() {

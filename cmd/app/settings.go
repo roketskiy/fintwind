@@ -61,6 +61,7 @@ type settingsState struct {
 	runtime           runtimeConfigState
 	preferences       appPreferences
 	message           string
+	feedback          settingsFeedbackState
 	settingsWriteGate chan struct{}
 }
 
@@ -116,15 +117,8 @@ func (a *app) settingsSecondary(c *ui.Context) {
 	})
 }
 
-// settingsContent is the page column. General/Appearance render the 18px
-// title over the 760 wide document column; Providers/Skills/MCP render the
-// mail-style split full-bleed — no title, no width cap, no card — matching
-// render_settings_content in settings.rs.
 func (a *app) settingsContent(c *ui.Context) {
-	content := ui.Column(c).Grow(1).MinWidth(0).FillHeight().Background(palette.surface).
-		BorderWidth(0, 0, 0, 1).BorderColor(palette.sidebarBorder).
-		Radius(workspaceRadius, 0, 0, workspaceRadius).Clip()
-	content = workspaceShadow(content)
+	content := ui.Column(c).Grow(1).MinWidth(0).FillHeight().Background(palette.surface)
 	content.Children(func() {
 		switch a.settings.page {
 		case "providers":
@@ -142,10 +136,10 @@ func (a *app) settingsContent(c *ui.Context) {
 		}
 		c.Key("settings-document-" + a.settings.page)
 		ui.Scroll(c).TrackScroll(&a.settings.scroll).FillWidth().Grow(1).MinHeight(0).Children(func() {
-			ui.Column(c).FillWidth().Padding(0, 32, 48, 32).Children(func() {
+			ui.Column(c).FillWidth().Padding(18, 32, 48, 32).Children(func() {
 				ui.Column(c).FillWidth().MaxWidth(settingsMaxWidth).Margin(0, ui.Auto).Children(func() {
-					ui.Text(c, settingsPageTitle(a.settings.page)).FontSize(uiPx(18)).
-						FontWeight(500).TextColor(palette.text).Padding(2, 0, 0, 0)
+					ui.Text(c, settingsPageTitle(a.settings.page)).FontSize(uiPx(22)).
+						FontWeight(600).TextColor(palette.text)
 					switch a.settings.page {
 					case "general":
 						a.generalSettings(c)
@@ -249,37 +243,36 @@ func (a *app) schemeSwatch(value string) []ui.Color {
 	return colors[:]
 }
 
-// settingsGroupCard is settingsGroup with rows appended by the caller.
 func (a *app) settingsGroupCard(c *ui.Context, title string, rows func()) {
-	margin := float32(20)
+	margin := float32(36)
 	if title == "" {
-		margin = 15
+		margin = 28
 	}
-	ui.Column(c).FillWidth().Margin(margin, 0, 0, 0).Radius(13).Clip().
-		Background(palette.raised).Border(1, palette.cardBorder).Shadow(0, 1, 2, 0, ui.RGBA(0, 0, 0, 0.05)).Children(func() {
+	ui.Column(c).FillWidth().Margin(margin, 0, 0, 0).Children(func() {
 		if title != "" {
 			ui.Text(c, title).FontSize(uiPx(settingsGroupTitle)).FontWeight(500).
-				TextColor(palette.textSecondary).Padding(14, 20, 4, 20)
+				TextColor(palette.text).Margin(0, 0, 12, 0)
 		}
-		rows()
+		ui.Column(c).FillWidth().Radius(13).Clip().
+			Background(palette.surface.Mix(palette.raised, 0.35)).Border(1, palette.borderStrong).Children(rows)
 	})
 }
 
 // settingsSeparator is the hairline between two rows of a group.
 func (a *app) settingsSeparator(c *ui.Context) {
-	ui.Row(c).Margin(0, 20).Height(1).Background(palette.border)
+	ui.Row(c).Margin(0, 16).Height(1).Background(palette.border)
 }
 
 // settingsRow lays out one group row: title, optional description, control.
 func settingsRow(c *ui.Context, title, description string, control func()) {
-	row := ui.Row(c).FillWidth().MinHeight(settingsRowHeight).Padding(12, 20).
-		Gap(24).AlignItems(ui.Center)
+	row := ui.Row(c).FillWidth().MinHeight(settingsRowHeight).Padding(12, 16).
+		Gap(20).AlignItems(ui.Center)
 	row.Children(func() {
 		ui.Column(c).Grow(1).MinWidth(0).Children(func() {
 			ui.Text(c, title).FontSize(uiPx(13.5)).FontWeight(500).TextColor(palette.text)
 			if description != "" {
 				ui.Text(c, description).FontSize(uiPx(12.5)).FixedLineHeight(uiPx(18)).
-					TextColor(palette.textSecondary).Wrap().Margin(5, 0, 0, 0)
+					TextColor(palette.textSecondary).Wrap().Margin(3, 0, 0, 0)
 			}
 		})
 		if control != nil {
@@ -446,7 +439,6 @@ func (a *app) generalSettings(c *ui.Context) {
 			a.settingsPathConfirmation(c, "general_workspace_path")
 			a.settingsCleanupConfirmation(c)
 		})
-		settingsOperationStatus(c, a.settings.backend.general.operation, "")
 		a.settingsFooter(c)
 	})
 }

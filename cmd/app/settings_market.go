@@ -257,7 +257,6 @@ func (a *app) settingsMarketDetail(c *ui.Context) {
 					c.Services().OpenURL(entry.sourceURL)
 				}
 			})
-			settingsOperationStatus(c, a.settings.backend.mcp, "")
 			if entry.needsAuth {
 				ui.Text(c, tr("Authentication may require OAuth or provider headers. Configure them in MCP Servers.")).FontSize(uiPx(11)).TextColor(palette.textSecondary).Wrap()
 			}

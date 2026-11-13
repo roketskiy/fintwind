@@ -614,7 +614,7 @@ func (a *app) commitSettingsMcp(roster []settingsMcpServer, selected string) {
 			if a.settings.catalog.mdCommitGeneration == 0 && st.mcpSelected != "" {
 				a.syncMcpDetailDrafts(st.mcpSelected)
 			}
-			st.mcp.message, st.mcpStatusError = tr("Saved"), ""
+			st.mcp.message, st.mcpStatusError = "", ""
 			if reloadErr != nil {
 				st.mcpStatusError = "Configuration saved; connection status unavailable. " + reloadErr.Error()
 			} else {
@@ -815,10 +815,6 @@ func (a *app) settingsMcpDetail(c *ui.Context) {
 				icon(c, "info", 12, palette.textTertiary)
 				ui.Text(c, tr("This roster is mcp.servers in OpenCode's own configuration file (opencode.json). The CLI and TUI see the same servers, and OpenCode hot-reloads the file. Extra fields like timeout, cwd, or oauth are preserved.")).FontSize(uiPx(10.5)).FixedLineHeight(uiPx(15)).TextColor(palette.textTertiary).Wrap()
 			})
-			settingsOperationStatus(c, backend.mcp, "")
-			if backend.mcpStatusError != "" {
-				ui.Text(c, backend.mcpStatusError).FontSize(uiPx(11)).TextColor(palette.textSecondary).Wrap()
-			}
 		})
 	})
 }

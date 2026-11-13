@@ -87,24 +87,14 @@ const (
 	formPickerWidth   = 280.0
 )
 
-// skillSourceOptions mirrors the GPUI source filter: every source first,
-// then the two install roots. Counts come from the loaded catalog so an
-// empty pick is never a surprise.
-func skillSourceOptions(counts map[string]int) []settingsOption {
-	option := func(value, label string) settingsOption {
-		text := label
-		if counts != nil {
-			if n := counts[value]; n > 0 {
-				text = label + " · " + fmt.Sprint(n)
-			}
+func (a *app) skillScopeOptions() []settingsOption {
+	options := []settingsOption{{label: tr("Global"), value: "", raw: ""}}
+	for _, project := range a.projects {
+		if (project.EnvironmentID == "" || project.EnvironmentID == settingsLocalEnvironment) && project.Path != "" {
+			options = append(options, settingsOption{label: project.Name, value: project.Path, raw: project.Path})
 		}
-		return settingsOption{label: text, value: value, raw: value}
 	}
-	return []settingsOption{
-		{label: tr("All skills"), value: "", raw: ""},
-		option("shared", tr("Shared")),
-		option("opencode", "OpenCode"),
-	}
+	return options
 }
 
 // marketCategoryOptions mirrors McpMarketCategory::FILTERS in display order.
@@ -130,13 +120,26 @@ func (a *app) providersListPane(c *ui.Context) {
 func (a *app) skillsListPane(c *ui.Context) {
 	st := &a.settings.catalog
 	backend := &a.settings.backend
+	options := a.skillScopeOptions()
+	selectedScope := false
+	for _, option := range options {
+		if option.value == st.skillSource {
+			selectedScope = true
+			break
+		}
+	}
+	if !selectedScope {
+		st.skillSource = ""
+		backend.skillSelected = ""
+	}
 	ui.Column(c).FillWidth().Padding(22, 10, 8, 10).Gap(7).Children(func() {
 		settingsSearchInput(c, "skills-search", tr("Search skills…"), &st.skillQuery)
-		a.settingsChoice(c, "skills-source-filter", tr("Skill source"), st.skillSource, skillsFilterWidth, skillSourceOptions(skillsSourceCounts(backend.skills)), func(option settingsOption) {
+		a.settingsChoice(c, "skills-source-filter", tr("Skills"), st.skillSource, skillsFilterWidth, options, func(option settingsOption) {
 			st.skillSource = option.value
+			backend.skillSelected = ""
+			backend.skillTrashConfirm = false
 		})
 	})
-	settingsOperationStatus(c, backend.skill, "")
 	// Mirror render_skills_settings: an unloaded catalog is a scanning
 	// state, an empty catalog is an empty state, otherwise the grouped
 	// roster. Query and source filter compose over catalog order.
@@ -183,7 +186,7 @@ func (a *app) skillsListPane(c *ui.Context) {
 	switch {
 	case !backend.skill.loaded && len(visible) == 0:
 		// Scanning status above stands in for the roster.
-	case len(backend.skills) == 0 && backend.skill.loaded:
+	case len(skillsVisible(backend.skills, "", st.skillSource)) == 0 && backend.skill.loaded:
 		mailStatusRow(c, tr("No skills yet"))
 	case len(rows) == 0:
 		mailStatusRow(c, tr("No skills match your search"))
@@ -201,8 +204,8 @@ func (a *app) skillsListPane(c *ui.Context) {
 			})
 		})
 	}
-	filtered := strings.TrimSpace(st.skillQuery) != "" || st.skillSource != ""
-	mailFooter(c, skillsFooterCaption(visible, backend, filtered), true)
+	filtered := strings.TrimSpace(st.skillQuery) != ""
+	mailFooter(c, skillsFooterCaption(visible, skillsVisible(backend.skills, "", st.skillSource), backend.skill.loaded, filtered), true)
 }
 
 // skillRosterRow is one roster entry: the 28 tile, the 12.5 medium name,
@@ -255,11 +258,11 @@ func (a *app) skillRosterRow(c *ui.Context, skill settingsSkill, selected bool) 
 // skillsFooterCaption mirrors the GPUI roster caption: the shown/total
 // filter caption while a query or source filter is active, else the skill
 // count plus the disabled count.
-func skillsFooterCaption(visible []settingsSkill, backend *settingsBackendState, filtered bool) string {
-	if !backend.skill.loaded {
+func skillsFooterCaption(visible, skills []settingsSkill, loaded, filtered bool) string {
+	if !loaded {
 		return tr("Scanning skill folders…")
 	}
-	total := len(backend.skills)
+	total := len(skills)
 	if filtered {
 		shown := fmt.Sprint(len(visible))
 		caption := strings.ReplaceAll(tr("%{shown} of %{total} shown"), "%{shown}", shown)
@@ -270,7 +273,7 @@ func skillsFooterCaption(visible []settingsSkill, backend *settingsBackendState,
 	}
 	caption := strings.ReplaceAll(tr("%{count} skills"), "%{count}", fmt.Sprint(total))
 	disabled := 0
-	for _, skill := range backend.skills {
+	for _, skill := range skills {
 		if !skill.Enabled {
 			disabled++
 		}
@@ -290,7 +293,6 @@ func (a *app) mcpListPane(c *ui.Context) {
 	ui.Column(c).FillWidth().Padding(10, 12, 0, 12).Children(func() {
 		settingsSearchInput(c, "mcp-search", tr("Search servers"), &st.mcpQuery)
 	})
-	settingsOperationStatus(c, backend.mcp, "")
 	matches := mcpServerMatchesFunc(st.mcpQuery)
 	// Sections render as plain columns (not a virtual list) so Local/Remote
 	// headers can hide while empty like the Rust page. The roster stays

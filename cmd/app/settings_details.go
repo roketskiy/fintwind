@@ -58,7 +58,6 @@ func (a *app) settingsCustomProviderDetail(c *ui.Context) {
 					})
 				})
 			}
-			settingsOperationStatus(c, st.provider, "")
 		})
 	})
 }
@@ -70,7 +69,6 @@ func (a *app) settingsSkillDetail(c *ui.Context) {
 	if selected == nil {
 		if !st.skill.loaded {
 			mailStatusRow(c, tr("Scanning skill folders…"))
-			settingsOperationStatus(c, st.skill, "")
 			return
 		}
 		ui.Column(c).FillWidth().Grow(1).MinHeight(0).Justify(ui.Center).AlignItems(ui.Center).Gap(10).Padding(40, 40).Children(func() {
@@ -159,7 +157,6 @@ func (a *app) settingsSkillDetail(c *ui.Context) {
 					componentTextButton(c, "skill-remove-confirm", tr("Move to Trash"), true).Disabled(st.skill.writing).OnClick(func() { a.trashSettingsSkill(skill) })
 				})
 			}
-			settingsOperationStatus(c, st.skill, "")
 			if strings.TrimSpace(skill.Body) != "" {
 				ui.Column(c).FillWidth().Margin(18, 0, 0, 0).Padding(14, 0, 0, 0).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
 					ui.Text(c, "SKILL.md").Font(monoFont()).FontSize(uiPx(9.5)).TextColor(palette.textMuted)

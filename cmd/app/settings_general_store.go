@@ -72,7 +72,6 @@ func (a *app) saveDaemonSetting(key string, value any) {
 	}
 	gate := a.settings.settingsWriteGate
 	st.settingsWrite = true
-	a.settings.message = tr("Saving...")
 	go func() {
 		ctx, cancel := context.WithTimeout(a.lifetime, 30*time.Second)
 		defer cancel()

@@ -110,7 +110,7 @@ func (a *app) scheduledBoard(c *ui.Context) {
 		board.visibleCount, board.query, board.filter, board.ready = len(visible), form.schedQuery, form.schedFilter, true
 	}
 	ui.Column(c.Key("scheduled-workspace")).Fill().MinWidth(0).Background(palette.canvas).
-		Radius(workspaceRadius, 0, 0, workspaceRadius).Clip().Padding(18, 24).Gap(18).Children(func() {
+		Padding(18, 24).Gap(18).Children(func() {
 		ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, tr("Scheduled tasks")).FontSize(uiPx(20)).FontWeight(500).TextColor(palette.text).Grow(1)
 			ui.Row(c).Width(220).Children(func() { settingsSearchInput(c, "scheduled-search", tr("Search tasks"), &form.schedQuery) })
@@ -118,19 +118,9 @@ func (a *app) scheduledBoard(c *ui.Context) {
 			componentTextButton(c, "scheduled-new", tr("New task"), true).Disabled(st.sched.writing).OnClick(func() { a.beginScheduledTask(nil) })
 		})
 		if st.sched.writing && !board.saveStarted.IsZero() {
-			if time.Since(board.saveStarted) < time.Second {
-				c.After(time.Second)
-			}
-			label := tr("Saving...")
-			if time.Since(board.saveStarted) >= time.Second {
-				label = tr("Save not confirmed")
-			}
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, label).FontSize(uiPx(11)).TextColor(palette.textSecondary)
 				componentTextButton(c, "scheduled-return-to-draft", tr("Edit task"), false).OnClick(func() { board.open = true })
 			})
-		} else {
-			settingsOperationStatus(c, st.sched, "")
 		}
 		if !st.sched.writing && form.schedAdding && !board.open {
 			componentTextButton(c, "scheduled-resume-draft", tr("Keep editing"), false).OnClick(func() { board.open = true })

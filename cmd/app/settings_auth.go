@@ -127,7 +127,6 @@ func (a *app) settingsBuiltinIntegrations(c *ui.Context) {
 		ui.Text(c, tr("Provider accounts")).Grow(1).FontSize(uiPx(12)).TextColor(palette.text)
 		componentTextButton(c, "integrations-load", tr("Load accounts"), false).Disabled(st.integration.loading).OnClick(a.loadSettingsIntegrations)
 	})
-	settingsOperationStatus(c, st.integration, "")
 	for _, integration := range st.integrations {
 		integration := integration
 		c.Key("integration-" + integration.ID)
@@ -449,6 +448,7 @@ func (a *app) runSettingsIntegrationCommand(command map[string]any) {
 	authGeneration := st.authGeneration
 	commandType, _ := command["type"].(string)
 	command["binary"], command["directory"] = a.settingsStr("opencode_binary_path", "opencode"), source.directory
+	st.integration.err, st.integration.message = "", ""
 	st.auth.busy = true
 	go func() {
 		ctx, cancel := context.WithTimeout(a.lifetime, 90*time.Second)
@@ -470,7 +470,7 @@ func (a *app) runSettingsIntegrationCommand(command map[string]any) {
 			if commandType == "authorizeProvider" || commandType == "activateProviderKeyAccount" {
 				st.integration.message = tr("Credential saved. Account status is refreshing.")
 			} else {
-				st.integration.message = ""
+				st.integration.message = tr("Saved")
 			}
 			if commandType == "activateProviderKeyAccount" {
 				st.selectedCredentialID = ""
@@ -545,11 +545,13 @@ func (a *app) startSettingsOAuthWithAnswers(kind, id, method string, answers map
 			st := &a.settings.backend
 			st.auth.busy = false
 			if err != nil {
-				st.auth = settingsAuthState{kind: kind, providerID: id, name: id, status: "Sign-in result is unknown. Reload accounts before starting another attempt."}
+				st.auth = settingsAuthState{kind: kind, providerID: id, name: id}
 				if kind == "provider" {
 					st.integration.uncertain = true
+					st.integration.err = tr("Sign-in result is unknown. Reload accounts before starting another attempt.")
 				} else {
 					st.mcp.uncertain = true
+					st.mcp.err = tr("Sign-in result is unknown. Reload accounts before starting another attempt.")
 				}
 				return
 			}
@@ -558,11 +560,13 @@ func (a *app) startSettingsOAuthWithAnswers(kind, id, method string, answers map
 					attempt := settingsAuthState{kind: kind, providerID: id, attemptID: body.Attempt.AttemptID}
 					a.cancelSettingsOAuthAttempt(source, attempt, binary)
 				}
-				st.auth = settingsAuthState{kind: kind, providerID: id, name: id, status: "Invalid authorization response. Reload accounts before retrying."}
+				st.auth = settingsAuthState{kind: kind, providerID: id, name: id}
 				if kind == "provider" {
 					st.integration.uncertain = true
+					st.integration.err = tr("Invalid authorization response. Reload accounts before retrying.")
 				} else {
 					st.mcp.uncertain = true
+					st.mcp.err = tr("Invalid authorization response. Reload accounts before retrying.")
 				}
 				return
 			}
@@ -641,7 +645,11 @@ func (a *app) finishSettingsOAuth(cancelAttempt bool) {
 			st := &a.settings.backend
 			st.auth.busy = false
 			if err != nil {
-				st.auth.status = tr("Sign-in status unavailable. ") + err.Error()
+				if auth.kind == "provider" {
+					st.integration.err = tr("Sign-in status unavailable. ") + err.Error()
+				} else {
+					st.mcp.err = tr("Sign-in status unavailable. ") + err.Error()
+				}
 				return
 			}
 			if cancelAttempt {
@@ -657,7 +665,16 @@ func (a *app) finishSettingsOAuth(cancelAttempt bool) {
 			}
 			st.auth.status = fmt.Sprintf(tr("Sign-in %s"), status)
 			if status == "complete" || status == "failed" || status == "expired" {
+				if status == "complete" {
+					st.integration.message = tr("Saved")
+				} else if auth.kind == "provider" {
+					st.integration.err = st.auth.status
+				} else {
+					st.mcp.err = st.auth.status
+				}
+				st.auth.status = ""
 				st.auth.attemptID, st.auth.url, st.auth.code = "", "", ""
+				a.collectSettingsFeedback()
 				if auth.kind == "provider" {
 					a.refreshSettingsIntegrations()
 				} else {

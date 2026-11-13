@@ -196,7 +196,7 @@ func mailEnabledBadge(c *ui.Context, enabled bool, label string) {
 func mailDetailTile(c *ui.Context, iconName string, size float32) {
 	ui.Row(c).Size(38, 38).Shrink(0).Radius(9).Background(palette.overlay).
 		Justify(ui.Center).AlignItems(ui.Center).Children(func() {
-		icon(c, iconName, size, palette.textSecondary)
+		markIcon(c, iconName, size, palette.textSecondary)
 	})
 }
 

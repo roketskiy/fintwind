@@ -166,9 +166,10 @@ func (a *app) ensureBuiltinProviders() {
 		st.builtinLoading = true
 		st.builtinGeneration++
 		gen := st.builtinGeneration
+		source, tableCache := st.source, st.modelsTable
 		go func() {
-			builtin, _ := fetchModelsDevProvidersWithFallback(nil)
-			table := fetchModelsDevCatalogWithFallback(st.modelsTable)
+			builtin, _ := fetchModelsDevProvidersWithFallback(source, nil)
+			table := fetchModelsDevCatalogWithFallback(source, tableCache)
 			a.post(func() {
 				st := &a.settings.backend
 				if st.builtinGeneration != gen {
@@ -229,14 +230,13 @@ func (a *app) providersListPaneFull(c *ui.Context) {
 					a.cancelProviderAdd()
 					a.selectProvider(id)
 				}, func() {
-					providerTile(c, provider.Name, !st.providerAdding && selected == id)
+					providerTile(c, provider.ID+" "+provider.Name, !st.providerAdding && selected == id)
 				}, func() {
 					mailStatusDot(c, !a.providerNeedsAuth(provider.ID))
 				})
 			}
 		}
 		mailSectionLabel(c, tr("Custom providers"), false)
-		settingsOperationStatus(c, backend.provider, "")
 		if backend.provider.loaded && len(backend.providers) == 0 {
 			mailStatusRow(c, tr("No custom providers yet"))
 		}
@@ -289,7 +289,7 @@ func (a *app) opencodeProviderDetail(c *ui.Context) {
 	ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
 		ui.Column(c).FillWidth().Padding(18, 24, 24, 24).Gap(14).Children(func() {
 			ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
-				mailDetailTile(c, "bot", 17)
+				mailDetailTile(c, "provider-opencode", 17)
 				ui.Column(c).Grow(1).MinWidth(0).Children(func() {
 					ui.Text(c, tr("OpenCode")).FontSize(uiPx(15)).FontWeight(500).TextColor(palette.text)
 					ui.Text(c, tr("Built-in · managed by the OpenCode CLI")).FontSize(uiPx(10.5)).TextColor(palette.textTertiary).SingleLine().Ellipsis("...")
@@ -328,7 +328,7 @@ func (a *app) customProviderDetail(c *ui.Context, provider settingsProvider) {
 	ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
 		ui.Column(c).FillWidth().Padding(18, 24, 24, 24).Gap(14).Children(func() {
 			ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
-				mailDetailTile(c, "bot", 17)
+				mailDetailTile(c, providerMark(provider.ID+" "+settingsProviderName(provider)), 17)
 				ui.Column(c).Grow(1).MinWidth(0).Children(func() {
 					if st.providerRenaming {
 						settingsTextInput(c, "provider-rename", tr("Name"), &st.providerRename, 220, settingsProviderName(provider))
@@ -392,7 +392,6 @@ func (a *app) customProviderDetail(c *ui.Context, provider settingsProvider) {
 					st.providerModelEditor = &providerModelEditorState{add: true, input: map[string]bool{"text": true}, output: map[string]bool{"text": true}}
 				})
 			}, func() { a.customProviderModelsSection(c, provider) })
-			settingsOperationStatus(c, st.provider, "")
 		})
 	})
 }
@@ -435,7 +434,7 @@ func (a *app) customProviderFields(c *ui.Context, provider settingsProvider) {
 					componentTextButton(c, "provider-key-hide", tr("Cancel"), false).OnClick(func() { a.loadProviderFields(provider.ID) })
 				}
 				if authorized {
-					componentTextButton(c, "provider-logout", tr("Log out"), false).Disabled(st.auth.busy).OnClick(func() { a.disconnectSettingsIntegration(provider.ID) })
+					componentTextButton(c, "provider-logout", tr("Log out"), false).Disabled(st.auth.busy || st.integration.uncertain).OnClick(func() { a.disconnectSettingsIntegration(provider.ID) })
 				}
 			})
 		}
@@ -899,9 +898,10 @@ func (a *app) fetchCustomModels(id string) {
 		apiKey = a.resolveProviderKeyForProbe(id)
 	}
 	st.provider.writing = true
+	source, tableCache := st.source, st.modelsTable
 	go func() {
 		models, listErr := fetchProviderAPIModels(format, baseURL, apiKey, providerListTimeout)
-		table := fetchModelsDevCatalogWithFallback(st.modelsTable)
+		table := fetchModelsDevCatalogWithFallback(source, tableCache)
 		a.post(func() {
 			st := &a.settings.backend
 			st.provider.writing = false
@@ -1148,7 +1148,6 @@ func (a *app) providerPickerForm(c *ui.Context) {
 					}
 				}
 			})
-			settingsOperationStatus(c, backend.provider, "")
 			formActions(c, "provider-form", tr("Cancel"), false, a.cancelProviderAdd, nil)
 		})
 	})
@@ -1184,7 +1183,6 @@ func (a *app) builtinAddForm(c *ui.Context, providerID string) {
 			if !a.providerSupportsKey(providerID) && len(a.providerOAuthMethods(providerID)) == 0 {
 				ui.Text(c, tr("Run `opencode auth login` in a terminal or use /connect in the TUI, then refresh this page.")).FontSize(uiPx(11)).TextColor(palette.textSecondary).Wrap()
 			}
-			settingsOperationStatus(c, backend.provider, "")
 			ui.Row(c).Gap(8).Children(func() {
 				if componentTextButton(c, "provider-form-cancel", tr("Cancel"), false).Clicked() {
 					a.cancelProviderAdd()
@@ -1255,7 +1253,6 @@ func (a *app) customAddForm(c *ui.Context) {
 			if strings.TrimSpace(st.pfName) != "" && baseURLValid(strings.TrimSpace(st.pfBaseURL)) && len(st.pfModels) == 0 {
 				ui.Text(c, tr("Add at least one model before saving the provider.")).FontSize(uiPx(10.5)).TextColor(palette.textSecondary)
 			}
-			settingsOperationStatus(c, backend.provider, "")
 			valid := strings.TrimSpace(st.pfName) != "" && baseURLValid(strings.TrimSpace(st.pfBaseURL)) && len(providerDraftModelIDs(st)) > 0
 			formActions(c, "provider-form", tr("Add provider"), !valid || !backend.provider.loaded || backend.provider.writing, a.cancelProviderAdd, a.saveSettingsProvider)
 		})
@@ -1324,9 +1321,10 @@ func (a *app) fetchAddFormModels() {
 	backend.providerFormFetching = true
 	backend.providerFormFetchGen++
 	gen := backend.providerFormFetchGen
+	source, tableCache := backend.source, backend.modelsTable
 	go func() {
 		models, listErr := fetchProviderAPIModels(format, baseURL, apiKey, providerListTimeout)
-		table := fetchModelsDevCatalogWithFallback(backend.modelsTable)
+		table := fetchModelsDevCatalogWithFallback(source, tableCache)
 		a.post(func() {
 			st := &a.settings.backend
 			catalog := &a.settings.catalog
@@ -1346,11 +1344,22 @@ func (a *app) fetchAddFormModels() {
 				catalog.addProviderModel()
 				draft := catalog.pfModels[len(catalog.pfModels)-1]
 				draft.id = apiModel.id
+				basics := table.resolveBasics(apiModel.id, nil)
 				if apiModel.contextWindow != nil {
 					draft.context = formatContextWindow(*apiModel.contextWindow)
-				} else if table != nil {
-					if basics := table.resolveBasics(apiModel.id, nil); basics.contextWindow != nil {
-						draft.context = formatContextWindow(*basics.contextWindow)
+				} else if basics.contextWindow != nil {
+					draft.context = formatContextWindow(*basics.contextWindow)
+				}
+				if len(basics.inputModalities) > 0 {
+					draft.input = map[string]bool{}
+					for _, modality := range basics.inputModalities {
+						draft.input[modality] = true
+					}
+				}
+				if len(basics.outputModalities) > 0 {
+					draft.output = map[string]bool{}
+					for _, modality := range basics.outputModalities {
+						draft.output[modality] = true
 					}
 				}
 			}
@@ -1410,7 +1419,7 @@ func (a *app) builtinProviderDetail(c *ui.Context, provider modelsDevProvider) {
 	ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
 		ui.Column(c).FillWidth().Padding(18, 24, 24, 24).Gap(14).Children(func() {
 			ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
-				mailDetailTile(c, "bot", 17)
+				mailDetailTile(c, providerMark(provider.ID+" "+provider.Name), 17)
 				ui.Column(c).Grow(1).MinWidth(0).Children(func() {
 					ui.Text(c, provider.Name).FontSize(uiPx(15)).FontWeight(500).TextColor(palette.text).SingleLine().Ellipsis("...")
 					ui.Text(c, provider.ID).FontSize(uiPx(10)).TextColor(palette.textTertiary).SingleLine().Ellipsis("...")
@@ -1428,7 +1437,7 @@ func (a *app) builtinProviderDetail(c *ui.Context, provider modelsDevProvider) {
 			})
 			providerInfoCard(c, "builtin-login", "key", "Login information", func() {
 				if authorized {
-					componentTextButton(c, "provider-logout", tr("Log out"), false).Disabled(backend.auth.busy).OnClick(func() { a.disconnectSettingsIntegration(provider.ID) })
+					componentTextButton(c, "provider-logout", tr("Log out"), false).Disabled(backend.auth.busy || backend.integration.uncertain).OnClick(func() { a.disconnectSettingsIntegration(provider.ID) })
 				}
 			}, func() {
 				if provider.API != nil {
@@ -1495,7 +1504,6 @@ func (a *app) builtinProviderDetail(c *ui.Context, provider modelsDevProvider) {
 					}
 				}
 			})
-			settingsOperationStatus(c, backend.provider, "")
 		})
 	})
 }

@@ -158,6 +158,7 @@ type settingsSkill struct {
 	Description     string                 `json:"description"`
 	Scope           string                 `json:"scope"`
 	Project         string                 `json:"project"`
+	ProjectRoot     string                 `json:"projectRoot"`
 	Installs        []settingsSkillInstall `json:"installs"`
 	Enabled         bool                   `json:"enabled"`
 	AllowedTools    *string                `json:"allowedTools"`
@@ -287,10 +288,11 @@ func (a *app) loadSettingsProviders() {
 	st.providerLoadGen++
 	generation := st.providerLoadGen
 	source, sourceGen := st.source, st.generation
+	tableCache, builtinCache := st.modelsTable, st.builtinProviders
 	go func() {
 		providers, err := loadOpencodeProviders()
-		table := fetchModelsDevCatalogWithFallback(a.settings.backend.modelsTable)
-		builtin, _ := fetchModelsDevProvidersWithFallback(a.settings.backend.builtinProviders)
+		table := fetchModelsDevCatalogWithFallback(source, tableCache)
+		builtin, _ := fetchModelsDevProvidersWithFallback(source, builtinCache)
 		a.post(func() {
 			if !a.settingsSourceMatches(source, sourceGen) || a.settings.backend.providerLoadGen != generation {
 				return
@@ -553,22 +555,6 @@ func settingsObject(parent map[string]any, key string) map[string]any {
 func settingsString(object map[string]any, key string) string {
 	value, _ := object[key].(string)
 	return value
-}
-
-func settingsOperationStatus(c *ui.Context, op settingsOperation, empty string) {
-	text := empty
-	if op.loading {
-		text = tr("Loading...")
-	} else if op.writing {
-		text = tr("Saving...")
-	} else if op.err != "" {
-		text = op.err
-	} else if op.message != "" {
-		text = op.message
-	}
-	if text != "" {
-		ui.Text(c, text).FontSize(uiPx(11)).TextColor(palette.textSecondary).Wrap()
-	}
 }
 
 func settingsMatches(query, text string) bool {

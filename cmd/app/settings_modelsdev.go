@@ -1,9 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,11 +11,7 @@ import (
 	"time"
 )
 
-const modelsDevCatalogURL = "https://models.dev/api.json"
-
 const modelsDevReuseWindow = 10 * time.Minute
-
-const maxCatalogBytes = 64 * 1024 * 1024
 
 type modelsDevModel struct {
 	ID               string   `json:"id"`
@@ -78,8 +74,8 @@ func (p *modelsDevProviders) sorted() []modelsDevProvider {
 }
 
 type modelsDevTable struct {
-	FetchedAt int64                         `json:"fetched_at"`
-	Models    map[string][]modelsDevModel   `json:"models"`
+	FetchedAt int64                       `json:"fetched_at"`
+	Models    map[string][]modelsDevModel `json:"models"`
 }
 
 func (t *modelsDevTable) age() time.Duration {
@@ -191,24 +187,6 @@ func writeCachedModelsDevProviders(providers *modelsDevProviders) {
 	if os.WriteFile(tmp, raw, 0o644) == nil {
 		_ = os.Rename(tmp, modelsDevProvidersCachePath())
 	}
-}
-
-func modelsDevHTTPGet(url string) (int, string, error) {
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Get(url)
-	if err != nil {
-		return 0, "", err
-	}
-	defer resp.Body.Close()
-	limited := io.LimitReader(resp.Body, maxCatalogBytes+1)
-	body, err := io.ReadAll(limited)
-	if err != nil {
-		return 0, "", err
-	}
-	if len(body) > maxCatalogBytes {
-		return 0, "", io.ErrShortBuffer
-	}
-	return resp.StatusCode, string(body), nil
 }
 
 func parseModelsDevModel(id string, spec map[string]any, providerID string) *modelsDevModel {
@@ -407,13 +385,25 @@ func parseModelsDevProviders(body string) (*modelsDevProviders, error) {
 	return &modelsDevProviders{FetchedAt: now, Providers: providers, SortedIDs: sortedIDs}, nil
 }
 
-func fetchModelsDevCatalog() (*modelsDevTable, error) {
-	status, body, err := modelsDevHTTPGet(modelsDevCatalogURL)
+func fetchModelsDevDocument(source settingsSource) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancel()
+	var result struct {
+		Catalog json.RawMessage `json:"catalog"`
+	}
+	if err := settingsRequest(ctx, source, map[string]any{"type": "fetchModelsDevCatalog"}, "modelsDevCatalog", &result); err != nil {
+		return "", err
+	}
+	if len(result.Catalog) == 0 {
+		return "", io.ErrUnexpectedEOF
+	}
+	return string(result.Catalog), nil
+}
+
+func fetchModelsDevCatalog(source settingsSource) (*modelsDevTable, error) {
+	body, err := fetchModelsDevDocument(source)
 	if err != nil {
 		return nil, err
-	}
-	if status != 200 {
-		return nil, io.ErrUnexpectedEOF
 	}
 	table, err := parseModelsDevCatalog(body)
 	if err != nil {
@@ -423,8 +413,17 @@ func fetchModelsDevCatalog() (*modelsDevTable, error) {
 	return table, nil
 }
 
-func fetchModelsDevCatalogWithFallback(session *modelsDevTable) *modelsDevTable {
-	if table, err := fetchModelsDevCatalog(); err == nil {
+func fetchModelsDevCatalogWithFallback(source settingsSource, session *modelsDevTable) *modelsDevTable {
+	if session != nil && session.age() < modelsDevReuseWindow {
+		return session
+	}
+	if session == nil {
+		if cached := cachedModelsDevTable(); cached != nil {
+			go func() { _, _ = fetchModelsDevDocument(source) }()
+			return cached
+		}
+	}
+	if table, err := fetchModelsDevCatalog(source); err == nil {
 		return table
 	}
 	if session != nil {
@@ -433,12 +432,18 @@ func fetchModelsDevCatalogWithFallback(session *modelsDevTable) *modelsDevTable 
 	return cachedModelsDevTable()
 }
 
-func fetchModelsDevProvidersWithFallback(session *modelsDevProviders) (*modelsDevProviders, error) {
+func fetchModelsDevProvidersWithFallback(source settingsSource, session *modelsDevProviders) (*modelsDevProviders, error) {
 	if session != nil && session.age() < modelsDevReuseWindow {
 		return session, nil
 	}
-	status, body, err := modelsDevHTTPGet(modelsDevCatalogURL)
-	if err == nil && status == 200 && len(body) <= maxCatalogBytes {
+	if session == nil {
+		if cached := cachedModelsDevProviders(); cached != nil {
+			go func() { _, _ = fetchModelsDevDocument(source) }()
+			return cached, nil
+		}
+	}
+	body, err := fetchModelsDevDocument(source)
+	if err == nil {
 		if providers, perr := parseModelsDevProviders(body); perr == nil {
 			writeCachedModelsDevProviders(providers)
 			return providers, nil

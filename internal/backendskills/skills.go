@@ -27,6 +27,7 @@ type Service struct {
 type location struct {
 	Source, Scope, Root string
 	Project             *string
+	ProjectRoot         string
 }
 type Install struct {
 	Source    string `json:"source"`
@@ -39,6 +40,7 @@ type Entry struct {
 	Description     string    `json:"description"`
 	Scope           string    `json:"scope"`
 	Project         *string   `json:"project"`
+	ProjectRoot     string    `json:"projectRoot,omitempty"`
 	Installs        []Install `json:"installs"`
 	Enabled         bool      `json:"enabled"`
 	AllowedTools    *string   `json:"allowedTools"`
@@ -109,7 +111,8 @@ func (s *Service) Handle(ctx context.Context, c backendstore.Object) (backendsto
 				return nil, true, errors.New("skill project outside isolated workspace")
 			}
 			name := project.Name
-			locations = append(locations, location{Source: "shared", Scope: "project", Root: filepath.Join(path, ".agents", "skills"), Project: &name}, location{Source: "openCode", Scope: "project", Root: filepath.Join(path, ".opencode", "skills"), Project: &name})
+			projectRoot := filepath.Clean(project.Root)
+			locations = append(locations, location{Source: "shared", Scope: "project", Root: filepath.Join(path, ".agents", "skills"), Project: &name, ProjectRoot: projectRoot}, location{Source: "openCode", Scope: "project", Root: filepath.Join(path, ".opencode", "skills"), Project: &name, ProjectRoot: projectRoot})
 		}
 		entries, err := s.scan(ctx, locations)
 		if err != nil {
@@ -287,7 +290,7 @@ func (s *Service) scan(ctx context.Context, locations []location) ([]Entry, erro
 			install := Install{Source: location.Source, Dir: dir, SkillFile: filepath.Join(dir, fileName), Enabled: enabled}
 			key := "user\x00" + title
 			if location.Project != nil {
-				key = "project\x00" + *location.Project + "\x00" + title
+				key = "project\x00" + location.ProjectRoot + "\x00" + title
 			}
 			modified := info.ModTime().Unix()
 			var allowed *string
@@ -313,7 +316,7 @@ func (s *Service) scan(ctx context.Context, locations []location) ([]Entry, erro
 			} else {
 				files, bytes := measure(ctx, root, name, 0, new(int))
 				identities[key] = len(result)
-				result = append(result, Entry{Name: title, Description: front["description"], Scope: location.Scope, Project: location.Project, Installs: []Install{install}, Enabled: enabled, AllowedTools: allowed, Body: strings.TrimSpace(body), SupportingFiles: max(0, files-1), TotalBytes: bytes, ModifiedAt: &modified})
+				result = append(result, Entry{Name: title, Description: front["description"], Scope: location.Scope, Project: location.Project, ProjectRoot: location.ProjectRoot, Installs: []Install{install}, Enabled: enabled, AllowedTools: allowed, Body: strings.TrimSpace(body), SupportingFiles: max(0, files-1), TotalBytes: bytes, ModifiedAt: &modified})
 			}
 		}
 		root.Close()

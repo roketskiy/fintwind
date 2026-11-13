@@ -13,7 +13,6 @@ type appPreferences struct {
 	values       map[string]any
 	loadError    string
 	writes       chan preferenceWrite
-	pending      uint64
 	awake        *preferenceAwake
 	runtimeError string
 	writer       *preferenceWriterResult
@@ -25,10 +24,10 @@ type preferenceWriterResult struct {
 }
 
 type preferenceWrite struct {
-	key      string
-	value    any
-	sequence uint64
-	changes  map[string]any
+	key     string
+	value   any
+	changes map[string]any
+	notify  bool
 }
 
 // initPreferences runs once after loadLocalSettings and before the first view.
@@ -48,7 +47,7 @@ func (a *app) initPreferences(layout layoutDefaults) {
 			err := writePreferenceFile(path, loadError, write)
 			result.err = err
 			a.post(func() {
-				if write.sequence != a.settings.preferences.pending {
+				if !write.notify {
 					return
 				}
 				if err != nil {
@@ -138,7 +137,6 @@ func (a *app) savePreference(key string, value any) {
 		a.settings.message = tr("Not saved. Local preferences are unavailable")
 		return
 	}
-	prefs.pending++
 	changes := map[string]any{}
 	for currentKey, currentValue := range prefs.values {
 		if localPreferenceKey(currentKey) {
@@ -146,11 +144,10 @@ func (a *app) savePreference(key string, value any) {
 		}
 	}
 	changes[key] = value
-	write := preferenceWrite{key: key, value: value, sequence: prefs.pending, changes: changes}
+	write := preferenceWrite{key: key, value: value, changes: changes, notify: a.mode == modeSettings}
 	select {
 	case prefs.writes <- write:
 		prefs.values[key] = value
-		a.settings.message = tr("Saving...")
 		a.mdReady = false
 		if key == settingsKeyTranscriptWidth {
 			if width, ok := value.(float64); ok {

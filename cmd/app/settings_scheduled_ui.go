@@ -79,7 +79,6 @@ func (a *app) scheduledTaskDetail(c *ui.Context, task scheduledTask) {
 					componentTextButton(c, "scheduled-open-session", tr("Open session"), false).OnClick(func() { a.openSession(sessionID) })
 				}
 			}
-			settingsOperationStatus(c, st.sched, "")
 			ui.Text(c, tr("Scheduled runs stop when Fintwind exits, and missed runs are not replayed.")).FontSize(uiPx(11)).TextColor(palette.textTertiary).Wrap()
 		})
 	})
@@ -120,7 +119,6 @@ func (a *app) scheduledForm(c *ui.Context) {
 		})
 	})
 	ui.Column(c.Key("scheduled-form-footer")).FillWidth().Padding(12, 4, 0, 4).Gap(8).Children(func() {
-		settingsOperationStatus(c, backend.sched, "")
 		formActions(c, "scheduled-form", tr("Save"), !backend.sched.loaded || backend.sched.writing || backend.sched.uncertain, a.cancelScheduledTask, a.saveScheduledTask)
 	})
 }

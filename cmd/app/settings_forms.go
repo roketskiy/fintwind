@@ -153,7 +153,6 @@ func (a *app) mcpAddForm(c *ui.Context) {
 					ui.Text(c, hint).FontSize(uiPx(11)).TextColor(palette.textSecondary).Wrap()
 				})
 			}
-			settingsOperationStatus(c, backend.mcp, "")
 			formActions(c, "mcp-form", tr("Add server"), !valid || !backend.mcp.loaded || backend.mcp.writing || backend.mcp.uncertain, func() {
 				st.mcpAdding = false
 				a.clearSettingsMcpSecrets()

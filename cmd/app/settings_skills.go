@@ -62,22 +62,11 @@ func skillMatches(skill settingsSkill, query string) bool {
 	return strings.Contains(strings.ToLower(skill.Project), q)
 }
 
-// skillsVisible filters the catalog in catalog order: a grouped skill passes
-// the source filter when any of its copies lives in that source's tree.
 func skillsVisible(skills []settingsSkill, query, source string) []settingsSkill {
 	visible := make([]settingsSkill, 0, len(skills))
 	for _, skill := range skills {
-		if source != "" {
-			matched := false
-			for _, install := range skill.Installs {
-				if strings.EqualFold(install.Source, source) {
-					matched = true
-					break
-				}
-			}
-			if !matched {
-				continue
-			}
+		if source == "" && skill.Scope != "user" || source != "" && (skill.Scope != "project" || !strings.EqualFold(filepath.Clean(skill.ProjectRoot), filepath.Clean(source))) {
+			continue
 		}
 		if !skillMatches(skill, query) {
 			continue
@@ -85,24 +74,6 @@ func skillsVisible(skills []settingsSkill, query, source string) []settingsSkill
 		visible = append(visible, skill)
 	}
 	return visible
-}
-
-// skillsSourceCounts counts distinct skills per install source so the filter
-// menu never surprises with an empty pick.
-func skillsSourceCounts(skills []settingsSkill) map[string]int {
-	counts := map[string]int{}
-	for _, skill := range skills {
-		seen := map[string]bool{}
-		for _, install := range skill.Installs {
-			key := strings.ToLower(strings.TrimSpace(install.Source))
-			if key == "" || seen[key] {
-				continue
-			}
-			seen[key] = true
-			counts[key]++
-		}
-	}
-	return counts
 }
 
 // skillProjectLabel groups the roster: a project name, else User skills.

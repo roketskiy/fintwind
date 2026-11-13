@@ -19,6 +19,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 )
 
 type mode int
@@ -507,7 +508,9 @@ func (a *app) post(update func()) {
 			return
 		default:
 		}
+		a.collectSettingsFeedback()
 		update()
+		a.collectSettingsFeedback()
 	})
 }
 
@@ -853,6 +856,21 @@ func (a *app) view(c *ui.Context) {
 		a.commandPaletteLayer(c)
 		a.sessionDeleteConfirmLayer(c)
 		a.helpLayer(c)
+	})
+	a.collectSettingsFeedback()
+	for _, item := range a.settings.feedback.pending {
+		feedback.ShowToast(c, item)
+	}
+	a.settings.feedback.pending = nil
+	feedback.ToastHost(c, feedback.ToastHostProps{})
+}
+
+func workspaceFrame(c *ui.Context, body func()) {
+	outer := ui.Column(c).Grow(1).MinWidth(0).FillHeight().Padding(5).
+		Background(palette.rail.Mix(palette.surface, 0.45)).Radius(workspaceRadius).Clip()
+	workspaceShadow(outer).Children(func() {
+		ui.Column(c).FillWidth().Grow(1).MinHeight(0).Background(palette.surface).
+			Border(1, palette.borderStrong).Radius(workspaceRadius - 5).Clip().Children(body)
 	})
 }
 

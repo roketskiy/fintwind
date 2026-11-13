@@ -109,7 +109,8 @@ func (a *app) scheduledBoard(c *ui.Context) {
 		}
 		board.visibleCount, board.query, board.filter, board.ready = len(visible), form.schedQuery, form.schedFilter, true
 	}
-	ui.Column(c.Key("scheduled-workspace")).Fill().MinWidth(0).Background(palette.canvas).Padding(18, 24).Gap(18).Children(func() {
+	ui.Column(c.Key("scheduled-workspace")).Fill().MinWidth(0).Background(palette.canvas).
+		Radius(workspaceRadius, 0, 0, workspaceRadius).Clip().Padding(18, 24).Gap(18).Children(func() {
 		ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, tr("Scheduled tasks")).FontSize(uiPx(20)).FontWeight(500).TextColor(palette.text).Grow(1)
 			ui.Row(c).Width(220).Children(func() { settingsSearchInput(c, "scheduled-search", tr("Search tasks"), &form.schedQuery) })

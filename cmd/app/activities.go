@@ -41,16 +41,17 @@ type activitySection struct {
 }
 
 // activityCluster renders one transcript block: the summary line that toggles
-// the card list, plus the cards themselves.
-func (a *app) activityCluster(c *ui.Context, blockIndex int, liveTurn bool, latestGroup bool) {
-	session := a.detail
+// the card list, plus the cards themselves. Session and disclosure map are
+// explicit so the capsule's subagent transcript renders through the same
+// builder without touching the selected session's state.
+func (a *app) activityCluster(c *ui.Context, session *model.Session, disclosure map[int]int, blockIndex int, liveTurn bool, latestGroup bool) {
 	if session == nil || blockIndex < 0 || blockIndex >= len(session.TranscriptBlocks) {
 		return
 	}
 	block := &session.TranscriptBlocks[blockIndex]
 	activities := block.Activities
-	liveReasoningID := a.liveReasoningID(activities, blockIndex, liveTurn)
-	state := a.clusterState(blockIndex, liveTurn, latestGroup)
+	liveReasoningID := a.liveReasoningID(session, activities, blockIndex, liveTurn)
+	state := clusterState(disclosure, blockIndex, liveTurn, latestGroup)
 	expanded := state != clusterCollapsed
 	headerTitle := activityHeaderTitle(activities, expanded, liveTurn && latestGroup)
 
@@ -75,9 +76,9 @@ func (a *app) activityCluster(c *ui.Context, blockIndex int, liveTurn bool, late
 		})
 		if header.Clicked() {
 			if expanded {
-				a.clusterDisclosure[blockIndex] = clusterCollapsed
+				disclosure[blockIndex] = clusterCollapsed
 			} else {
-				a.clusterDisclosure[blockIndex] = clusterRecent
+				disclosure[blockIndex] = clusterRecent
 			}
 		}
 		if !expanded {
@@ -127,9 +128,9 @@ func (a *app) activityCluster(c *ui.Context, blockIndex int, liveTurn bool, late
 				})
 				if more.Clicked() {
 					if showingAll {
-						a.clusterDisclosure[blockIndex] = clusterRecent
+						disclosure[blockIndex] = clusterRecent
 					} else {
-						a.clusterDisclosure[blockIndex] = clusterAll
+						disclosure[blockIndex] = clusterAll
 					}
 				}
 			}
@@ -142,8 +143,8 @@ func (a *app) activityCluster(c *ui.Context, blockIndex int, liveTurn bool, late
 }
 
 // clusterState resolves a block's disclosure, opening the newest live group.
-func (a *app) clusterState(blockIndex int, liveTurn bool, latestGroup bool) int {
-	if state, ok := a.clusterDisclosure[blockIndex]; ok {
+func clusterState(disclosure map[int]int, blockIndex int, liveTurn bool, latestGroup bool) int {
+	if state, ok := disclosure[blockIndex]; ok {
 		return state
 	}
 	if liveTurn && latestGroup {
@@ -152,8 +153,7 @@ func (a *app) clusterState(blockIndex int, liveTurn bool, latestGroup bool) int 
 	return clusterCollapsed
 }
 
-func (a *app) liveReasoningID(activities []model.ActivityItem, blockIndex int, liveTurn bool) string {
-	session := a.detail
+func (a *app) liveReasoningID(session *model.Session, activities []model.ActivityItem, blockIndex int, liveTurn bool) string {
 	if session == nil || !liveTurn || blockIndex+1 != len(session.TranscriptBlocks) {
 		return ""
 	}
@@ -172,10 +172,11 @@ func (a *app) liveReasoningID(activities []model.ActivityItem, blockIndex int, l
 // mergesReasoning reports whether this model streams short summary fragments
 // instead of one full chain of thought.
 func (a *app) mergesReasoning() bool {
-	if a.detail == nil || a.detail.Model == nil {
+	session := a.detail
+	if session == nil || session.Model == nil {
 		return false
 	}
-	return summaryOnlyReasoningModel(*a.detail.Model)
+	return summaryOnlyReasoningModel(*session.Model)
 }
 
 func summaryOnlyReasoningModel(value string) bool {

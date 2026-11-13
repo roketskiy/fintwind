@@ -246,7 +246,7 @@ func (a *app) transcriptRowView(c *ui.Context, index int) {
 			switch row.Kind {
 			case transcriptMessage:
 				if row.MessageIndex >= 0 && row.MessageIndex < len(a.detail.Messages) {
-					a.messageView(c, row.MessageIndex)
+					a.messageView(c, a.detail, row.MessageIndex)
 				}
 			case transcriptBlock:
 				if row.BlockIndex < 0 || row.BlockIndex >= len(a.detail.TranscriptBlocks) {
@@ -260,7 +260,7 @@ func (a *app) transcriptRowView(c *ui.Context, index int) {
 					}
 				}
 				latest := row.BlockIndex+1 == len(a.detail.TranscriptBlocks)
-				a.activityCluster(c, row.BlockIndex, liveTurn, latest)
+				a.activityCluster(c, a.detail, a.clusterDisclosure, row.BlockIndex, liveTurn, latest)
 			case transcriptFold:
 				a.turnFoldRow(c, row.TurnID, true)
 			case transcriptStopped:
@@ -387,11 +387,11 @@ func formatWorkingElapsed(seconds uint64) string {
 	}
 }
 
-func (a *app) messageView(c *ui.Context, messageIndex int) {
-	if messageIndex < 0 || messageIndex >= len(a.detail.Messages) {
+func (a *app) messageView(c *ui.Context, session *model.Session, messageIndex int) {
+	if session == nil || messageIndex < 0 || messageIndex >= len(session.Messages) {
 		return
 	}
-	m := &a.detail.Messages[messageIndex]
+	m := &session.Messages[messageIndex]
 	text := m.Text()
 	switch m.Role {
 	case "user":
@@ -477,7 +477,7 @@ func (a *app) messageView(c *ui.Context, messageIndex int) {
 				_ = bubble
 			}
 			_ = a.messageCopyMenu(column, m.ID, "user", text)
-			footer := a.messageFooter(c, m, messageIndex, text, true)
+			footer := a.messageFooter(c, session, m, messageIndex, text, true)
 			if !column.Hovered() {
 				footer.Invisible()
 			}
@@ -489,20 +489,20 @@ func (a *app) messageView(c *ui.Context, messageIndex int) {
 			if text != "" {
 				a.renderMarkdown(c, "msg:"+m.ID, text, &a.md, m.Streaming)
 			}
-			if m.TurnID != nil && changedFilesInlineMessageIndex(a.detail, *m.TurnID) == messageIndex {
+			if m.TurnID != nil && changedFilesInlineMessageIndex(session, *m.TurnID) == messageIndex {
 				a.changedFilesCard(c, *m.TurnID, true)
 			}
-			if copyContent, at, ok := a.assistantFooter(messageIndex); ok || a.assistantTurnStats(messageIndex) != "" {
+			if copyContent, at, ok := a.assistantFooter(session, messageIndex); ok || a.assistantTurnStats(session, messageIndex) != "" {
 				row := ui.Row(c).FillWidth().MinWidth(0).Gap(8).AlignItems(ui.Center)
 				row.Children(func() {
-					if stats := a.assistantTurnStats(messageIndex); stats != "" {
+					if stats := a.assistantTurnStats(session, messageIndex); stats != "" {
 						ui.Row(c).Grow(1).MinWidth(0).Children(func() {
 							ui.Text(c, stats).FontSize(uiPx(11.5)).FixedLineHeight(uiPx(16)).
 								TextColor(palette.textTertiary).SingleLine().Ellipsis("...")
 						})
 					}
 					if ok {
-						footer := a.assistantFooterRow(c, m, messageIndex, copyContent, at)
+						footer := a.assistantFooterRow(c, session, m, messageIndex, copyContent, at)
 						footer.Margin(0, 0, 0, -7)
 						if !column.Hovered() {
 							footer.Invisible()
@@ -514,7 +514,7 @@ func (a *app) messageView(c *ui.Context, messageIndex int) {
 		// The row menu copies what the footer would copy, matching the
 		// source's menu_copy_content.
 		menuCopy := text
-		if content, _, ok := a.assistantFooter(messageIndex); ok {
+		if content, _, ok := a.assistantFooter(session, messageIndex); ok {
 			menuCopy = content
 		}
 		_ = a.messageCopyMenu(column, m.ID, "assistant", menuCopy)
@@ -562,8 +562,7 @@ func userMessageCollapsible(content string) bool {
 }
 
 // assistantFooter resolves the settled answer's copy content and timestamp.
-func (a *app) assistantFooter(messageIndex int) (string, uint64, bool) {
-	session := a.detail
+func (a *app) assistantFooter(session *model.Session, messageIndex int) (string, uint64, bool) {
 	if session == nil || messageIndex < 0 || messageIndex >= len(session.Messages) {
 		return "", 0, false
 	}
@@ -575,7 +574,7 @@ func (a *app) assistantFooter(messageIndex int) (string, uint64, bool) {
 		return message.Content, message.CreatedAt, true
 	}
 	turnID := *message.TurnID
-	turn := a.turnByID(turnID)
+	turn := a.turnByID(session, turnID)
 	if turn != nil && turn.Status == "running" {
 		return "", 0, false
 	}
@@ -610,19 +609,18 @@ func (a *app) assistantFooter(messageIndex int) (string, uint64, bool) {
 
 // assistantTurnStats builds the settled turn's stats line:
 // "Build · model · 25.9s · 64.5 tok/s". Segments drop out when missing.
-func (a *app) assistantTurnStats(messageIndex int) string {
-	session := a.detail
+func (a *app) assistantTurnStats(session *model.Session, messageIndex int) string {
 	if session == nil || messageIndex < 0 || messageIndex >= len(session.Messages) {
 		return ""
 	}
 	message := &session.Messages[messageIndex]
-	if _, _, ok := a.assistantFooter(messageIndex); !ok {
+	if _, _, ok := a.assistantFooter(session, messageIndex); !ok {
 		return ""
 	}
 	if message.TurnID == nil {
 		return ""
 	}
-	turn := a.turnByID(*message.TurnID)
+	turn := a.turnByID(session, *message.TurnID)
 	if turn == nil {
 		return ""
 	}
@@ -697,16 +695,21 @@ func titlecaseAgent(agent string) string {
 	return out.String()
 }
 
-func (a *app) turnByID(turnID string) *model.AgentTurn {
-	for index := range a.detail.Turns {
-		if a.detail.Turns[index].ID == turnID {
-			return &a.detail.Turns[index]
+// turnByID looks a turn up in the session it belongs to; the capsule's
+// synthetic subagent transcript passes its own session here.
+func (a *app) turnByID(session *model.Session, turnID string) *model.AgentTurn {
+	if session == nil {
+		return nil
+	}
+	for index := range session.Turns {
+		if session.Turns[index].ID == turnID {
+			return &session.Turns[index]
 		}
 	}
 	return nil
 }
 
-func (a *app) messageFooter(c *ui.Context, m *model.Message, messageIndex int, copyContent string, alignRight bool) ui.Element {
+func (a *app) messageFooter(c *ui.Context, session *model.Session, m *model.Message, messageIndex int, copyContent string, alignRight bool) ui.Element {
 	footer := ui.Row(c).Height(27).Gap(1).AlignItems(ui.Center)
 	if alignRight {
 		footer.FillWidth().Justify(ui.End)
@@ -735,7 +738,7 @@ func (a *app) messageFooter(c *ui.Context, m *model.Message, messageIndex int, c
 			a.messageTime(c, m.CreatedAt)
 		}
 		if alignRight {
-			turnCount, ready, tip := a.editRewindState(messageIndex)
+			turnCount, ready, tip := a.editRewindState(session, messageIndex)
 			_ = turnCount
 			if tip != "" {
 				rewind := ui.ButtonBase(c).Label(tip).Tooltip(tip).Size(27, 27).
@@ -759,7 +762,7 @@ func (a *app) messageFooter(c *ui.Context, m *model.Message, messageIndex int, c
 	return footer
 }
 
-func (a *app) assistantFooterRow(c *ui.Context, m *model.Message, messageIndex int, copyContent string, at uint64) ui.Element {
+func (a *app) assistantFooterRow(c *ui.Context, session *model.Session, m *model.Message, messageIndex int, copyContent string, at uint64) ui.Element {
 	footer := ui.Row(c).Height(27).Gap(1).AlignItems(ui.Center).Shrink(0)
 	footer.Children(func() {
 		copyButton := ui.ButtonBase(c).Label(tr("Copy message")).Size(30, 30).Radius(8).Center()
@@ -782,7 +785,7 @@ func (a *app) assistantFooterRow(c *ui.Context, m *model.Message, messageIndex i
 		// render_message_footer: 30x30, radius 8, 15 icon in text_muted,
 		// hover overlay only while live, dimmed while another fork runs,
 		// and a spinning loader while this response's fork prepares.
-		if action := a.forkActionForMessage(messageIndex); action != nil {
+		if action := a.forkActionForMessage(session, messageIndex); action != nil {
 			tip := "Fork task"
 			if !action.enabled {
 				tip = "Forking task…"

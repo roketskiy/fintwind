@@ -18,8 +18,17 @@ const (
 	sessionTabPitch = sessionTabWidth + 2
 )
 
+func sessionTabBarBackground() ui.Color {
+	shade := float32(0.10)
+	if activeAppearance.dark {
+		shade = 0.45
+	}
+	return palette.surface.Mix(hex(0x000000), shade)
+}
+
 func (a *app) tabRow(c *ui.Context) {
 	ui.Row(c).FillWidth().Height(tabRowHeight).AlignItems(ui.Center).
+		Background(sessionTabBarBackground()).
 		Children(func() {
 			newTab := ui.ButtonBase(c).Label(tr("New task")).Size(28, 28).Radius(7).Center().
 				Margin(0, 4, 0, 8).Background(palette.overlay)
@@ -89,13 +98,12 @@ func (a *app) sessionTab(c *ui.Context, sessionID string) {
 	unread := attention == "" && !busy && a.tabUnread[sessionID]
 	active := sessionID == a.selectedID
 	// Key keeps the tab's press/drag state attached to the session across
-	// reorders, instead of the strip position. Sizes, colors, fonts and the
-	// indicator order below are untouched.
+	// reorders, instead of the strip position.
 	tab := ui.ButtonBase(c).Key(sessionID).Label(title).Height(sessionTabHeight).
 		Width(sessionTabWidth).Padding(0, 8).Radius(7).Shrink(0).
 		Gap(6).AlignItems(ui.Center)
 	if active {
-		tab.Background(palette.overlayStrong)
+		tab.Background(palette.surface)
 	} else {
 		if tab.Hovered() {
 			tab.Background(palette.overlay)
@@ -176,7 +184,7 @@ func (a *app) sessionTab(c *ui.Context, sessionID string) {
 	}
 }
 
-// tabFade overlays a 16px surface-to-transparent gradient at the strip edge
+// tabFade overlays a 16px bar-to-transparent gradient at the strip edge
 // when the strip is scrolled past it, mirroring tabs.rs tab_fade. The fade
 // is pointer-transparent so the tabs under it stay clickable.
 func (a *app) tabFade(c *ui.Context, left bool) {
@@ -188,10 +196,11 @@ func (a *app) tabFade(c *ui.Context, left bool) {
 	if !visible {
 		return
 	}
-	transparent := ui.RGBA(palette.surface.R, palette.surface.G, palette.surface.B, 0)
-	gradient := ui.LinearGradient{From: palette.surface, To: transparent, Angle: 90}
+	background := sessionTabBarBackground()
+	transparent := alpha(background, 0)
+	gradient := ui.LinearGradient{From: background, To: transparent, Angle: 90}
 	if !left {
-		gradient = ui.LinearGradient{From: transparent, To: palette.surface, Angle: 90}
+		gradient = ui.LinearGradient{From: transparent, To: background, Angle: 90}
 	}
 	fade := ui.Row(c).Absolute().Top(0).Bottom(0).Width(sessionTabFadeSize).
 		LinearGradient(gradient).PassThrough()

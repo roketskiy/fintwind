@@ -29,9 +29,7 @@ var usageRangeChoices = []struct{ value, label string }{
 
 func (a *app) usageView(c *ui.Context) {
 	a.ensureUsageFresh()
-	view := ui.Column(c).Grow(1).MinWidth(0).FillHeight().Background(palette.surface).
-		Radius(workspaceRadius, 0, 0, workspaceRadius).Clip()
-	view = workspaceShadow(view)
+	view := ui.Column(c).Grow(1).MinWidth(0).FillHeight().Background(palette.surface)
 	view.Children(func() {
 		c.Key("usage-scroll")
 		ui.Scroll(c).TrackScroll(&a.usage.UI.scroll).FillWidth().Grow(1).MinHeight(0).Children(func() {

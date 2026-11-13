@@ -15,12 +15,7 @@ import (
 func (a *app) sessionsView(c *ui.Context) {
 	// Window-level overlay, so position in the tree does not matter.
 	a.addProjectDialog(c)
-	root := ui.Column(c).Grow(1).MinWidth(0).FillHeight().Background(palette.surface).
-		Radius(workspaceRadius, 0, 0, workspaceRadius).Clip()
-	root = workspaceShadow(root)
-	if a.sidebarOpen {
-		root.BorderWidth(1, 0, 0, 0).BorderColor(palette.sidebarBorder)
-	}
+	root := ui.Column(c).Grow(1).MinWidth(0).FillHeight().Background(palette.surface)
 	root.Children(func() {
 		if len(a.openTabs) > 0 {
 			a.tabRow(c)

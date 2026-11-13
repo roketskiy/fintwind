@@ -838,17 +838,23 @@ func (a *app) view(c *ui.Context) {
 				if a.sidebarOpen {
 					a.sidebar(c)
 				}
-				a.sessionsView(c)
-				if a.rightOpen {
-					a.rightPanel(c)
-				}
+				workspaceFrame(c, func() {
+					ui.Row(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
+						a.sessionsView(c)
+						if a.rightOpen {
+							a.rightPanel(c)
+						}
+					})
+				})
 			case modeSettings:
 				if a.sidebarOpen {
 					a.settingsSecondary(c)
 				}
-				a.settingsContent(c)
+				workspaceFrame(c, func() { a.settingsContent(c) })
 			case modeScheduled:
-				a.scheduledSettings(c)
+				workspaceFrame(c, func() { a.scheduledSettings(c) })
+			case modeUsage:
+				workspaceFrame(c, func() { a.usageView(c) })
 			default:
 				a.mainArea(c)
 			}

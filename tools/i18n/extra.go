@@ -145,4 +145,12 @@ var extraTranslations = [][3]string{
 	{"fintwind %s", "fintwind %s", "fintwind %s"},
 	{"Importing attachments…", "正在导入附件…", "添付ファイルを読み込み中…"},
 	{"Stop the running turn (Esc)", "停止运行中的回合（Esc）", "実行中のターンを停止（Esc）"},
+	{"Changelog unavailable", "无法读取更新日志", "更新履歴を読み込めません"},
+	{"Could not sample processes", "无法采样进程", "プロセスをサンプリングできません"},
+	{"I/O read", "I/O 读取", "I/O 読み込み"},
+	{"I/O write", "I/O 写入", "I/O 書き込み"},
+	{"Performance Overhead", "性能开销", "パフォーマンス使用量"},
+	{"Private", "私有内存", "プライベートメモリ"},
+	{"Process", "进程", "プロセス"},
+	{"Total", "合计", "合計"},
 }

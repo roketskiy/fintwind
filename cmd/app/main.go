@@ -14,6 +14,7 @@ import (
 
 	"fintwind-go/internal/composerpaste"
 	"fintwind-go/internal/daemon"
+	"fintwind-go/internal/diagramview"
 	"fintwind-go/internal/model"
 
 	"github.com/ELY-Open-Source/CrychicUI/sound"
@@ -96,6 +97,8 @@ type app struct {
 	mdReady        bool
 	diagrams       map[[32]byte]*diagramState
 	diagramWorkers chan struct{}
+	diagramClock   uint64
+	diagramViewer  diagramview.Viewer
 	draft          string
 	composerCard   ui.Handle
 	composerPaste  composerpaste.State
@@ -800,6 +803,7 @@ func (a *app) syncSummary(session *model.Session) {
 }
 
 func (a *app) view(c *ui.Context) {
+	a.diagramClock++ // diagram cache recency stamp for this frame
 	if c.Shortcut(ui.Ctrl, ui.KeyK) {
 		a.paletteOpen = !a.paletteOpen
 		a.paletteQuery = ""
@@ -818,7 +822,9 @@ func (a *app) view(c *ui.Context) {
 		a.mdUser = newMarkdownOptions(c, 14, 20, 11.5, 17.5)
 		a.mdCompact = newMarkdownOptions(c, 11.5, 17, 10.5, 16)
 		a.mdReasoning = newMarkdownOptions(c, 11.5, 17, 10.5, 16)
-		for _, options := range []*markdown.Options{&a.md, &a.mdUser, &a.mdCompact, &a.mdReasoning} {
+		// Mermaid renders as a diagram only in transcript message bodies;
+		// reasoning and auxiliary markdown surfaces keep plain code blocks.
+		for _, options := range []*markdown.Options{&a.md, &a.mdUser} {
 			options.Code = map[string]func(*ui.Context, *markdown.CodeBlockView){"mermaid": a.renderDiagram, "markdown": a.renderMarkdownCode}
 		}
 		// Transcript messages share one selection per message row (like the
@@ -866,6 +872,7 @@ func (a *app) view(c *ui.Context) {
 		a.commandPaletteLayer(c)
 		a.sessionDeleteConfirmLayer(c)
 		a.helpLayer(c)
+		a.diagramViewer.Layer(c, diagramLabels())
 	})
 	a.collectSettingsFeedback()
 	for _, item := range a.settings.feedback.pending {

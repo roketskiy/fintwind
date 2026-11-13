@@ -137,6 +137,7 @@ func (a *app) removeSessionLocal(id string) {
 	delete(a.sessionAttention, id)
 	delete(a.runtimes, id)
 	delete(a.live, id)
+	a.forgetDiagrams(id)
 	if a.unsavedDraft == id {
 		a.unsavedDraft = ""
 	}

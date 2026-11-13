@@ -66,6 +66,7 @@
 
 ## UI文案
 - 禁止禁止禁止在UI界面能看到的地方加上无意义的说明文字，包括但不限于对简单易辩的UI做说明、标签。每一个字都要思考是否简洁正式。
+- 不要给含义明确的按钮和控件添加重复的悬停提示；仅在确有必要补充信息时使用 tooltip。无障碍名称使用 `Label`/`Description`，注意 Lobe `ActionIcon` 的 `Title` 会自动显示 tooltip。
 
 ## Windows release 构建
 

@@ -7,29 +7,43 @@ Remove-Item Env:DEEPSEEK_API_KEY -ErrorAction SilentlyContinue
 Remove-Item Env:OPENAI_API_KEY -ErrorAction SilentlyContinue
 Remove-Item Env:ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
 $root = Split-Path -Parent $PSScriptRoot
-$module = Join-Path $root 'fintwind-go'
+$module = $root
 $output = Join-Path $root 'target/go-backend'
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 $env:HTTP_PROXY = 'http://127.0.0.1:7897'
 $env:HTTPS_PROXY = 'http://127.0.0.1:7897'
 Push-Location $root
 try {
+    python scripts/check-repository-layout.py
+    if ($LASTEXITCODE -ne 0) { throw 'Repository source layout mismatch' }
     python scripts/generate-go-backend-schema.py --check
     if ($LASTEXITCODE -ne 0) { throw 'Authoritative schema mismatch' }
     Push-Location $module
     try {
         go build ./...
         if ($LASTEXITCODE -ne 0) { throw 'Go build failed' }
-        go vet ./internal/... ./cmd/daemon ./cmd/backendcheck ./cmd/backendexport ./cmd/enginecheck ./cmd/runtimecheck ./cmd/workspacecheck ./cmd/replaycheck ./cmd/attachmentcheck ./cmd/servicescheck ./cmd/gitwritecheck ./cmd/scheduledcheck ./cmd/skillscheck ./cmd/nativecheck ./cmd/mygo ./cmd/quotacheck ./cmd/reviewcheck ./cmd/listingcheck ./cmd/worktreecheck ./cmd/taskeditcheck ./cmd/cleanupcheck ./cmd/runtimeforkcheck ./cmd/updatecheck ./cmd/managementcheck
+        go vet ./internal/... ./cmd/daemon ./tools/e2e/backendcheck ./tools/export ./tools/e2e/enginecheck ./tools/e2e/runtimecheck ./tools/e2e/workspacecheck ./tools/e2e/replaycheck ./tools/e2e/attachmentcheck ./tools/e2e/servicescheck ./tools/e2e/gitwritecheck ./tools/e2e/scheduledcheck ./tools/e2e/skillscheck ./tools/e2e/nativecheck ./cmd/mygo ./tools/e2e/quotacheck ./tools/e2e/reviewcheck ./tools/e2e/listingcheck ./tools/e2e/worktreecheck ./tools/e2e/taskeditcheck ./tools/e2e/cleanupcheck ./tools/e2e/runtimeforkcheck ./tools/e2e/updatecheck ./tools/e2e/managementcheck
         if ($LASTEXITCODE -ne 0) { throw 'Go vet failed' }
-        go vet ./cmd/usagecheck ./cmd/capabilitycheck ./cmd/mcpauthcheck ./cmd/activitycheck ./cmd/subagentcheck ./cmd/metadatacheck ./cmd/claudequotacheck ./cmd/goalcheck ./cmd/shellworkcheck ./cmd/navigationcheck ./cmd/workspaceservicecheck ./cmd/gitremotecheck ./cmd/skillattachcheck
+        go vet ./tools/e2e/usagecheck ./tools/e2e/capabilitycheck ./tools/e2e/mcpauthcheck ./tools/e2e/activitycheck ./tools/e2e/subagentcheck ./tools/e2e/metadatacheck ./tools/e2e/claudequotacheck ./tools/e2e/goalcheck ./tools/e2e/shellworkcheck ./tools/e2e/navigationcheck ./tools/e2e/workspaceservicecheck ./tools/e2e/gitremotecheck ./tools/e2e/skillattachcheck
         if ($LASTEXITCODE -ne 0) { throw 'Additional daemon checks vet failed' }
         foreach ($name in @('daemon', 'backendcheck', 'backendexport', 'enginecheck', 'runtimecheck', 'workspacecheck', 'replaycheck', 'attachmentcheck', 'servicescheck', 'gitwritecheck', 'scheduledcheck', 'skillscheck', 'nativecheck', 'mygo', 'quotacheck', 'reviewcheck', 'listingcheck', 'worktreecheck', 'taskeditcheck', 'cleanupcheck', 'runtimeforkcheck', 'updatecheck', 'managementcheck')) {
-            go build -o (Join-Path $output ($name + '.exe')) ('./cmd/' + $name)
+            $source = switch ($name) {
+                'daemon' { './cmd/daemon' }
+                'mygo' { './cmd/mygo' }
+                'backendexport' { './tools/export' }
+                default { './tools/e2e/' + $name }
+            }
+            go build -o (Join-Path $output ($name + '.exe')) $source
             if ($LASTEXITCODE -ne 0) { throw ('Build failed: ' + $name) }
         }
         foreach ($name in @('usagecheck', 'capabilitycheck', 'mcpauthcheck', 'activitycheck', 'subagentcheck', 'metadatacheck', 'claudequotacheck', 'goalcheck', 'shellworkcheck', 'navigationcheck', 'workspaceservicecheck', 'gitremotecheck', 'skillattachcheck')) {
-            go build -o (Join-Path $output ($name + '.exe')) ('./cmd/' + $name)
+            $source = switch ($name) {
+                'daemon' { './cmd/daemon' }
+                'mygo' { './cmd/mygo' }
+                'backendexport' { './tools/export' }
+                default { './tools/e2e/' + $name }
+            }
+            go build -o (Join-Path $output ($name + '.exe')) $source
             if ($LASTEXITCODE -ne 0) { throw ('Build failed: ' + $name) }
         }
     } finally { Pop-Location }

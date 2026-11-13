@@ -15,11 +15,11 @@
 - Do not create regression tests for bug fixes without a genuine gap in behavior testing.
 
 ## UI
-- 对于新 UI 首先复用 Ely 组件
+- 新 UI 优先复用下述 Go 组件库。
 
 ### Go 界面组件库（必用）
 - Go 界面新造控件一律先用成品组件库，禁止手搓基础控件（按钮、菜单、输入框、列表、开关、标签、弹层、提示）。
-- 选用顺序：lobe-mygo（`github.com/lobehub/lobe-mygo`，MIT，与 Lobe UI 同设计语言）优先；lobe-mygo 没有的才用 CrychicUI（`github.com/ELY-Open-Source/CrychicUI`，版本固定在 `fintwind-go/go.mod`）；两者都没有才手写，且只允许组装已有原语。
+- 选用顺序：lobe-mygo（`github.com/lobehub/lobe-mygo`，MIT，与 Lobe UI 同设计语言）优先；lobe-mygo 没有的才用 CrychicUI（`github.com/ELY-Open-Source/CrychicUI`，版本固定在 `go.mod`）；两者都没有才手写，且只允许组装已有原语。
 - 动手前先读对应组件的 skills 页（`https://mygo.lobehub.com/skills/components/<name>.md`），只用文档记载的 props、variant 和 import。
 - 禁止拿 CrychicUI `button.TextButton` 当次级文字按钮：它是 accent 色，只适合主操作。次级动作用 lobe `action.Button` 的 Text/Default 变体或同等 muted 样式。
 - 不调用 lobe `theme.Apply`：它整帧生效且跟随系统外观，会扰乱同帧其他视图。lobe 组件在不调用时自动跟随窗口 Dark 标志渲染；与自有 palette 混用时接受视觉差，只保证功能与状态一致。
@@ -73,11 +73,11 @@
 版本号保存在根目录 `VERSION`。发布包包含并排的 `fintwind.exe` 和
 `fintwind-daemon.exe`；应用启动同目录的 daemon。
 
-在 `fintwind-go/` 构建两个可执行文件：
+在仓库根目录构建两个可执行文件：
 
 ```powershell
-go build -mod=readonly -ldflags=-H=windowsgui -o ../target/release/fintwind.exe ./cmd/app
-go build -mod=readonly -o ../target/release/fintwind-daemon.exe ./cmd/daemon
+go build -mod=readonly -ldflags=-H=windowsgui -o target/release/fintwind.exe ./cmd/app
+go build -mod=readonly -o target/release/fintwind-daemon.exe ./cmd/daemon
 ```
 
 在仓库根目录运行 `bun scripts/bundle-windows.ts` 构建 stable 安装包和便携包；
@@ -87,46 +87,19 @@ go build -mod=readonly -o ../target/release/fintwind-daemon.exe ./cmd/daemon
 
 ## 性能
 
-- 把性能当作产品需求,而不是事后补充。界面在正常交互和渲染时以至少 60 FPS
-  为目标。研发渲染功能时,要考虑长文本、多文件等高压力场景,保证加载和交互
-  流畅,避免明显卡顿。当更快的方案不牺牲清晰性时,优先选择它;并在假设开销
-  可以接受之前先测量。
-- 绝不用重活阻塞 UI 线程。渲染独占它,因此一帧能触达的任何数据都必须已在
-  内存中:不允许生成子进程、不允许遍历文件系统、不允许网络请求、不允许
-  阻塞锁、不允许同步 IPC。
-- 行构建器和测量路径在每一帧都会对每个可见条目执行。把从 `render` 可达的
-  I/O 视为缺陷——即使它看起来便宜、即使首次命中后有缓存、即使只对部分行
-  触发——一次 `git` 调用就已经耗掉好几帧的预算。
-- 把工作交给 `cx.background_executor().spawn`,把结果存到 entity 上,完成时
-  `cx.notify()`。渲染只读这个存储,未命中表示"尚不可知",必须优雅降级。
-- 用一次后台遍历解决整个会话或集合,而不是逐条探测,并用 generation 计数器
-  加以保护,使被取代的那一轮的结果不能覆盖更新的状态。
-- 一次性用户操作(如点击或菜单命令)在"新鲜度比延迟更重要"时可以同步执行;
-  帧处理则不行。
-- 让每帧的工作量与屏幕上可见的内容成比例。长集合用 `list()` 做虚拟化,行
-  构建器不得重建整个会话的状态;把它提升到每帧只刷新一次的缓存里。
-- 流式渲染的刷新率要求高于 60 Hz;设计流提交、pulse clock 滴答和每帧工作量时,
-  都要兼顾这一目标与 CPU 开销。在改动事件泵、pulse clock
-  (`src/ui/motion.rs`)、veil、悬浮滚动条、pane 缓存或其他任何流式帧会触达的
-  东西之前,先读 [docs/performance.md](docs/performance.md);它还记录了真正能
-  发现性能回退的、基于计数器的测量方法。
+- 正常交互以至少 60 FPS 为目标；流式渲染同时控制刷新延迟和 CPU 开销。
+- MyGo view、行构建和测量路径只读内存，不执行文件、网络、子进程或同步 IPC。
+- 耗时工作交给 goroutine，完成后通过 `Window.Update` 发布；用取消与 generation
+  拒绝过期结果。工作线程不保存或访问 `ui.Context`、`ui.Element`。
+- 长列表使用 `ui.List` 虚拟化；缓存集合级派生状态，避免逐行重复遍历。
+- 性能相关改动先读 [docs/performance.md](docs/performance.md)，实际测量后再判断开销。
 
 ## 无障碍
 
-- 同样把无障碍当作产品需求。GPUI 尚未暴露屏幕阅读器树,所以这里的无障碍指
-  键盘可操作性、遵循系统设置、以及可读性——这些都不依赖那个缺失的 API,
-  而一旦放任不管,它们都会悄悄退化。
-- 鼠标能触达的每个控件,键盘也必须能触达并操作。使用 `track_focus` 配合
-  `tab_index`、`tab_group` 和 `tab_stop`,通过 `focus_visible` 给焦点一个可见
-  的样式,并支持该控件约定俗成的按键(方向键、`home`/`end`、`enter`/`space`、
-  `escape`)。
-- 遵循系统的减弱动态效果(reduce-motion)设置。`with_animation` 已经尊重
-  `App::reduce_motion`,但直接调用 `window.request_animation_frame` 做装饰性
-  动画时,必须检查 `cx.reduce_motion()` 并跳过该请求。
-- 绝不只用颜色、悬停或动画来传达含义。状态颜色要配上图标或文字,并且只在
-  悬停时显示的内容,键盘聚焦时也必须能触达。
-- 保证文字和图标在两种主题下相对其背景都清晰可读,并给可交互目标足够的
-  命中区域——扩展命中区域,而不是缩小到字形本身。
+- 鼠标能操作的控件也必须支持键盘，保留可见焦点、约定按键及足够的命中区域。
+- 使用 MyGo 组件的焦点和快捷键机制；持久引用使用 `ui.Handle`，不保存帧内元素。
+- 遵循系统减弱动态效果设置，不只用颜色、悬停或动画表达状态。
+- 深浅主题中的文字与图标都应清晰可读。
 
 ## 产品参考
 - 有关opencode服务器的api协议在opencode2文档，地址（https://opencode.ai/v2/docs)
@@ -139,26 +112,18 @@ go build -mod=readonly -o ../target/release/fintwind-daemon.exe ./cmd/daemon
 - 局部 bug 修复、直接的视觉修正、原生平台行为、或用户已经明确指定的变更,
   不要去翻 T3 Code。当 T3 Code 确实相关时,检查它当前的应用或源码,而不是
   依赖旧的截图或记忆。
-- 当任务涉及 GPUI 实现——布局与样式惯用法、焦点与按键分发、虚拟化列表、
-  菜单与弹层、窗口与平台行为——或当 `src/ui` 内部原语需要一个经过验证的
-  原生先例时,以 [Zed](https://github.com/zed-industries/zed) 源码作为参考。
-  Zed 是 GPUI 的权威代码库;读它的 crates 而不是 `gpui-component`,并且读
-  `Cargo.toml` 中固定的 gpui 版本,使 API 与 Fintwind 构建所用的一致。
-- 按关注点划分参考:T3 Code 回答"coding-agent 客户端该做什么",Zed
-  回答"一个打磨过的 GPUI 应用该怎么实现",Ely 回答"具体组件可以怎样设计与呈现"。
-  按任务需要选用,不要求每次查阅全部参考;局部修复或用户已明确指定的变更,
-  不必为了参考而扩大调查范围。
+- MyGo 的 API 与生命周期以 `go.mod` 固定版本的文档和模块缓存源码为准。
+  组件使用 Lobe MyGo、CrychicUI 的对应版本文档；不要从 Rust/GPUI 归档复制 API。
 - 把参考当作行为与设计的证据,而不是照抄 Web 特有交互模式或已知 bug 的
   指令。Fintwind 应当保持原生 Windows 惯例。
 - 用户明确的截图与反馈,优先于此前的处理方式或仅仅"保持一致"的处理方式。
 - 对于 provider 原生内容,如引用、推理和工具事件,验证真实的 provider 载荷
   并保持其顺序。绝不在对话记录中暴露 provider 的私有控制标记。
-- 在 dev watcher 管理的刚重新编译、已签名的应用中,针对确切的 provider 交互
-  验证可见变更;仅凭一次成功的 Rust 构建是不够的。
+- 涉及 provider 可见行为时，使用隔离启动器和确切交互验证；构建成功不能替代行为验证。
 
 ## mygo 前端与组件库
 
-`fintwind-go/` 是正式主线，包含 Go 应用和 Go daemon。源码日用入口为根目录 `MyGo.cmd`，
+仓库根目录是正式主线，包含 Go 应用和 Go daemon。源码日用入口为根目录 `MyGo.cmd`，
 直接使用真实 Fintwind 数据；未获用户明确许可，agent 不得运行该入口（`--plan` 除外）。
 用户已授权（2026-11-11）：每轮 mygo 改动完成后，agent 用
 `pwsh -File scripts/mygo-restart.ps1` 重启日用实例——脚本只停止 `--profile daily`
@@ -172,5 +137,12 @@ Agent 开发使用 `MyGo-Agent.cmd --name <task>`；只构建加 `--build-only`�
 启动器只清理自身持有 Job 的进程，不关闭已安装 Fintwind 或其他会话的进程。
 用法和边界见 [CONTRIBUTING.md](CONTRIBUTING.md) 的 MyGo 章节。
 
-MyGo、lobe-mygo 与 CrychicUI 均由 `fintwind-go/go.mod` 固定版本，使用 Go 模块缓存，
-不依赖 `vendor/` 子模块。查阅组件源码时先按该版本定位模块缓存，不使用旧原型中的 API。
+MyGo、lobe-mygo 与 CrychicUI 均由 `go.mod` 固定版本，使用 Go 模块缓存，
+不依赖源码仓库中的 vendor 副本。查阅组件源码时先按该版本定位模块缓存，不使用旧原型中的 API。
+
+## 仓库边界
+
+- `cmd/` 只放 app、daemon、mygo；验证和维护命令放 `tools/`。
+- `legacy/rust/` 只归档旧源码和必要许可，不增加 Cargo 清单、锁文件或构建入口。
+- 根 Go 模块名仍为 `fintwind-go`，它是 import 前缀，不是磁盘目录。
+- `db/migrations/` 是数据库迁移的权威输入；修改后运行生成脚本及其 `--check`。

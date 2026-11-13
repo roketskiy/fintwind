@@ -63,7 +63,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 golang.org/x/sys v0.49.0 — BSD-3-Clause
 https://golang.org/x/sys
-用于 fintwind-go/cmd/app/settings_fonts_windows.go 的 Windows 字体枚举（注册表）。
+用于 cmd/app/settings_fonts_windows.go 的 Windows 字体枚举（注册表）。
 
 Copyright 2009 The Go Authors All rights reserved.
 
@@ -96,7 +96,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 Material Icon Theme 文件图标 — MIT
 https://github.com/PKief/vscode-material-icon-theme
-用于 fintwind-go/assets/icons/file-types/ 中的选定图标。
+用于 assets/icons/file-types/ 中的选定图标。
 
 The MIT License (MIT)
 Copyright (c) 2025 Material Extensions
@@ -120,4 +120,4 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 其他 Lucide 图标的 ISC 许可见 lucide-ISC.txt。
-间接 Go 依赖及校验和由 fintwind-go/go.mod、go.sum 记录；各模块保留其上游许可。
+间接 Go 依赖及校验和由 go.mod、go.sum 记录；各模块保留其上游许可。

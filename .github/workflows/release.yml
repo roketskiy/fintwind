@@ -69,8 +69,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: fintwind-go/go.mod
-          cache-dependency-path: fintwind-go/go.sum
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
 
       - uses: oven-sh/setup-bun@v2
 

@@ -26,4 +26,4 @@
 浏览锚点和选中项。变更量仅在选中提交后于后台读取并缓存：合并提交相对第一父
 提交，根提交相对空树；二进制文件计入文件数但不计行数。
 
-轨道分配算法改编自 Ely 的 `src/git/graph.rs`，许可见 `licenses/ely-gpui-components-MIT.txt`。
+轨道分配算法改编自 Ely 的 `src/git/graph.rs`，许可见 `docs/licenses/ely-gpui-components-MIT.txt`。

@@ -81,16 +81,17 @@ fintwind 只发布 Windows 版本，只使用 OpenCode 2 作为 agent 后端。
 
 ## 架构
 
-Go 桌面端和 daemon 位于 [`fintwind-go/`](fintwind-go)。桌面端从自身目录启动
+Go 桌面端和 daemon 的入口位于 [`cmd/`](cmd)，业务实现位于 [`internal/`](internal)。桌面端从自身目录启动
 `fintwind-daemon.exe`。daemon 监听本机回环地址，并使用每次启动生成的令牌鉴权。
 应用数据位于 `%LOCALAPPDATA%\Fintwind`，daemon 的提供商设置位于
 `%USERPROFILE%\.fintwind\settings.json`。
 
-原 Rust 实现的源码保留在仓库中，不再作为维护和发布的应用。
+原 Rust 实现的源码归档于 [`legacy/rust/`](legacy/rust/README.md)，不再构建和发布。
+维护与验证工具统一放在 [`tools/`](tools/README.md)。
 
 ## 开发
 
-需要 Windows、PowerShell 7 和 [`fintwind-go/go.mod`](fintwind-go/go.mod) 指定的 Go 版本。
+需要 Windows、PowerShell 7 和 [`go.mod`](go.mod) 指定的 Go 版本。
 在仓库根目录运行 `MyGo.cmd`，构建并使用已有 Fintwind 数据启动应用。
 开发与构建说明见 [CONTRIBUTING.md](CONTRIBUTING.md)，打包流程见 [RELEASING.md](RELEASING.md)。
 

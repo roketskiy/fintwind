@@ -5,7 +5,7 @@ export default defineConfig({
   schema: "./db/schema.ts",
   tablesFilter: ["!installation_identity"],
   out: "./db/migrations",
-  // The Rust runner applies these files in order; it never reads drizzle's
+  // The Go migration runner applies these files in order; it never reads drizzle's
   // journal, so keep names stable and prefix-ordered.
   migrations: { prefix: "index" },
   dbCredentials: {

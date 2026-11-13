@@ -5,14 +5,24 @@ well-scoped features are welcome.
 
 ## Development setup
 
-开发正式版需要 Windows、PowerShell 7 和 `fintwind-go/go.mod` 指定的 Go 版本。
-打包安装程序还需要 Bun 和 Inno Setup。Go 版位于 `fintwind-go/`；原 Rust
-源码保留供参考，不参与正式构建和发布。
+开发正式版需要 Windows、PowerShell 7 和 `go.mod` 指定的 Go 版本。
+打包安装程序还需要 Bun 和 Inno Setup。Go 工程位于仓库根目录；原 Rust
+源码归档于 `legacy/rust/`，保留供参考，不参与正式构建和发布。
+
+## 仓库结构
+
+- `cmd/app`、`cmd/daemon`、`cmd/mygo`：桌面应用、后端和隔离启动器。
+- `internal/`：Go 业务模块；`assets/`：桌面应用资源。
+- `tools/`：维护与 E2E 工具，与应用共用根 Go 模块。
+- `db/`：数据库定义和权威 SQL 迁移，Go 内嵌迁移由生成脚本维护。
+- `mobile/`、`workers/`、`deploy/`：移动网页、更新服务和部署配置。
+- `legacy/rust/`：旧 Rust 源码，不再保留 Cargo 构建工程。
+- `target/`：忽略提交的构建和运行产物，不存放生产数据。
 
 ## 源码启动
 
-`fintwind-go/` 包含 MyGo 前端和 Go daemon。
-本地启动需要 PowerShell 7 和 Go（版本见 `fintwind-go/go.mod`）。
+仓库根目录包含 MyGo 前端和 Go daemon。
+本地启动需要 PowerShell 7 和 Go（版本见 `go.mod`）。
 前端使用 MyGo（MIT）、Lobe MyGo（MIT）和 CrychicUI（MIT），均通过 Go 模块
 固定版本，由 Go 自动下载并按 `go.sum` 校验，不需要初始化子模块或准备本地组件库。
 许可及图标来源见 [`docs/licenses/mygo-MIT.txt`](docs/licenses/mygo-MIT.txt)、
@@ -113,13 +123,12 @@ Stable and beta use `%LOCALAPPDATA%\Fintwind` and must not run at the same
 time. A database migrated by a newer beta may not reopen in an older stable.
 Both builds write the executables to `target/release`.
 
-To build the executables without packaging, run these commands in
-`fintwind-go/`:
+To build the executables without packaging, run these commands from the repository root:
 
 ```powershell
-New-Item -ItemType Directory -Force ../target/release | Out-Null
-go build -ldflags="-H=windowsgui" -o ../target/release/fintwind.exe ./cmd/app
-go build -o ../target/release/fintwind-daemon.exe ./cmd/daemon
+New-Item -ItemType Directory -Force target/release | Out-Null
+go build -ldflags="-H=windowsgui" -o target/release/fintwind.exe ./cmd/app
+go build -o target/release/fintwind-daemon.exe ./cmd/daemon
 ```
 
 Keep both executables in the same directory. `fintwind.exe` starts the daemon
@@ -142,10 +151,12 @@ beside it and uses the production data directory.
 
 ## Checks
 
-Run the relevant checks from `fintwind-go/`:
+从仓库根目录执行检查：
 
 ```powershell
-go build ./...
+python scripts/check-repository-layout.py
+python scripts/generate-go-backend-schema.py --check
+go build -mod=readonly ./...
 go vet ./internal/... ./cmd/daemon ./cmd/app ./cmd/mygo
 go run github.com/egoist/mygo/cmd/mygo vet ./cmd/app
 ```

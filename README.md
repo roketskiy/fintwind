@@ -92,19 +92,20 @@ through OpenCode; other agent backends are outside this fork's scope.
 
 ## Architecture
 
-The Go desktop and daemon live in [`fintwind-go/`](fintwind-go). The desktop
+The Go desktop and daemon live in [`cmd/`](cmd), with shared implementation in [`internal/`](internal). The desktop
 starts `fintwind-daemon.exe` from its own directory. The daemon listens on a
 loopback address and authenticates clients with a token generated at launch.
 Application data is stored under `%LOCALAPPDATA%\Fintwind`; daemon provider
 settings are stored in `%USERPROFILE%\.fintwind\settings.json`.
 
-The former Rust implementation remains in the repository as source. It is no
-longer the maintained or released application.
+The former Rust implementation is archived as source in
+[`legacy/rust/`](legacy/rust/README.md). It is no longer built or released.
+Development and verification commands live in [`tools/`](tools/README.md).
 
 ## Development
 
 Use Windows, PowerShell 7, and the Go version specified in
-[`fintwind-go/go.mod`](fintwind-go/go.mod). Run `MyGo.cmd` from the repository
+[`go.mod`](go.mod). Run `MyGo.cmd` from the repository
 root to build and start the application with your existing Fintwind data. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for development and build instructions and
 [RELEASING.md](RELEASING.md) for packaging.

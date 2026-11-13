@@ -18,6 +18,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+- Go 工程移至仓库根目录，维护和验证工具统一放入 `tools/`；旧 Rust 源码归档到 `legacy/rust/`，退出构建和发布流程。
+
 ## [0.3.1]
 
 ### 新功能
@@ -177,7 +179,7 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [2.0.14]
 
-本版继续使用 OpenCode 2（`@opencode/cli`）作为后端，不适用于 OpenCode 1.x。已使用真实 OpenCode 2.1.3 与本地模拟模型完成客户端、daemon 和服务端的端到端验证，覆盖同一会话连续三回合正常结束；独立黑盒检查覆盖历史接口返回 503、同毫秒旧结束事件、断线恢复、追加输入、丢失结束事件、超过 64 MiB 的历史页和单条含 20 MiB 图片数据的消息，并重放真实会话的历史副本验证恢复。未验证完整的模型或版本兼容区间。验证入口见 [协议黑盒脚本](scripts/opencode-protocol-e2e.py)。
+本版继续使用 OpenCode 2（`@opencode/cli`）作为后端，不适用于 OpenCode 1.x。已使用真实 OpenCode 2.1.3 与本地模拟模型完成客户端、daemon 和服务端的端到端验证，覆盖同一会话连续三回合正常结束；独立黑盒检查覆盖历史接口返回 503、同毫秒旧结束事件、断线恢复、追加输入、丢失结束事件、超过 64 MiB 的历史页和单条含 20 MiB 图片数据的消息，并重放真实会话的历史副本验证恢复。未验证完整的模型或版本兼容区间。旧版协议定义见 [Rust 协议归档源码](legacy/rust/crates/fintwind-protocol/src/protocol.rs)。
 
 ### 改进
 

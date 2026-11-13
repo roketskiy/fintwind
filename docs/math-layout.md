@@ -1,5 +1,8 @@
 # 公式排版说明
 
+本文记录归档的 Rust 版本约定，不能视为当前 Go 版的功能保证。
+当前实现与用法见 [CONTRIBUTING.md](../CONTRIBUTING.md)。
+
 Fintwind 把 RaTeX 解析、排版、SVG 墨迹测量与光栅化放在有界后台线程，渲染只读
 缓存结果。
 
@@ -10,7 +13,7 @@ Fintwind 把 RaTeX 解析、排版、SVG 墨迹测量与光栅化放在有界后
 - 混合行共享正文基线；公式高度撑开行高，不足时用对称行距，不伪造 80/20 上下分割。
 - SVG 外框保留 TeX 排版盒，并扩展到包住轮廓墨迹与 1 逻辑像素边距。基线随视口
   原点移动，不缩放字形。墨迹外框处理借鉴 Ely 的公式排版，许可见
-  `licenses/ely-gpui-components-MIT.txt`。
+  `docs/licenses/ely-gpui-components-MIT.txt`。
 - 来源长度、条目数、纹理尺寸、光栅像素与缓存均有界；不支持或超限的公式保留源码回退。
 
 ## 超宽公式

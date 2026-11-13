@@ -1,5 +1,8 @@
 # Mermaid 可视化偏好
 
+本文记录归档的 Rust 版本约定，不能视为当前 Go 版的功能保证。
+当前实现与用法见 [CONTRIBUTING.md](../CONTRIBUTING.md)。
+
 全局默认关闭。修改只对新建的 Fintwind 会话生效，已有会话（即使是此前创建的
 空会话）不受影响。
 
@@ -14,7 +17,7 @@ fork、重启与发版后仍保留 `v1` 指令。`v2` 增加一行，要求模�
 携带 Mermaid 提示词版本（任一版本）的会话同时获得 `fintwind_mermaid_check`
 工具。daemon 向私有 OpenCode 进程暴露校验能力时，由同一上下文插件注册；没有
 该能力的会话工具快照中没有它。该工具用的校验器与应用渲染用的是同一编译器
-（`crates/fintwind-diagram`），「校验通过」与「代码围栏能画出来」是同一事实。
+（`legacy/rust/crates/fintwind-diagram`），「校验通过」与「代码围栏能画出来」是同一事实。
 校验协议见 `diagrams.md`。
 
 ## 版本约定

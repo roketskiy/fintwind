@@ -2,8 +2,8 @@
 
 Users can download a per-user installer or portable archive from
 [GitHub Releases](https://github.com/roketskiy/fintwind/releases). The release
-contains the Go application and daemon. The Rust source remains in the
-repository but is not built or released.
+contains the Go application and daemon. The Go module lives at the repository root. The Rust source remains in
+`legacy/rust/` and is not built or released.
 
 The root `VERSION` file contains the Fintwind version. Keep unreleased changes
 under `## [unreleased]` in [CHANGELOG.md](CHANGELOG.md). Never reuse a

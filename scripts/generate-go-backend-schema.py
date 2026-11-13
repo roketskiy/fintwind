@@ -23,7 +23,7 @@ for source in files:
     lines.append('\t{' + json.dumps(source.stem) + ', ' + json.dumps(sql, ensure_ascii=False) + '},')
 lines += ['}', '']
 text = '\n'.join(lines)
-target = root / 'fintwind-go' / 'internal' / 'backendstore' / 'schema_generated.go'
+target = root / 'internal' / 'backendstore' / 'schema_generated.go'
 if args.check:
     if not target.is_file() or target.read_text(encoding='utf-8') != text:
         raise SystemExit('Generated Go migrations differ from authoritative SQL')

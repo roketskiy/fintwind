@@ -12,7 +12,7 @@ try {
     }
     $root = Split-Path -Parent $PSScriptRoot
     $go = Get-Command 'go.exe' -CommandType Application -ErrorAction Stop
-    $module = Join-Path $root 'fintwind-go'
+    $module = $root
     $bootstrap = Join-Path $root ('target/mygo/bootstrap/' + $Profile)
     $null = New-Item -ItemType Directory -Path $bootstrap -Force
     $round = Join-Path $bootstrap ([Guid]::NewGuid().ToString('N'))

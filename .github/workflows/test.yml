@@ -20,16 +20,23 @@ jobs:
     timeout-minutes: 45
     defaults:
       run:
-        working-directory: fintwind-go
+        working-directory: .
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version-file: fintwind-go/go.mod
-          cache-dependency-path: fintwind-go/go.sum
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
       - name: Build
         run: go build -mod=readonly ./...
       - name: Vet
         run: go vet -mod=readonly ./internal/... ./cmd/app ./cmd/daemon ./cmd/mygo
       - name: Check MyGo UI lifetimes
         run: go run -mod=readonly github.com/egoist/mygo/cmd/mygo vet ./cmd/app
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+      - name: Check source layout and database migrations
+        run: |
+          python scripts/check-repository-layout.py
+          python scripts/generate-go-backend-schema.py --check

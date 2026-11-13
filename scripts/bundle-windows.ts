@@ -179,10 +179,9 @@ const installer = join(
 );
 
 await mkdir(releaseDirectory, { recursive: true });
-$.cwd(join(projectRoot, "fintwind-go"));
+$.cwd(projectRoot);
 await $`go build -mod=readonly -ldflags=-H=windowsgui -o ${join(releaseDirectory, "fintwind.exe")} ./cmd/app`;
 await $`go build -mod=readonly ${`-ldflags=-X=fintwind-go/internal/backend.Version=${version}`} -o ${join(releaseDirectory, "fintwind-daemon.exe")} ./cmd/daemon`;
-$.cwd(projectRoot);
 
 const staging = await mkdtemp(join(tmpdir(), "fintwind-bundle-"));
 try {

@@ -177,7 +177,7 @@ func (a *actor) extendedEvent(kind string, payload backendstore.Object) (bool, e
 			a.dirty = true
 		}
 		return true, a.emit("usageUpdated", wire)
-	case "session.goal.updated", "goal.updated":
+	case "rpc.opencode.goal.changed", "session.goal.updated", "goal.updated":
 		raw, _ := json.Marshal(payload)
 		if nested := payload["goal"]; len(nested) > 0 {
 			raw = nested
@@ -262,6 +262,9 @@ func (a *actor) idleReport() error {
 	status := "completed"
 	if !success {
 		status = "failed"
+		if err := a.recordProviderError(summary.(string)); err != nil {
+			return err
+		}
 	}
 	a.finish(success, status)
 	a.tools = map[string]string{}

@@ -56,7 +56,7 @@ func normalizeGoalDepth(raw json.RawMessage, session string, depth int) (backend
 	if len(value["objective"]) == 0 || string(value["objective"]) == "null" || json.Unmarshal(value["objective"], &objective) != nil {
 		return nil, errors.New("invalid native goal objective")
 	}
-	goal := backendstore.Fields(map[string]any{"sessionId": session, "objective": value.String("objective"), "status": status, "turns": rounds, "maxTurns": max, "reason": value.String("reason"), "revision": updated})
+	goal := backendstore.Fields(map[string]any{"sessionId": session, "id": value.String("id"), "objective": value.String("objective"), "status": status, "turns": rounds, "maxTurns": max, "reason": value.String("reason"), "revision": updated})
 	if status == "done" {
 		goal.Set("completedAt", updated/1000)
 	}
@@ -72,18 +72,56 @@ func (a *actor) readGoal(ctx context.Context) (backendstore.Object, error) {
 	return normalizeGoal(raw, a.nativeID)
 }
 func (a *actor) saveGoal(goal backendstore.Object) error {
+	unchanged := false
 	if a.snapshot != nil {
 		var currentValue any
 		_ = json.Unmarshal(a.snapshot["goal"], &currentValue)
 		current, _ := json.Marshal(currentValue)
 		next, _ := json.Marshal(goal)
-		if string(current) == string(next) {
-			return nil
+		unchanged = string(current) == string(next)
+	}
+	var completed backendstore.Object
+	if a.snapshot != nil && goal.String("status") == "done" {
+		identity := goal.String("id")
+		if identity == "" {
+			identity = goal.String("objective") + ":" + string(goal["revision"])
 		}
+		id := uuid.NewSHA1(uuid.NameSpaceURL, []byte("fintwind:goal:"+a.sessionID+":"+identity)).String()
+		found := false
+		for _, message := range a.messages {
+			if message.String("id") == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			content := strings.TrimSpace(goal.String("objective"))
+			if reason := strings.TrimSpace(goal.String("reason")); reason != "" {
+				content += "\n\n" + reason
+			}
+			var turnID any
+			if a.turnID != "" {
+				turnID = a.turnID
+			}
+			completed = backendstore.Fields(map[string]any{"id": id, "turn_id": turnID, "role": "goal_complete", "content": content, "created_at": time.Now().Unix(), "streaming": false, "attachments": []any{}})
+			a.messages = append(a.messages, completed)
+			a.dirty = true
+		}
+	}
+	if unchanged && completed == nil {
+		return nil
 	}
 	if a.snapshot != nil {
 		a.snapshot.Set("goal", goal)
 		a.dirty = true
+	}
+	if completed != nil {
+		if err := a.flush(); err != nil {
+			return err
+		}
+		if err := a.emit("goalCompleted", completed); err != nil {
+			return err
+		}
 	}
 	a.goalRevision++
 	return a.emit("goalUpdated", goal)
@@ -151,13 +189,19 @@ func (a *actor) goalCommand(ctx context.Context, action backendstore.Object) err
 		a.parts = map[string]int{}
 		a.reasoning = map[string]int{}
 		a.tools = map[string]string{}
-		a.turns = append(a.turns, backendstore.Fields(map[string]any{"id": a.turnID, "status": "running", "turn_count": len(a.turns) + 1, "started_at": time.Now().Unix()}))
+		turn := backendstore.Fields(map[string]any{"id": a.turnID, "status": "running", "turn_count": len(a.turns) + 1, "started_at": time.Now().Unix()})
+		a.turns = append(a.turns, turn)
+		var message backendstore.Object
 		if kind == "start" {
 			attachments := action["attachments"]
 			if len(attachments) == 0 || string(attachments) == "null" {
 				attachments = json.RawMessage(`[]`)
 			}
-			a.messages = append(a.messages, backendstore.Fields(map[string]any{"id": uuid.NewString(), "turn_id": a.turnID, "role": "user", "content": text, "created_at": time.Now().Unix(), "streaming": false, "attachments": attachments}))
+			message = backendstore.Fields(map[string]any{"id": uuid.NewString(), "turn_id": a.turnID, "role": "user", "content": text, "created_at": time.Now().Unix(), "streaming": false, "attachments": attachments})
+			a.messages = append(a.messages, message)
+		}
+		if err := a.emit("goalTurnStarted", map[string]any{"turn": turn, "message": message}); err != nil {
+			return err
 		}
 		if err := a.begin(); err != nil {
 			return err

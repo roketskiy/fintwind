@@ -63,7 +63,18 @@ func run(ctx context.Context, binary string) (err error) {
 	if err := os.MkdirAll(workspace, 0o700); err != nil {
 		return err
 	}
-	child, err := ownedprocess.StartWithEnvironment(binary, []string{"--data-dir", filepath.Join(round, "data"), "--bind", "127.0.0.1:0"}, logs, round, ownedprocess.BuildEnv(round, map[string]string{"FINTWIND_DAEMON_TOKEN": token}))
+	dataDir := filepath.Join(round, "data")
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return err
+	}
+	cachedCatalog, _ := json.Marshal(map[string]any{
+		"fetched_at": time.Now().Unix(),
+		"catalog":    map[string]any{"fixture": map[string]any{"models": map[string]any{"literal": map[string]any{"limit": map[string]any{"context": 8192}}}}},
+	})
+	if err := os.WriteFile(filepath.Join(dataDir, "models-dev-catalog.json"), cachedCatalog, 0o600); err != nil {
+		return err
+	}
+	child, err := ownedprocess.StartWithEnvironment(binary, []string{"--data-dir", dataDir, "--bind", "127.0.0.1:0"}, logs, round, ownedprocess.BuildEnv(round, map[string]string{"FINTWIND_DAEMON_TOKEN": token}))
 	if err != nil {
 		return err
 	}
@@ -97,11 +108,95 @@ func run(ctx context.Context, binary string) (err error) {
 		return err
 	}
 	defer client.Close()
+	cacheReply, err := client.Request(ctx, map[string]any{"type": "fetchModelsDevCatalog"})
+	if err != nil {
+		return fmt.Errorf("read offline model catalog: %w", err)
+	}
+	var cached struct {
+		Catalog map[string]struct {
+			Models map[string]struct {
+				Limit struct {
+					Context int `json:"context"`
+				} `json:"limit"`
+			} `json:"models"`
+		} `json:"catalog"`
+	}
+	if json.Unmarshal(cacheReply, &cached) != nil || cached.Catalog["fixture"].Models["literal"].Limit.Context != 8192 {
+		return fmt.Errorf("offline model catalog mismatch: %s", cacheReply)
+	}
+	checks["offline-model-catalog"] = true
+	probe, err := client.Request(ctx, map[string]any{"type": "probeProvider", "binaryOverride": self, "directory": workspace, "discoverModels": true})
+	if err != nil {
+		return fmt.Errorf("probe model variants: %w", err)
+	}
+	var catalog struct {
+		Probe struct {
+			Models []struct {
+				ID              string `json:"id"`
+				ReasoningEffort []struct {
+					ID string `json:"id"`
+				} `json:"reasoning_efforts"`
+				Default *string `json:"default_reasoning_effort"`
+			} `json:"models"`
+		} `json:"probe"`
+	}
+	if json.Unmarshal(probe, &catalog) != nil || len(catalog.Probe.Models) != 1 || catalog.Probe.Models[0].ID != "fixture/literal" || len(catalog.Probe.Models[0].ReasoningEffort) != 2 || catalog.Probe.Models[0].ReasoningEffort[0].ID != "low" || catalog.Probe.Models[0].ReasoningEffort[1].ID != "high" || catalog.Probe.Models[0].Default == nil || *catalog.Probe.Models[0].Default != "high" {
+		return fmt.Errorf("model variants not exposed: %s", probe)
+	}
+	checks["provider-model-variants"] = true
+	integrationCommand := map[string]any{"type": "fetchIntegrations", "binary": self, "directory": workspace}
+	readIntegrations := func() (map[string]bool, error) {
+		raw, err := client.Request(ctx, integrationCommand)
+		if err != nil {
+			return nil, err
+		}
+		var response struct {
+			Integrations []struct {
+				ID        string `json:"id"`
+				Connected bool   `json:"connected"`
+			} `json:"integrations"`
+		}
+		if err := json.Unmarshal(raw, &response); err != nil {
+			return nil, err
+		}
+		result := map[string]bool{}
+		for _, item := range response.Integrations {
+			result[item.ID] = item.Connected
+		}
+		return result, nil
+	}
+	beforeLogout, err := readIntegrations()
+	if err != nil || !beforeLogout["fixture"] || !beforeLogout["other"] {
+		return fmt.Errorf("fixture integrations unavailable: %v (%v)", beforeLogout, err)
+	}
+	if _, err := client.Request(ctx, map[string]any{"type": "logoutProvider", "binary": self, "directory": workspace, "providerId": "fixture"}); err != nil {
+		return fmt.Errorf("log out provider: %w", err)
+	}
+	afterLogout, err := readIntegrations()
+	if err != nil || afterLogout["fixture"] || !afterLogout["other"] {
+		return fmt.Errorf("logout did not remove only the selected provider: %v (%v)", afterLogout, err)
+	}
+	checks["builtin-provider-logout"] = true
 	sid, rid, pid := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	options := map[string]any{"binary": self, "cwd": workspace, "mode": "ask", "interactionMode": "code", "model": "fixture/literal"}
 	if _, err := client.RequestFor(ctx, sid, rid, map[string]any{"type": "start", "options": options}); err != nil {
 		return err
 	}
+	if _, err := client.RequestFor(ctx, sid, rid, map[string]any{"type": "applyOptions", "options": map[string]any{"model": "fixture/literal", "reasoningEffort": "low", "interactionMode": "build"}}); err != nil {
+		return fmt.Errorf("apply model variant: %w", err)
+	}
+	var selected struct {
+		Model struct {
+			Provider string `json:"providerID"`
+			ID       string `json:"id"`
+			Variant  string `json:"variant"`
+		} `json:"model"`
+	}
+	selection, err := os.ReadFile(filepath.Join(round, "home", "selected-model.json"))
+	if err != nil || json.Unmarshal(selection, &selected) != nil || selected.Model.Provider != "fixture" || selected.Model.ID != "literal" || selected.Model.Variant != "low" {
+		return fmt.Errorf("model variant did not reach OpenCode: %s (%v)", selection, err)
+	}
+	checks["provider-model-variant-selected"] = true
 	checks["owned-engine-start"] = true
 	outsider := uuid.NewString()
 	if _, err := client.RequestFor(ctx, outsider, uuid.NewString(), map[string]any{"type": "start", "options": map[string]any{"binary": self, "cwd": round, "mode": "ask", "interactionMode": "code", "model": "fixture/literal"}}); err == nil {
@@ -499,6 +594,7 @@ func fixture() {
 	}
 	var mu sync.Mutex
 	subscribers := map[chan string]bool{}
+	credentials := map[string]bool{"account-one": true, "account-two": true, "other-account": true}
 	var busy, hold bool
 	emit := func(events []map[string]any) {
 		for _, event := range events {
@@ -537,6 +633,47 @@ func fixture() {
 		}
 		if r.URL.Path == "/api/session" {
 			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]string{"id": "ses_fixture"}})
+			return
+		}
+		if r.URL.Path == "/api/model" {
+			_, _ = w.Write([]byte(`{"data":[{"id":"literal","providerID":"fixture","name":"Literal","settings":{"reasoningEffort":"high"},"variants":[{"id":"low","settings":{"reasoningEffort":"low"}},{"id":"high","settings":{"reasoningEffort":"high"}}]}]}`))
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/api/integration" {
+			mu.Lock()
+			connections := []map[string]string{}
+			for _, id := range []string{"account-one", "account-two"} {
+				if credentials[id] {
+					connections = append(connections, map[string]string{"type": "credential", "id": id, "method": "key"})
+				}
+			}
+			other := []map[string]string{}
+			if credentials["other-account"] {
+				other = append(other, map[string]string{"type": "credential", "id": "other-account", "method": "key"})
+			}
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []any{map[string]any{"id": "fixture", "connections": connections}, map[string]any{"id": "other", "connections": other}}})
+			return
+		}
+		if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/credential/") {
+			id := strings.TrimPrefix(r.URL.Path, "/api/credential/")
+			mu.Lock()
+			delete(credentials, id)
+			mu.Unlock()
+			_, _ = w.Write([]byte(`{"data":{}}`))
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/session/ses_fixture/model" {
+			var selection json.RawMessage
+			if err := json.NewDecoder(r.Body).Decode(&selection); err != nil {
+				http.Error(w, "invalid selection", http.StatusBadRequest)
+				return
+			}
+			if err := os.WriteFile(filepath.Join(os.Getenv("OPENCODE_TEST_HOME"), "selected-model.json"), selection, 0o600); err != nil {
+				http.Error(w, "cannot record selection", http.StatusInternalServerError)
+				return
+			}
+			_, _ = w.Write([]byte(`{"data":{}}`))
 			return
 		}
 		if r.URL.Path == "/api/session/ses_fixture/message" {

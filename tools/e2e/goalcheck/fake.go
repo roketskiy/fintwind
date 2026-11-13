@@ -263,7 +263,7 @@ func (e *fakeEngine) handleGoalCommandLocked(w http.ResponseWriter, r *http.Requ
 	if text != "pause" && text != "clear" {
 		e.emit("session.execution.started", map[string]any{"sessionID": fakeNativeID})
 	}
-	e.emit("session.goal.updated", map[string]any{"sessionID": fakeNativeID, "goal": rawOrNull(goal), "privateFixtureField": "synthetic-private-payload"})
+	e.emit("rpc.opencode.goal.changed", map[string]any{"sessionID": fakeNativeID, "goal": rawOrNull(goal), "privateFixtureField": "synthetic-private-payload"})
 	writeJSON(w, map[string]any{"data": map[string]any{}})
 	if !hold && text != "pause" && text != "clear" {
 		e.emit("session.execution.succeeded", map[string]any{"sessionID": fakeNativeID})

@@ -185,12 +185,17 @@ func (a *actor) handle(ctx context.Context, command backendstore.Object) (backen
 				return nil, err
 			}
 		}
-		state, _ := a.process.Client.Prompt(ctx, a.nativeID, record.Receipt.InputID, record.Prompt, files)
+		state, promptErr := a.process.Client.Prompt(ctx, a.nativeID, record.Receipt.InputID, record.Prompt, files)
 		record, _, err = a.manager.store.Transition(ctx, a.sessionID, id, model.SubmissionDispatching, state, &a.nativeID)
 		if err != nil {
 			return nil, err
 		}
 		a.receipt(record.Receipt)
+		if promptErr != nil && (state == model.SubmissionNotSent || state == model.SubmissionRejected) {
+			if err := a.recordProviderError(promptErr.Error()); err != nil {
+				return nil, err
+			}
+		}
 		if state == model.SubmissionNotSent || state == model.SubmissionRejected {
 			a.finish(false, "failed")
 		}
@@ -361,6 +366,11 @@ func (a *actor) event(event backendengine.Event) error {
 		if event.Kind == "session.execution.interrupted" {
 			status = "interrupted"
 		}
+		if event.Kind == "session.execution.failed" {
+			if err := a.recordProviderError(providerErrorText(payload)); err != nil {
+				return err
+			}
+		}
 		a.finish(success, status)
 		if err := a.flush(); err != nil {
 			return err
@@ -401,7 +411,7 @@ func (a *actor) event(event backendengine.Event) error {
 		return a.emit(kind, wire)
 	default:
 		if event.Kind == "session.error" {
-			return a.emit("error", "OpenCode session failed")
+			return a.recordProviderError(providerErrorText(payload))
 		}
 		return nil
 	}

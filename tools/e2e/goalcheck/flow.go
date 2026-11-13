@@ -458,12 +458,20 @@ func (h *harness) testGoalReadAndNormalization() error {
 	h.checks["goal-get-rpc-exact-body-no-command"] = true
 	h.checks["native-goal-active-rounds-revision-whitelist"] = true
 
-	completeRaw, _ := json.Marshal(map[string]any{"objective": "completed goal", "status": "complete", "reason": "fixture complete", "rounds": 7, "maxRounds": 9, "updatedAt": updated, "privateFixtureField": "synthetic-private-payload"})
+	completeRaw, _ := json.Marshal(map[string]any{"id": "fixture-goal-complete", "objective": "completed goal", "status": "complete", "reason": "fixture complete", "rounds": 7, "maxRounds": 9, "updatedAt": updated, "privateFixtureField": "synthetic-private-payload"})
 	if err := h.fixtureConfig(map[string]any{"goal": json.RawMessage(completeRaw)}); err != nil {
 		return err
 	}
 	if err := h.goal(map[string]any{"type": "get"}); err != nil {
 		return err
+	}
+	summaryEvent, err := h.waitKind("goalCompleted")
+	if err != nil {
+		return err
+	}
+	var summary model.Message
+	if json.Unmarshal(summaryEvent.Payload, &summary) != nil || summary.ID == "" || summary.Role != "goal_complete" || summary.Content != "completed goal\n\nfixture complete" {
+		return errors.New("Goal completion event did not contain its summary")
 	}
 	completeEvent, err := h.waitGoalStatus("done")
 	if err != nil {
@@ -476,9 +484,33 @@ func (h *harness) testGoalReadAndNormalization() error {
 	if _, err := h.waitGoalStatusReported(true); err != nil {
 		return err
 	}
-	if _, err := h.waitHydratedGoalStatus("done", 2*time.Second); err != nil {
+	state, err := h.waitHydratedGoalStatus("done", 2*time.Second)
+	if err != nil {
 		return fmt.Errorf("successful native Goal read was not durably hydrated: %w", err)
 	}
+	var messages []model.Message
+	if json.Unmarshal(state["messages"], &messages) != nil {
+		return errors.New("could not hydrate Goal completion summary")
+	}
+	found := 0
+	for _, message := range messages {
+		if message.ID == summary.ID && message.Content == summary.Content && message.Role == summary.Role {
+			found++
+		}
+	}
+	if found != 1 {
+		return errors.New("Goal completion summary was not persisted exactly once")
+	}
+	if err := h.goal(map[string]any{"type": "get"}); err != nil {
+		return err
+	}
+	if _, err := h.waitGoalStatusReported(true); err != nil {
+		return err
+	}
+	if err := h.expectNoKind("goalCompleted", 100*time.Millisecond); err != nil {
+		return err
+	}
+	h.checks["goal-completion-summary-persisted-and-deduplicated"] = true
 	h.checks["native-goal-complete-done-completedAt-seconds"] = true
 	return nil
 }
@@ -542,6 +574,31 @@ func (h *harness) testGoalActionsAndBoundaries() error {
 	if err := assertGoalAttachment(after, attachment); err != nil {
 		return err
 	}
+	var admitted struct {
+		Turn    model.AgentTurn `json:"turn"`
+		Message model.Message   `json:"message"`
+	}
+	for _, event := range h.events {
+		if event.Kind == "goalTurnStarted" {
+			_ = json.Unmarshal(event.Payload, &admitted)
+		}
+	}
+	var savedTurns []model.AgentTurn
+	var savedMessages []model.Message
+	if json.Unmarshal(after["turns"], &savedTurns) != nil || json.Unmarshal(after["messages"], &savedMessages) != nil || len(savedTurns) == 0 || admitted.Turn.ID == "" || admitted.Turn.ID != savedTurns[len(savedTurns)-1].ID || admitted.Message.TurnID == nil || *admitted.Message.TurnID != admitted.Turn.ID {
+		return errors.New("Goal start event did not identify the persisted turn and user message")
+	}
+	foundMessage := false
+	for _, message := range savedMessages {
+		if message.ID == admitted.Message.ID && message.ID != "" {
+			foundMessage = true
+			break
+		}
+	}
+	if !foundMessage {
+		return errors.New("Goal start event's user message was not persisted")
+	}
+	h.checks["goal-start-event-identifies-persisted-turn-and-message"] = true
 	stats, err = h.fixtureStats()
 	if err != nil {
 		return err
@@ -1064,13 +1121,28 @@ func (h *harness) testAmbiguousAndRestartHydrate() error {
 	if err != nil {
 		return err
 	}
-	for _, key := range []string{"goal", "messages", "turns", "transcript_blocks", "status", "native_session_id", "provider_cursor"} {
+	for _, key := range []string{"goal", "messages", "transcript_blocks", "native_session_id", "provider_cursor"} {
 		if !bytes.Equal(bytes.TrimSpace(before[key]), bytes.TrimSpace(after[key])) {
 			return fmt.Errorf("SQLite hydrate changed %s after daemon restart", key)
 		}
 	}
-	if string(after["status"]) != `"working"` {
-		return errors.New("ambiguous turn did not remain working after restart hydrate")
+	var restoredMessages []model.Message
+	if json.Unmarshal(after["messages"], &restoredMessages) != nil {
+		return errors.New("could not read messages after runtime reconciliation")
+	}
+	summaries := 0
+	for _, message := range restoredMessages {
+		if message.Role == "goal_complete" && message.Content == "completed goal\n\nfixture complete" {
+			summaries++
+		}
+	}
+	if summaries != 1 {
+		return fmt.Errorf("Goal completion summary count after restart and native reconciliation: %d", summaries)
+	}
+	h.checks["goal-completion-summary-survives-restart-and-reconciliation"] = true
+	var priorTurns, restoredTurns []model.AgentTurn
+	if json.Unmarshal(before["turns"], &priorTurns) != nil || json.Unmarshal(after["turns"], &restoredTurns) != nil || len(priorTurns) == 0 || len(priorTurns) != len(restoredTurns) || restoredTurns[len(restoredTurns)-1].ID != priorTurns[len(priorTurns)-1].ID || restoredTurns[len(restoredTurns)-1].Status != "interrupted" || string(after["status"]) != `"idle"` {
+		return errors.New("restart did not retain and interrupt the ambiguous Goal turn")
 	}
 	if err := h.closeRuntime(); err != nil {
 		return err

@@ -35,9 +35,17 @@ type Event struct {
 	Payload   json.RawMessage
 }
 
-type HTTPError struct{ Status int }
+type HTTPError struct {
+	Status  int
+	Message string
+}
 
-func (e *HTTPError) Error() string { return fmt.Sprintf("OpenCode HTTP status %d", e.Status) }
+func (e *HTTPError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("OpenCode HTTP status %d: %s", e.Status, e.Message)
+	}
+	return fmt.Sprintf("OpenCode HTTP status %d", e.Status)
+}
 
 func Connect(address, password, directory string) (*Client, error) {
 	host, _, err := net.SplitHostPort(address)
@@ -119,7 +127,12 @@ func (c *Client) call(ctx context.Context, method, path string, body any) (json.
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, &HTTPError{Status: response.StatusCode}
+		body, _ := io.ReadAll(io.LimitReader(response.Body, 64<<10))
+		message := ""
+		if json.Valid(body) {
+			message = ErrorText(body)
+		}
+		return nil, &HTTPError{Status: response.StatusCode, Message: message}
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, 48<<20+1))
 	if err != nil {

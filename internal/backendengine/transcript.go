@@ -168,6 +168,14 @@ func (c *Client) Transcript(ctx context.Context, session string) (model.NativeTr
 			}
 		}
 		flush()
+		if raw := row["error"]; len(raw) > 0 && string(raw) != "null" {
+			text := ErrorText(raw)
+			if text != "" {
+				tid := turnID
+				id := uuid.NewSHA1(uuid.NameSpaceURL, []byte(session+":"+row.String("id")+":error")).String()
+				result.Messages = append(result.Messages, model.Message{ID: id, TurnID: &tid, Role: "system", Content: text, CreatedAt: timing.Created / 1000, Attachments: []model.Attachment{}})
+			}
+		}
 		if timing.Completed > 0 && len(result.Turns) > 0 {
 			completed := timing.Completed / 1000
 			result.Turns[len(result.Turns)-1].CompletedAt = &completed

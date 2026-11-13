@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"fintwind-go/internal/backendstore"
+	"fintwind-go/internal/model"
 )
 
 func (a *actor) loadSnapshot() error {
@@ -112,6 +113,87 @@ func (a *actor) reconcile(ctx context.Context) error {
 			}
 		}
 	}
+	errorsByTurn := make(map[string][]model.Message)
+	var unboundGoalMessages []model.Message
+	for _, message := range a.messages {
+		role := message.String("role")
+		if role != "system" && role != "goal_complete" || role == "system" && message.String("turn_id") == "" {
+			continue
+		}
+		found := false
+		for _, native := range transcript.Messages {
+			if role == "system" && native.Role == "system" && native.TurnID != nil && *native.TurnID == message.String("turn_id") && native.Content == message.String("content") {
+				found = true
+				break
+			}
+		}
+		if found {
+			continue
+		}
+		encoded, err := json.Marshal(message)
+		if err != nil {
+			return err
+		}
+		var saved model.Message
+		if err := json.Unmarshal(encoded, &saved); err != nil {
+			return err
+		}
+		if role == "goal_complete" && message.String("turn_id") == "" {
+			unboundGoalMessages = append(unboundGoalMessages, saved)
+			continue
+		}
+		errorsByTurn[message.String("turn_id")] = append(errorsByTurn[message.String("turn_id")], saved)
+	}
+	if len(errorsByTurn) > 0 {
+		lastMessage := make(map[string]int)
+		for index, message := range transcript.Messages {
+			if message.TurnID != nil {
+				lastMessage[*message.TurnID] = index
+			}
+		}
+		inserted := make([]int, len(transcript.Messages)+1)
+		merged := make([]model.Message, 0, len(transcript.Messages))
+		for index, message := range transcript.Messages {
+			merged = append(merged, message)
+			inserted[index+1] = inserted[index]
+			if message.TurnID != nil && lastMessage[*message.TurnID] == index {
+				saved := errorsByTurn[*message.TurnID]
+				merged = append(merged, saved...)
+				inserted[index+1] += len(saved)
+			}
+		}
+		for _, original := range a.messages {
+			if original.String("role") != "goal_complete" || original.String("turn_id") == "" {
+				continue
+			}
+			if _, ok := lastMessage[original.String("turn_id")]; ok {
+				continue
+			}
+			for _, message := range errorsByTurn[original.String("turn_id")] {
+				if message.ID == original.String("id") {
+					merged = append(merged, message)
+					break
+				}
+			}
+		}
+		for index := range transcript.Blocks {
+			block := &transcript.Blocks[index]
+			anchor := min(max(block.AfterMessage, 0), len(transcript.Messages))
+			if anchor > 0 {
+				block.AfterMessage += inserted[anchor-1]
+			}
+			if len(block.Raw) > 0 {
+				var raw map[string]json.RawMessage
+				if err := json.Unmarshal(block.Raw, &raw); err != nil {
+					return err
+				}
+				raw["after_message"], _ = json.Marshal(block.AfterMessage)
+				block.Raw, _ = json.Marshal(raw)
+			}
+		}
+		transcript.Messages = merged
+	}
+	transcript.Messages = append(transcript.Messages, unboundGoalMessages...)
 	for index := range transcript.Blocks {
 		block := &transcript.Blocks[index]
 		if block.TurnID != nil {
@@ -160,6 +242,18 @@ func (a *actor) reconcile(ctx context.Context) error {
 			}
 		}
 		for _, message := range a.messages[start:] {
+			if message.String("role") == "goal_complete" {
+				alreadyPresent := false
+				for _, native := range transcript.Messages {
+					if native.ID == message.String("id") {
+						alreadyPresent = true
+						break
+					}
+				}
+				if alreadyPresent {
+					continue
+				}
+			}
 			raw, err := json.Marshal(message)
 			if err != nil {
 				return err

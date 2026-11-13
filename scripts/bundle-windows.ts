@@ -197,6 +197,7 @@ try {
     await copyFile(join(releaseDirectory, file), join(packageDirectory, file));
   }
   await copyFile(join(projectRoot, "LICENSE"), join(packageDirectory, "LICENSE"));
+  await copyFile(join(projectRoot, "CHANGELOG.md"), join(packageDirectory, "CHANGELOG.md"));
 
   // Authenticode has to be applied before anything is packaged, so the
   // executables inside the zip and the installer are all signed. Unsigned

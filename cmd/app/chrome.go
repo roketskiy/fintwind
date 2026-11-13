@@ -186,13 +186,10 @@ func (a *app) modeRail(c *ui.Context) {
 			})
 		}
 		ui.Row(c).Grow(1)
-		services := c.Services()
 		// Bottom utilities never take the active ink: the secondary panel
 		// already shows where the user is, and a lone black glyph next to
 		// gray siblings reads as a wrong color.
-		a.railEntry(c, "info", "Help", false, func() {
-			services.OpenURL("https://github.com/roketskiy/fintwind#readme")
-		})
+		a.helpRailEntry(c)
 		a.railEntry(c, "settings", "Settings", false, func() {
 			a.openSettingsPage(a.settings.page)
 		})

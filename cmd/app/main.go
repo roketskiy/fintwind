@@ -100,6 +100,7 @@ type app struct {
 	usage          usageState
 	review         reviewState
 	sourceControl  sourceControlState
+	help           helpState
 	optionsSync    map[string]*sessionOptionsSync
 	sessionActions sessionActionState
 	modelDiscovery modelDiscoveryState
@@ -814,6 +815,7 @@ func (a *app) view(c *ui.Context) {
 		})
 		a.commandPaletteLayer(c)
 		a.sessionDeleteConfirmLayer(c)
+		a.helpLayer(c)
 	})
 }
 

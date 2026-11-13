@@ -22,6 +22,13 @@ func build(ctx context.Context, root, buildDir, runDir string) (binaries, error)
 	if err := command(ctx, root, "go", "build", "-mod=readonly", "-o", result.daemon, "./cmd/daemon"); err != nil {
 		return result, err
 	}
+	changelog, err := os.ReadFile(filepath.Join(root, "CHANGELOG.md"))
+	if err != nil {
+		return result, err
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "CHANGELOG.md"), changelog, 0o644); err != nil {
+		return result, err
+	}
 	return result, nil
 }
 

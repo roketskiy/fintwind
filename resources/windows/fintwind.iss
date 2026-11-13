@@ -88,6 +88,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Source: "{#StageDir}\fintwind.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\fintwind-daemon.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#StageDir}\CHANGELOG.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\fintwind"; Filename: "{app}\fintwind.exe"

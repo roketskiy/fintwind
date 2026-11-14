@@ -15,7 +15,10 @@ import (
 
 const (
 	capsuleRefreshInterval = 5 * time.Second
-	historyCommitLimit     = 500
+	// historyPageSize is one lazy history read; the daemon bounds a single
+	// window at 200 commits and paged walks at maxHistoryCommits.
+	historyPageSize   = 200
+	maxHistoryCommits = 2000
 )
 
 // The task capsule above the composer: one projection of the selected
@@ -347,19 +350,21 @@ type capsuleState struct {
 
 	// The right panel's History surface: branch-filtered local history with
 	// its lane graph, the chosen row and that commit's file stats.
-	HistoryBranch   string
-	HistoryRows     []capsuleGraphRow
-	HistoryAt       time.Time
-	HistoryGen      uint64
-	HistoryLoading  bool
-	HistoryErr      string
-	HistorySel      int
-	HistoryMenuOpen bool
-	HistoryList     ui.ListState
-	HistoryBranches []scBranch
-	HistoryStats    capsuleCommitStats
-	HistoryStatsErr string
-	HistoryStatsGen uint64
+	HistoryBranch      string
+	HistoryRows        []capsuleGraphRow
+	HistoryAt          time.Time
+	HistoryGen         uint64
+	HistoryLoading     bool
+	HistoryLoadingMore bool
+	HistoryExhausted   bool
+	HistoryErr         string
+	HistorySel         int
+	HistoryMenuOpen    bool
+	HistoryList        ui.ListState
+	HistoryBranches    []scBranch
+	HistoryStats       capsuleCommitStats
+	HistoryStatsErr    string
+	HistoryStatsGen    uint64
 
 	Todos    *capsuleTodos
 	TodosKey string
@@ -400,6 +405,8 @@ func (a *app) capsuleEnsure() {
 		a.capsule.HistoryAt = time.Time{}
 		a.capsule.HistoryErr = ""
 		a.capsule.HistorySel = -1
+		a.capsule.HistoryExhausted = false
+		a.capsule.HistoryLoadingMore = false
 		a.capsule.HistoryBranches = nil
 		a.capsule.Todos = nil
 		a.capsule.TodosKey = ""

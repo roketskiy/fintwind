@@ -21,6 +21,9 @@ const (
 	historyGraphLane    = 16.0
 	historyGraphStroke  = 2.0
 	historyStatsTimeout = 15 * time.Second
+	// historyLoadBuffer is how close to the loaded tail the virtualized
+	// builder must reach before the next page is requested.
+	historyLoadBuffer = 40
 )
 
 // capsuleCommitStats is one settled commit's numstat summary.
@@ -131,17 +134,25 @@ func (a *app) historyBranchItem(c *ui.Context, label, branch string, selected bo
 		if a.capsule.HistoryBranch != branch {
 			a.capsule.HistoryBranch = branch
 			a.capsule.HistorySel = -1
+			a.capsule.HistoryRows = nil
+			a.capsule.HistoryExhausted = false
+			a.capsule.HistoryLoadingMore = false
 			a.historyRefresh()
 		}
 	}
 }
 
 // historyList is the virtualized 60px rows with the selection detail below.
+// The row builder only materializes visible rows, so reaching the tail is
+// the lazy load trigger: one extra page stays buffered past the viewport.
 func (a *app) historyList(c *ui.Context) {
 	a.capsule.HistoryList.Selected = &a.capsule.HistorySel
 	rows := a.capsule.HistoryRows
 	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
 		list := ui.List(c, &a.capsule.HistoryList, len(rows), func(index int) {
+			if index >= len(rows)-historyLoadBuffer && index >= 0 {
+				a.historyRequestMore()
+			}
 			a.historyRowView(c, &rows[index], index)
 		}).FillWidth().Grow(1)
 		if list.Changed() && a.capsule.HistorySel >= 0 && a.capsule.HistorySel < len(rows) {
@@ -397,8 +408,9 @@ func (a *app) historyEnsure(force bool) {
 	}
 }
 
-// historyRefresh loads the branch-filtered history window and lays out its
-// graph once, off-thread.
+// historyRefresh re-reads the newest page and merges it over the pages
+// already loaded, so the lazy list keeps its depth and its place. A branch
+// change or a fresh open resets the accumulation first.
 func (a *app) historyRefresh() {
 	scope := a.scScope()
 	if scope.Client == nil {
@@ -408,7 +420,10 @@ func (a *app) historyRefresh() {
 	gen := a.capsule.HistoryGen
 	branch := a.capsule.HistoryBranch
 	origin := a.capsule.Scope
-	a.capsule.HistoryLoading = true
+	older := a.capsule.HistoryRows
+	if len(older) == 0 {
+		a.capsule.HistoryLoading = true
+	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), scGitTimeout)
 		defer cancel()
@@ -418,7 +433,7 @@ func (a *app) historyRefresh() {
 			Commits []capsuleCommit `json:"commits"`
 		}
 		if err == nil {
-			operation := map[string]any{"type": "listCommits", "cwd": root, "limit": historyCommitLimit}
+			operation := map[string]any{"type": "listCommits", "cwd": root, "limit": historyPageSize}
 			if branch != "" {
 				operation["branch"] = branch
 			}
@@ -426,7 +441,7 @@ func (a *app) historyRefresh() {
 		}
 		var rows []capsuleGraphRow
 		if err == nil && response.Type == "commits" {
-			rows = layoutCapsuleGraph(response.Commits)
+			rows = historyMergePages(response.Commits, older)
 		}
 		a.post(func() {
 			if gen != a.capsule.HistoryGen || a.capsule.Scope != origin {
@@ -434,18 +449,99 @@ func (a *app) historyRefresh() {
 			}
 			a.capsule.HistoryLoading = false
 			if err != nil {
-				if a.capsule.HistoryErr == "" {
-					a.capsule.HistoryErr = err.Error()
-				}
+				a.capsule.HistoryErr = err.Error()
 				return
 			}
 			a.capsule.HistoryErr = ""
 			a.capsule.HistoryRows = rows
+			a.capsule.HistoryExhausted = len(response.Commits) < historyPageSize && len(rows) <= historyPageSize
 			if a.capsule.HistorySel >= len(rows) {
 				a.capsule.HistorySel = -1
 			}
 			a.capsule.HistoryStats = capsuleCommitStats{}
 			a.capsule.HistoryStatsErr = ""
+		})
+	}()
+}
+
+// historyMergePages folds the fresh newest page over the older pages by
+// hash, then relays the whole merged order through one graph layout.
+func historyMergePages(fresh []capsuleCommit, older []capsuleGraphRow) []capsuleGraphRow {
+	seen := make(map[string]bool, len(fresh))
+	merged := make([]capsuleCommit, 0, len(fresh)+len(older))
+	for _, commit := range fresh {
+		seen[commit.Hash] = true
+		merged = append(merged, commit)
+	}
+	for _, row := range older {
+		if !seen[row.Commit.Hash] {
+			merged = append(merged, row.Commit)
+		}
+	}
+	return layoutCapsuleGraph(merged)
+}
+
+// historyRequestMore appends the next page once the virtualized row builder
+// reaches the tail of what is loaded; one page in flight at a time.
+func (a *app) historyRequestMore() {
+	if a.capsule.HistoryExhausted || a.capsule.HistoryLoadingMore || a.capsule.Scope == "" {
+		return
+	}
+	loaded := len(a.capsule.HistoryRows)
+	if loaded == 0 || loaded+historyPageSize > maxHistoryCommits {
+		a.capsule.HistoryExhausted = true
+		return
+	}
+	scope := a.scScope()
+	if scope.Client == nil {
+		return
+	}
+	a.capsule.HistoryLoadingMore = true
+	gen := a.capsule.HistoryGen
+	branch := a.capsule.HistoryBranch
+	origin := a.capsule.Scope
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), scGitTimeout)
+		defer cancel()
+		_, root, err := scHydrate(ctx, scope)
+		var response struct {
+			Type    string          `json:"type"`
+			Commits []capsuleCommit `json:"commits"`
+		}
+		if err == nil {
+			operation := map[string]any{"type": "listCommits", "cwd": root, "limit": historyPageSize, "skip": loaded}
+			if branch != "" {
+				operation["branch"] = branch
+			}
+			err = scRequest(ctx, scope.Client, operation, &response)
+		}
+		a.post(func() {
+			a.capsule.HistoryLoadingMore = false
+			if gen != a.capsule.HistoryGen || a.capsule.Scope != origin || err != nil {
+				return
+			}
+			fresh := response.Commits
+			if len(fresh) < historyPageSize {
+				a.capsule.HistoryExhausted = true
+			}
+			if len(fresh) == 0 {
+				return
+			}
+			older := a.capsule.HistoryRows
+			merged := make([]capsuleCommit, 0, len(older)+len(fresh))
+			for _, row := range older {
+				merged = append(merged, row.Commit)
+			}
+			seen := make(map[string]bool, len(older))
+			for _, row := range older {
+				seen[row.Commit.Hash] = true
+			}
+			for _, commit := range fresh {
+				if !seen[commit.Hash] {
+					merged = append(merged, commit)
+				}
+			}
+			a.capsule.HistoryRows = layoutCapsuleGraph(merged)
 		})
 	}()
 }

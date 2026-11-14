@@ -15,7 +15,7 @@ import (
 
 const (
 	capsuleRefreshInterval = 5 * time.Second
-	capsuleCommitLimit     = 30
+	historyCommitLimit     = 500
 )
 
 // The task capsule above the composer: one projection of the selected
@@ -177,16 +177,27 @@ func capsuleTodoItemStatus(item map[string]any) capsuleTodoStatus {
 	return todoPending
 }
 
+// capsuleRef is one ref decoration on a commit: a branch or tag label, its
+// remote kind and whether it names HEAD.
+type capsuleRef struct {
+	Label  string `json:"label"`
+	Remote bool   `json:"remote"`
+	Head   bool   `json:"head"`
+	// Tip is the hover text the overflow chip carries; never on the wire.
+	Tip string `json:"-"`
+}
+
 // capsuleCommit is one history entry the graph draws.
 type capsuleCommit struct {
-	Hash      string   `json:"hash"`
-	ShortHash string   `json:"shortHash"`
-	Subject   string   `json:"subject"`
-	Author    string   `json:"author"`
-	Timestamp uint64   `json:"timestamp"`
-	Parents   []string `json:"parents"`
-	Head      bool     `json:"isHead"`
-	Pushed    bool     `json:"pushed"`
+	Hash      string       `json:"hash"`
+	ShortHash string       `json:"shortHash"`
+	Subject   string       `json:"subject"`
+	Author    string       `json:"author"`
+	Timestamp uint64       `json:"timestamp"`
+	Parents   []string     `json:"parents"`
+	Refs      []capsuleRef `json:"refs"`
+	Head      bool         `json:"isHead"`
+	Pushed    bool         `json:"pushed"`
 }
 
 // capsuleGraphLine is one drawn connection. Without Dot the line flows from
@@ -334,9 +345,21 @@ type capsuleState struct {
 	ChangesAt            time.Time
 	ChangesGen           uint64
 
-	Commits    []capsuleGraphRow
-	CommitsAt  time.Time
-	CommitsGen uint64
+	// The right panel's History surface: branch-filtered local history with
+	// its lane graph, the chosen row and that commit's file stats.
+	HistoryBranch   string
+	HistoryRows     []capsuleGraphRow
+	HistoryAt       time.Time
+	HistoryGen      uint64
+	HistoryLoading  bool
+	HistoryErr      string
+	HistorySel      int
+	HistoryMenuOpen bool
+	HistoryList     ui.ListState
+	HistoryBranches []scBranch
+	HistoryStats    capsuleCommitStats
+	HistoryStatsErr string
+	HistoryStatsGen uint64
 
 	Todos    *capsuleTodos
 	TodosKey string
@@ -365,7 +388,7 @@ func (a *app) capsuleScope() string {
 
 // capsuleEnsure rebinds the capsule to the selected session's workspace and
 // refreshes the change totals on the same throttle the source control page
-// uses. The commit history loads only while its tab is open.
+// uses. The history surface refreshes on its own ensure.
 func (a *app) capsuleEnsure() {
 	scope := a.capsuleScope()
 	if scope != a.capsule.Scope {
@@ -373,8 +396,11 @@ func (a *app) capsuleEnsure() {
 		a.capsule.Branch = ""
 		a.capsule.Additions, a.capsule.Deletions = 0, 0
 		a.capsule.ChangesAt = time.Time{}
-		a.capsule.Commits = nil
-		a.capsule.CommitsAt = time.Time{}
+		a.capsule.HistoryRows = nil
+		a.capsule.HistoryAt = time.Time{}
+		a.capsule.HistoryErr = ""
+		a.capsule.HistorySel = -1
+		a.capsule.HistoryBranches = nil
 		a.capsule.Todos = nil
 		a.capsule.TodosKey = ""
 		a.capsule.Items = nil
@@ -388,10 +414,6 @@ func (a *app) capsuleEnsure() {
 	if now.Sub(a.capsule.ChangesAt) >= capsuleRefreshInterval {
 		a.capsule.ChangesAt = now
 		a.capsuleRefreshChanges()
-	}
-	if a.capsule.Open && a.capsule.Tab == capsuleChanges && now.Sub(a.capsule.CommitsAt) >= capsuleRefreshInterval {
-		a.capsule.CommitsAt = now
-		a.capsuleRefreshCommits()
 	}
 }
 
@@ -476,40 +498,6 @@ func (a *app) capsuleRefreshChanges() {
 			}
 			a.capsule.Branch = branch
 			a.capsule.Additions, a.capsule.Deletions = additions, deletions
-		})
-	}()
-}
-
-// capsuleRefreshCommits loads the local history window and lays out its
-// graph once, off-thread.
-func (a *app) capsuleRefreshCommits() {
-	scope := a.scScope()
-	if scope.Client == nil {
-		return
-	}
-	a.capsule.CommitsGen++
-	gen := a.capsule.CommitsGen
-	origin := a.capsule.Scope
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), scGitTimeout)
-		defer cancel()
-		_, root, err := scHydrate(ctx, scope)
-		var response struct {
-			Type    string          `json:"type"`
-			Commits []capsuleCommit `json:"commits"`
-		}
-		if err == nil {
-			err = scRequest(ctx, scope.Client, map[string]any{"type": "listCommits", "cwd": root, "limit": capsuleCommitLimit}, &response)
-		}
-		var rows []capsuleGraphRow
-		if err == nil && response.Type == "commits" {
-			rows = layoutCapsuleGraph(response.Commits)
-		}
-		a.post(func() {
-			if gen != a.capsule.CommitsGen || a.capsule.Scope != origin || err != nil {
-				return
-			}
-			a.capsule.Commits = rows
 		})
 	}()
 }

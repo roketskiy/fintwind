@@ -242,6 +242,7 @@ const (
 	rightPanelFiles    = "files"
 	rightPanelTerminal = "terminal"
 	rightPanelContext  = "context"
+	rightPanelHistory  = "history"
 )
 
 func surfaceLabel(kind string) string {

@@ -246,7 +246,7 @@ func (a *app) transcriptRowView(c *ui.Context, index int) {
 			switch row.Kind {
 			case transcriptMessage:
 				if row.MessageIndex >= 0 && row.MessageIndex < len(a.detail.Messages) {
-					a.messageView(c, a.detail, row.MessageIndex)
+					a.messageView(c, a.detail, row.MessageIndex, false)
 				}
 			case transcriptBlock:
 				if row.BlockIndex < 0 || row.BlockIndex >= len(a.detail.TranscriptBlocks) {
@@ -262,13 +262,13 @@ func (a *app) transcriptRowView(c *ui.Context, index int) {
 				latest := row.BlockIndex+1 == len(a.detail.TranscriptBlocks)
 				a.activityCluster(c, a.detail, a.clusterDisclosure, row.BlockIndex, liveTurn, latest)
 			case transcriptFold:
-				a.turnFoldRow(c, row.TurnID, true)
+				a.turnFoldRow(c, a.detail, row.TurnID, true, a.rebuildTranscript)
 			case transcriptStopped:
-				a.turnFoldRow(c, row.TurnID, false)
+				a.turnFoldRow(c, a.detail, row.TurnID, false, a.rebuildTranscript)
 			case transcriptWorking:
-				a.workingRow(c)
+				a.workingRow(c, a.detail)
 			case transcriptChangedFiles:
-				a.changedFilesCard(c, row.TurnID, false)
+				a.changedFilesCard(c, a.detail, row.TurnID, false)
 			case transcriptCompacting:
 				a.compactingRow(c)
 			}
@@ -276,32 +276,37 @@ func (a *app) transcriptRowView(c *ui.Context, index int) {
 	})
 }
 
-func (a *app) turnFoldRow(c *ui.Context, turnID string, expandable bool) {
+// turnFoldRow renders one settled turn's fold header. The rebuild callback
+// refolds the transcript the row belongs to: the main panel's rows or the
+// capsule's synthetic subagent transcript.
+func (a *app) turnFoldRow(c *ui.Context, session *model.Session, turnID string, expandable bool, rebuild func()) {
 	expanded := a.expandedTurns[turnID]
 	label := tr("Worked")
-	for index := range a.detail.Turns {
-		turn := &a.detail.Turns[index]
-		if turn.ID != turnID {
-			continue
+	if session != nil {
+		for index := range session.Turns {
+			turn := &session.Turns[index]
+			if turn.ID != turnID {
+				continue
+			}
+			end := uint64(time.Now().Unix())
+			if turn.CompletedAt != nil {
+				end = *turn.CompletedAt
+			}
+			seconds := uint64(0)
+			if end > turn.StartedAt {
+				seconds = end - turn.StartedAt
+			}
+			if seconds < 1 {
+				seconds = 1
+			}
+			duration := formatWorkedDuration(seconds)
+			if turn.Status == "interrupted" {
+				label = tr("You stopped after ") + duration
+			} else {
+				label = tr("Worked for ") + duration
+			}
+			break
 		}
-		end := uint64(time.Now().Unix())
-		if turn.CompletedAt != nil {
-			end = *turn.CompletedAt
-		}
-		seconds := uint64(0)
-		if end > turn.StartedAt {
-			seconds = end - turn.StartedAt
-		}
-		if seconds < 1 {
-			seconds = 1
-		}
-		duration := formatWorkedDuration(seconds)
-		if turn.Status == "interrupted" {
-			label = tr("You stopped after ") + duration
-		} else {
-			label = tr("Worked for ") + duration
-		}
-		break
 	}
 	ui.Row(c).FillWidth().Height(28).Gap(10).AlignItems(ui.Center).Children(func() {
 		ui.Row(c).Height(1).Grow(1).Background(palette.border)
@@ -328,16 +333,16 @@ func (a *app) turnFoldRow(c *ui.Context, turnID string, expandable bool) {
 		})
 		if button.Clicked() {
 			a.expandedTurns[turnID] = !expanded
-			a.rebuildTranscript()
+			rebuild()
 		}
 		ui.Row(c).Height(1).Grow(1).Background(palette.border)
 	})
 }
 
-func (a *app) workingRow(c *ui.Context) {
+func (a *app) workingRow(c *ui.Context, session *model.Session) {
 	elapsed := uint64(0)
-	if a.detail != nil && len(a.detail.Turns) > 0 {
-		last := &a.detail.Turns[len(a.detail.Turns)-1]
+	if session != nil && len(session.Turns) > 0 {
+		last := &session.Turns[len(session.Turns)-1]
 		if last.Status == "running" {
 			now := uint64(time.Now().Unix())
 			if now > last.StartedAt {
@@ -387,7 +392,10 @@ func formatWorkingElapsed(seconds uint64) string {
 	}
 }
 
-func (a *app) messageView(c *ui.Context, session *model.Session, messageIndex int) {
+// messageView renders one transcript message. background marks the capsule's
+// subagent surface: the rewind affordance is a main-panel edit boundary and
+// stays hidden there.
+func (a *app) messageView(c *ui.Context, session *model.Session, messageIndex int, background bool) {
 	if session == nil || messageIndex < 0 || messageIndex >= len(session.Messages) {
 		return
 	}
@@ -477,7 +485,7 @@ func (a *app) messageView(c *ui.Context, session *model.Session, messageIndex in
 				_ = bubble
 			}
 			_ = a.messageCopyMenu(column, m.ID, "user", text)
-			footer := a.messageFooter(c, session, m, messageIndex, text, true)
+			footer := a.messageFooter(c, session, m, messageIndex, text, true, background)
 			if !column.Hovered() {
 				footer.Invisible()
 			}
@@ -490,7 +498,7 @@ func (a *app) messageView(c *ui.Context, session *model.Session, messageIndex in
 				a.renderMarkdown(c, "msg:"+m.ID, text, &a.md, m.Streaming)
 			}
 			if m.TurnID != nil && changedFilesInlineMessageIndex(session, *m.TurnID) == messageIndex {
-				a.changedFilesCard(c, *m.TurnID, true)
+				a.changedFilesCard(c, session, *m.TurnID, true)
 			}
 			if copyContent, at, ok := a.assistantFooter(session, messageIndex); ok || a.assistantTurnStats(session, messageIndex) != "" {
 				row := ui.Row(c).FillWidth().MinWidth(0).Gap(8).AlignItems(ui.Center)
@@ -709,7 +717,7 @@ func (a *app) turnByID(session *model.Session, turnID string) *model.AgentTurn {
 	return nil
 }
 
-func (a *app) messageFooter(c *ui.Context, session *model.Session, m *model.Message, messageIndex int, copyContent string, alignRight bool) ui.Element {
+func (a *app) messageFooter(c *ui.Context, session *model.Session, m *model.Message, messageIndex int, copyContent string, alignRight bool, background bool) ui.Element {
 	footer := ui.Row(c).Height(27).Gap(1).AlignItems(ui.Center)
 	if alignRight {
 		footer.FillWidth().Justify(ui.End)
@@ -905,11 +913,11 @@ func (a *app) compactionMessage(c *ui.Context, messageID, text string) {
 // changedFilesCard is the turn's file summary: a 58px head with the totals and
 // a Review button, then one 31px row per changed file (three before the
 // "show more" row).
-func (a *app) changedFilesCard(c *ui.Context, turnID string, inline bool) {
-	if a.detail == nil {
+func (a *app) changedFilesCard(c *ui.Context, session *model.Session, turnID string, inline bool) {
+	if session == nil {
 		return
 	}
-	turn := a.detail.TurnByID(turnID)
+	turn := session.TurnByID(turnID)
 	if turn == nil || !turnHasChangedFiles(turn) {
 		return
 	}

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"fintwind-go/internal/model"
 
@@ -99,6 +101,7 @@ func (a *app) backgroundSurface(c *ui.Context, kind string) {
 			ui.Text(c, item.Title).FontSize(uiPx(12.5)).TextColor(palette.text).
 				Grow(1).MinWidth(0).SingleLine().Ellipsis("…")
 			ui.Text(c, backgroundStatusLabel(*item)).FontSize(uiPx(11)).TextColor(palette.textTertiary)
+			a.backgroundStopButton(c, item)
 		})
 		if item.Key.Kind == "subagent" {
 			if a.capsule.AgentSession == nil || len(a.capsule.AgentRows) == 0 {
@@ -115,6 +118,110 @@ func (a *app) backgroundSurface(c *ui.Context, kind string) {
 		}
 		a.backgroundProcessBody(c, item)
 	})
+}
+
+// backgroundStopButton is the stop affordance for one stoppable item, shown
+// in the surface header and beside the capsule's task rows.
+func (a *app) backgroundStopButton(c *ui.Context, item *model.BackgroundWorkItem) {
+	if !stoppableBackground(item) {
+		return
+	}
+	button := ui.ButtonBase(c).Label(tr("Stop")).Tooltip(tr("Stop")).
+		Size(24, 24).Radius(6).Center().Shrink(0)
+	if button.Hovered() {
+		button.Background(palette.overlayStrong)
+	}
+	button.Children(func() {
+		icon(c, "stop-filled", 12, palette.textTertiary)
+	})
+	if button.Clicked() {
+		a.stopBackgroundWork(*item)
+	}
+}
+
+// stoppableBackground mirrors the Rust is_stoppable gate: live statuses that
+// have not already been asked to stop, with a control identity to target.
+func stoppableBackground(item *model.BackgroundWorkItem) bool {
+	if item == nil || !item.CanStop || item.ControlID == nil {
+		return false
+	}
+	switch item.Status {
+	case "starting", "running", "monitoring":
+		return true
+	}
+	return false
+}
+
+// stopBackgroundWork asks the session's runtime to stop one background item.
+// The row reads as stopping immediately; the daemon's upsert settles it as
+// stopped, and a stopFailed event or request error restores running.
+func (a *app) stopBackgroundWork(item model.BackgroundWorkItem) {
+	if !stoppableBackground(&item) || a.detail == nil || a.client == nil {
+		return
+	}
+	runtimeID := a.runtimes[a.detail.ID]
+	if runtimeID == "" {
+		a.status = tr("The agent runtime is unavailable")
+		return
+	}
+	sessionID := a.detail.ID
+	key := item.Key
+	controlID := *item.ControlID
+	a.setBackgroundStatus(key, "stopping", "")
+	client := a.client
+	go func() {
+		ctx, cancel := context.WithTimeout(a.lifetime, 30*time.Second)
+		defer cancel()
+		_, err := client.RequestFor(ctx, sessionID, runtimeID, map[string]any{
+			"type":      "stopBackgroundWork",
+			"key":       map[string]any{"kind": key.Kind, "providerId": key.ProviderID},
+			"controlId": controlID,
+		})
+		if err == nil {
+			return
+		}
+		a.post(func() {
+			if a.live[sessionID] == nil {
+				return
+			}
+			a.setBackgroundStatus(key, "running", tr("Could not stop the background work"))
+		})
+	}()
+}
+
+// setBackgroundStatus edits the fold's raw item status and marks the capsule
+// caches stale, so the optimistic stop and its rollback show next frame.
+func (a *app) setBackgroundStatus(key model.BackgroundWorkKey, status, message string) {
+	if a.detail == nil {
+		return
+	}
+	ext := a.extension(a.detail)
+	raw, ok := backgroundItems(ext)[key.Kind+"/"+key.ProviderID].(map[string]any)
+	if ok {
+		if current, _ := raw["status"].(string); current != "" {
+			if status == "stopping" && !backgroundStatusLive(current) {
+				return
+			}
+			if status == "running" && current != "stopping" {
+				return
+			}
+			raw["status"] = status
+			if message != "" {
+				raw["detail"] = message
+			}
+		}
+	}
+	a.capsule.ItemsValid = false
+	if a.capsule.AgentKey == backgroundSurfaceKey(key) {
+		a.capsule.AgentDirty = true
+	}
+	if message != "" && a.detail.ID != "" {
+		a.status = message
+	}
+}
+
+func backgroundStatusLive(status string) bool {
+	return status == "starting" || status == "running" || status == "monitoring" || status == "stopping"
 }
 
 // backgroundProcessBody is a process surface: the command over its output.
@@ -169,8 +276,8 @@ func backgroundStatusLabel(item model.BackgroundWorkItem) string {
 }
 
 // capsuleAgentRowView is the synthetic transcript's row dispatch, mirroring
-// transcriptRowView: messages and activity blocks only, the shapes a
-// background fold holds.
+// transcriptRowView: the same message, cluster, fold, working and
+// changed-files rows the main panel shows, over the synthetic session.
 func (a *app) capsuleAgentRowView(c *ui.Context, index int) {
 	if index < 0 || index >= len(a.capsule.AgentRows) || a.capsule.AgentSession == nil {
 		return
@@ -194,17 +301,44 @@ func (a *app) capsuleAgentRowView(c *ui.Context, index int) {
 			switch row.Kind {
 			case transcriptMessage:
 				if row.MessageIndex >= 0 && row.MessageIndex < len(session.Messages) {
-					a.messageView(c, session, row.MessageIndex)
+					a.messageView(c, session, row.MessageIndex, true)
 				}
 			case transcriptBlock:
 				if row.BlockIndex < 0 || row.BlockIndex >= len(session.TranscriptBlocks) {
 					return
 				}
+				liveTurn := false
+				if active := session.ActiveTurnID(); active != "" {
+					block := session.TranscriptBlocks[row.BlockIndex]
+					if block.TurnID != nil && *block.TurnID == active {
+						liveTurn = true
+					}
+				}
 				latest := row.BlockIndex+1 == len(session.TranscriptBlocks)
-				a.activityCluster(c, session, a.capsule.AgentDisclosure, row.BlockIndex, false, latest)
+				a.activityCluster(c, session, a.capsule.AgentDisclosure, row.BlockIndex, liveTurn, latest)
+			case transcriptFold:
+				a.turnFoldRow(c, session, row.TurnID, true, a.rebuildCapsuleAgentRows)
+			case transcriptStopped:
+				a.turnFoldRow(c, session, row.TurnID, false, a.rebuildCapsuleAgentRows)
+			case transcriptWorking:
+				a.workingRow(c, session)
+			case transcriptChangedFiles:
+				a.changedFilesCard(c, session, row.TurnID, false)
 			}
 		})
 	})
+}
+
+// rebuildCapsuleAgentRows refolds the synthetic transcript after a fold
+// toggle, the way rebuildTranscript refolds the main panel.
+func (a *app) rebuildCapsuleAgentRows() {
+	if a.capsule.AgentSession == nil {
+		return
+	}
+	if a.expandedTurns == nil {
+		a.expandedTurns = map[string]bool{}
+	}
+	a.capsule.AgentRows = buildTranscriptRows(a.capsule.AgentSession, a.expandedTurns)
 }
 
 // buildBackgroundSession projects one background fold into a synthetic
@@ -229,7 +363,10 @@ func (a *app) buildBackgroundSession(key model.BackgroundWorkKey, item *model.Ba
 		a.fillBackgroundSession(syn, prefix, fold, item)
 	}
 	a.capsule.AgentSession = syn
-	a.capsule.AgentRows = buildTranscriptRows(syn, nil)
+	if a.expandedTurns == nil {
+		a.expandedTurns = map[string]bool{}
+	}
+	a.capsule.AgentRows = buildTranscriptRows(syn, a.expandedTurns)
 }
 
 func backgroundFold(ext map[string]any, key model.BackgroundWorkKey) map[string]any {
@@ -298,6 +435,7 @@ func (a *app) fillBackgroundSession(syn *model.Session, prefix string, fold map[
 			for index := range native.Messages {
 				message := native.Messages[index]
 				message.ID = fmt.Sprintf("%s-m%d", prefix, base+index)
+				message.TurnID = capsuleTurnRef(prefix, message.TurnID)
 				syn.Messages = append(syn.Messages, message)
 			}
 			for _, block := range native.Blocks {
@@ -306,11 +444,40 @@ func (a *app) fillBackgroundSession(syn *model.Session, prefix string, fold map[
 						block.Activities[index].ID = prefix + "-a-" + block.Activities[index].ID
 					}
 				}
+				block.TurnID = capsuleTurnRef(prefix, block.TurnID)
 				block.AfterMessage += base
 				syn.TranscriptBlocks = append(syn.TranscriptBlocks, block)
 			}
+			for index := range native.Turns {
+				turn := native.Turns[index]
+				turn.ID = prefix + "-turn-" + turn.ID
+				syn.Turns = append(syn.Turns, turn)
+			}
 		}
 	}
+	// A live run before its first snapshot still reads as a working turn, so
+	// the tail row and the live cluster behave like the main panel's.
+	if live && len(syn.Turns) == 0 {
+		syn.Turns = append(syn.Turns, model.AgentTurn{
+			ID:        prefix + "-live",
+			Status:    "running",
+			StartedAt: item.StartedAtMs / 1000,
+		})
+	}
+	if live {
+		syn.Status = "working"
+	}
+}
+
+// capsuleTurnRef namespaces one provider turn id under the surface's prefix,
+// so the synthetic transcript's fold and footer state never collides with
+// the selected session's.
+func capsuleTurnRef(prefix string, raw *string) *string {
+	if raw == nil || *raw == "" {
+		return nil
+	}
+	ref := prefix + "-turn-" + *raw
+	return &ref
 }
 
 // countTextRuns precounts the text entries so the newest one can render as

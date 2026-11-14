@@ -24,8 +24,7 @@ type messageEditState struct {
 
 // editRewindState reports whether one message can open its turn's editor and
 // why not when it cannot.
-func (a *app) editRewindState(messageIndex int) (int, bool, string) {
-	session := a.detail
+func (a *app) editRewindState(session *model.Session, messageIndex int) (int, bool, string) {
 	if session == nil || messageIndex < 0 || messageIndex >= len(session.Messages) {
 		return 0, false, "That message is no longer available"
 	}
@@ -33,7 +32,7 @@ func (a *app) editRewindState(messageIndex int) (int, bool, string) {
 	if message.Role != "user" || message.TurnID == nil {
 		return 0, false, ""
 	}
-	turn := a.turnByID(*message.TurnID)
+	turn := a.turnByID(session, *message.TurnID)
 	if turn == nil {
 		return 0, false, "That message is not editable right now"
 	}
@@ -62,7 +61,7 @@ func (a *app) beginMessageEdit(messageIndex int) {
 	if a.detail != nil && a.sessionActionBlocksInput(a.detail.ID) {
 		return
 	}
-	turnCount, ok, reason := a.editRewindState(messageIndex)
+	turnCount, ok, reason := a.editRewindState(a.detail, messageIndex)
 	if !ok {
 		a.status = reason
 		return

@@ -30,8 +30,7 @@ type forkAction struct {
 // assistant_message_action_for_message: only the message that owns its
 // turn's settled footer offers a fork, only while the session is idle or
 // failed, and only with a provider cursor to fork from.
-func (a *app) forkActionForMessage(messageIndex int) *forkAction {
-	session := a.detail
+func (a *app) forkActionForMessage(session *model.Session, messageIndex int) *forkAction {
 	if session == nil || messageIndex < 0 || messageIndex >= len(session.Messages) {
 		return nil
 	}
@@ -39,10 +38,10 @@ func (a *app) forkActionForMessage(messageIndex int) *forkAction {
 	if message.Role != "assistant" || message.TurnID == nil {
 		return nil
 	}
-	if _, _, ok := a.assistantFooter(messageIndex); !ok {
+	if _, _, ok := a.assistantFooter(session, messageIndex); !ok {
 		return nil
 	}
-	turn := a.turnByID(*message.TurnID)
+	turn := a.turnByID(session, *message.TurnID)
 	if turn == nil {
 		return nil
 	}
@@ -79,7 +78,7 @@ func (a *app) forkSessionFromResponse(sessionID, messageID string, turnCount int
 	valid := false
 	for index := range a.detail.Messages {
 		if a.detail.Messages[index].ID == messageID {
-			action := a.forkActionForMessage(index)
+			action := a.forkActionForMessage(a.detail, index)
 			valid = action != nil && action.enabled && action.turnCount == turnCount
 			break
 		}

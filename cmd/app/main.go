@@ -117,6 +117,7 @@ type app struct {
 	appearance     appearanceState
 	autoCompacted  map[string]bool
 	contextPanel   contextPanelState
+	capsule        capsuleState
 
 	transcriptRows     []transcriptRow
 	expandedTurns      map[string]bool

@@ -23,6 +23,9 @@ const (
 	gitStdoutCap   = 16 << 20
 	gitStderrKeep  = 4096
 	maxCommitLimit = 200
+	// maxPagedCommitBound bounds how far a paging client may walk so one
+	// window at a time cannot accumulate an unbounded history read.
+	maxPagedCommitBound = 2000
 )
 
 // gitGate bounds Git concurrency: at most four Git children at once.
@@ -460,6 +463,7 @@ type listCommitsOp struct {
 	Type   string  `json:"type"`
 	Cwd    string  `json:"cwd"`
 	Limit  int     `json:"limit"`
+	Skip   int     `json:"skip"`
 	Branch *string `json:"branch"`
 }
 
@@ -501,6 +505,11 @@ func dispatchListCommits(ctx context.Context, root *confinedRoot, operation json
 	if op.Limit > maxCommitLimit {
 		return nil, fmt.Errorf("limit exceeds the %d-commit local history bound", maxCommitLimit)
 	}
+	// Paged reads stay bounded per call; the aggregate cap keeps a paging
+	// client from walking an unbounded history one window at a time.
+	if op.Skip < 0 || op.Skip+op.Limit > maxPagedCommitBound {
+		return nil, fmt.Errorf("skip exceeds the %d-commit paged history bound", maxPagedCommitBound)
+	}
 	cwd, _, err := root.resolveDir(op.Cwd)
 	if err != nil {
 		return nil, err
@@ -519,6 +528,9 @@ func dispatchListCommits(ctx context.Context, root *confinedRoot, operation json
 		}
 	}
 	args := []string{"log", "--topo-order", "-n", strconv.Itoa(op.Limit)}
+	if op.Skip > 0 {
+		args = append(args, "--skip="+strconv.Itoa(op.Skip))
+	}
 	if op.Branch != nil && *op.Branch != "" {
 		branch := *op.Branch
 		if strings.HasPrefix(branch, "-") || strings.ContainsAny(branch, "\x00\n\r") {

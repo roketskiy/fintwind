@@ -44,7 +44,9 @@ func capsuleTabs() []capsuleTabMeta {
 }
 
 // capsuleAnchor draws the bar row above the composer card and hosts its
-// popover. It reads as nothing without a workspace.
+// popover. It reads as nothing without a workspace. While the card is open
+// the bar reads as invisible, so the card's own tab row is the only switcher
+// on screen, the way render_task_capsule hides its trigger.
 func (a *app) capsuleAnchor(c *ui.Context) {
 	a.capsuleEnsure()
 	if a.capsule.Scope == "" {
@@ -60,6 +62,9 @@ func (a *app) capsuleAnchor(c *ui.Context) {
 			bar.Children(func() {
 				a.capsuleChips(c, false)
 			})
+			if a.capsule.Open {
+				bar.Invisible()
+			}
 			trigger = bar
 		})
 		ui.PopoverBase(c, trigger, &a.capsule.Open, func(panel ui.Element) {
@@ -163,10 +168,6 @@ func (a *app) capsuleChips(c *ui.Context, expanded bool) {
 			} else {
 				a.capsule.Tab = meta.Tab
 				a.capsule.Open = true
-				if meta.Tab == capsuleChanges && time.Since(a.capsule.CommitsAt) >= capsuleRefreshInterval {
-					a.capsule.CommitsAt = time.Now()
-					a.capsuleRefreshCommits()
-				}
 			}
 		}
 	}
@@ -177,129 +178,82 @@ func capsuleHeading(c *ui.Context, text string) {
 	ui.Text(c, text).FontSize(uiPx(13)).FontWeight(600).TextColor(palette.text)
 }
 
-// capsuleChangesBody is the changes tab: the branch and working-tree totals
-// over the local history graph. It shows no code content, only stats.
+// capsuleChangesBody is the changes tab, mirroring render_git_tools_section:
+// the working-tree totals with the branch and the git action rows. The
+// commit graph lives in the right panel's History surface.
 func (a *app) capsuleChangesBody(c *ui.Context) {
-	branch := a.capsule.Branch
-	if branch == "" {
-		branch = tr("No branch")
-	}
-	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+	capsuleHeading(c, tr("Git tools"))
+	stat := a.capsuleDiffStat()
+	a.capsuleActionRow(c, "file-diff", tr("Changes"), true, false, func() {
+		a.openSourceControl()
+	}, stat)
+	ui.Row(c).FillWidth().MinHeight(32).Padding(0, 8).Radius(8).Gap(10).
+		AlignItems(ui.Center).Children(func() {
 		icon(c, "git-branch", 14, palette.textSecondary)
-		ui.Text(c, branch).FontSize(uiPx(12.5)).TextColor(palette.text).SingleLine()
-		ui.Row(c).Grow(1)
-		if a.capsule.Additions > 0 || a.capsule.Deletions > 0 {
-			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, fmt.Sprintf("+%d", a.capsule.Additions)).FontSize(uiPx(12)).
+		branch := a.capsule.Branch
+		if branch == "" {
+			branch = "—"
+		}
+		ui.Text(c, branch).FontSize(uiPx(12.5)).TextColor(palette.text).
+			Grow(1).MinWidth(0).SingleLine().Ellipsis("…")
+	})
+	a.capsuleActionRow(c, "history", tr("History"), true, false, func() {
+		a.openHistorySurface()
+	}, nil)
+	a.capsuleActionRow(c, "git-commit-horizontal", tr("Commit or push"), true, false, func() {
+		a.openSourceControl()
+	}, nil)
+	a.capsuleActionRow(c, "github", tr("Compare branch"), true, false, func() {
+		a.openSourceReview(reviewSourceBranch)
+	}, nil)
+}
+
+// capsuleDiffStat builds the trailing +A/-D the Changes row carries while
+// the worktree is dirty, or nil when it is clean.
+func (a *app) capsuleDiffStat() func(c *ui.Context) {
+	if a.capsule.Additions == 0 && a.capsule.Deletions == 0 {
+		return nil
+	}
+	return func(c *ui.Context) {
+		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+			if a.capsule.Additions > 0 {
+				ui.Text(c, fmt.Sprintf("+%d", a.capsule.Additions)).FontSize(uiPx(11.5)).
 					FontWeight(500).TextColor(palette.successText)
-				ui.Text(c, fmt.Sprintf("-%d", a.capsule.Deletions)).FontSize(uiPx(12)).
+			}
+			if a.capsule.Deletions > 0 {
+				ui.Text(c, fmt.Sprintf("-%d", a.capsule.Deletions)).FontSize(uiPx(11.5)).
 					FontWeight(500).TextColor(palette.dangerText)
-			})
-		}
-	})
-	if len(a.capsule.Commits) == 0 {
-		capsuleGraphEmpty(c)
-		return
-	}
-	ui.Column(c).FillWidth().Gap(2).Children(func() {
-		for index := range a.capsule.Commits {
-			a.capsuleGraphRowView(c, &a.capsule.Commits[index])
-		}
-	})
-}
-
-func capsuleGraphEmpty(c *ui.Context) {
-	ui.Row(c).FillWidth().Padding(8, 0, 4, 0).Children(func() {
-		ui.Text(c, tr("No commits yet")).FontSize(uiPx(12)).TextColor(palette.textTertiary)
-	})
-}
-
-// capsuleGraphRowView is one history row: the drawn lane geometry beside
-// the subject, author and time.
-func (a *app) capsuleGraphRowView(c *ui.Context, row *capsuleGraphRow) {
-	width := float32(row.LaneSpan)*capsuleGraphLane + 4
-	ui.Row(c).FillWidth().MinWidth(0).Height(capsuleGraphRowH).Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Box(c).Size(width, capsuleGraphRowH).Draw(func(p *ui.Painter, r ui.Rect) {
-			a.drawCapsuleGraphRow(p, r, row)
+			}
 		})
-		ui.Column(c).Grow(1).MinWidth(0).Gap(1).Children(func() {
-			ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, row.Commit.Subject).FontSize(uiPx(12)).FixedLineHeight(uiPx(15)).
-					TextColor(palette.text).Grow(1).MinWidth(0).SingleLine().Ellipsis("…")
-				if row.Commit.Head {
-					ui.Text(c, tr("HEAD")).FontSize(uiPx(10)).FontWeight(600).
-						TextColor(palette.accentText)
-				} else if !row.Commit.Pushed {
-					ui.Text(c, tr("Unpushed")).FontSize(uiPx(10)).TextColor(palette.warningText)
-				}
-			})
-			ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, row.Commit.Author).FontSize(uiPx(10.5)).TextColor(palette.textTertiary).
-					Grow(1).MinWidth(0).SingleLine().Ellipsis("…")
-				ui.Text(c, row.Commit.ShortHash).FontSize(uiPx(10.5)).TextColor(palette.textGhost)
-				ui.Text(c, capsuleCommitTime(row.Commit.Timestamp)).FontSize(uiPx(10.5)).
-					TextColor(palette.textTertiary)
-			})
-		})
+	}
+}
+
+// capsuleActionRow mirrors render_environment_action_row: a 32px row with a
+// leading icon, a label and an optional trailing view; disabled rows dim.
+func (a *app) capsuleActionRow(c *ui.Context, iconName, label string, enabled, active bool, action func(), trailing func(c *ui.Context)) {
+	row := ui.ButtonBase(c).Label(label).MinHeight(32).FillWidth().Padding(0, 8).Radius(8).
+		Gap(10).Justify(ui.Start).AlignItems(ui.Center)
+	if !enabled {
+		row.Opacity(0.35)
+	} else if row.Hovered() {
+		row.Background(palette.overlayStrong)
+	}
+	row.Children(func() {
+		if active {
+			c.AnimationFrame()
+			icon(c, "loader-circle", 14, palette.textSecondary).Rotate(float32(c.Now().UnixMilli()%1000) * 0.36)
+		} else {
+			icon(c, iconName, 14, palette.textSecondary)
+		}
+		ui.Text(c, label).FontSize(uiPx(12.5)).TextColor(palette.text).
+			Grow(1).MinWidth(0).SingleLine().Ellipsis("…")
+		if trailing != nil {
+			trailing(c)
+		}
 	})
-}
-
-// drawCapsuleGraphRow paints one row the way MyGit's logview does: a dot at
-// the commit's lane center, straight lane lines through the row, and cubic
-// curves leaving the dot for lanes that open or merge.
-func (a *app) drawCapsuleGraphRow(p *ui.Painter, r ui.Rect, row *capsuleGraphRow) {
-	x := func(lane int) float32 {
-		return r.X + 2 + float32(lane)*capsuleGraphLane + capsuleGraphLane/2
+	if enabled && row.Clicked() {
+		action()
 	}
-	mid := r.Y + r.H/2
-	in := x(row.Lane)
-	color := capsuleLaneColor(row.Color)
-	p.Line(in, r.Y, in, mid, capsuleGraphStroke, color)
-	if row.FlowDown {
-		p.Line(in, mid, in, r.Y+r.H, capsuleGraphStroke, color)
-	}
-	p.Fill(ui.Rect{X: in - capsuleGraphDot/2, Y: mid - capsuleGraphDot/2, W: capsuleGraphDot, H: capsuleGraphDot}, color, capsuleGraphDot/2)
-	for _, line := range row.Lines {
-		lineColor := capsuleLaneColor(line.Color)
-		if line.Dot {
-			out := x(line.To)
-			control := (mid + r.Y + r.H) / 2
-			var path ui.Path
-			path.MoveTo(in, mid).CubeTo(in, control, out, control, out, r.Y+r.H)
-			p.StrokePath(&path, capsuleGraphStroke, lineColor)
-			continue
-		}
-		from, to := x(line.From), x(line.To)
-		if from == to {
-			p.Line(from, r.Y, to, r.Y+r.H, capsuleGraphStroke, lineColor)
-		}
-	}
-}
-
-// capsuleLaneColor cycles the graph's lane palette, kept inside the app's
-// own hues.
-func capsuleLaneColor(index int) ui.Color {
-	colors := []ui.Color{
-		palette.link,
-		palette.success,
-		palette.danger,
-		palette.warning,
-		palette.codeKeyword,
-		palette.codeType,
-		palette.favorite,
-	}
-	return colors[index%len(colors)]
-}
-
-func capsuleCommitTime(unix uint64) string {
-	if unix == 0 {
-		return ""
-	}
-	at := time.Unix(int64(unix), 0)
-	if now := time.Now(); at.Year() == now.Year() && at.YearDay() == now.YearDay() {
-		return at.Format("3:04 PM")
-	}
-	return at.Format("Jan 2")
 }
 
 // capsuleTodoBody is the todo tab: the agent's plan, one marked row per item.

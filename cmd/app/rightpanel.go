@@ -9,10 +9,11 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// Values from app.rs and right_panel.rs.
+// Tab strip matches the session workspace tab row (tabRow/sessionTab);
+// the other values come from app.rs and right_panel.rs.
 const (
-	rightPanelHeaderHeight     = 48.0
-	rightPanelTabHeight        = 28.0
+	rightPanelHeaderHeight     = 36.0
+	rightPanelTabHeight        = 30.0
 	rightPanelTabMinWidth      = 100.0
 	rightPanelTabMaxWidth      = 176.0
 	rightPanelFileHeaderHeight = 42.0
@@ -43,8 +44,13 @@ type treeRow struct {
 func (a *app) rightPanel(c *ui.Context) {
 	ui.Column(c).Width(a.rightPanelWidthValue).FillHeight().Shrink(0).Background(palette.surface).
 		BorderWidth(0, 0, 0, 1).BorderColor(palette.borderStrong).Children(func() {
+		// Same strip treatment as the session workspace tab row: a shaded
+		// bar behind the tabs, shown only while tabs exist.
 		header := ui.Row(c).FillWidth().Height(rightPanelHeaderHeight).Padding(0, 0, 0, 10).
 			Gap(6).AlignItems(ui.Center)
+		if len(a.surfaces) > 0 {
+			header.Background(sessionTabBarBackground())
+		}
 		header.Children(func() {
 			tabs := ui.Row(c).Grow(1).MinWidth(0).FillHeight().Gap(4).AlignItems(ui.Center).Clip()
 			tabs.Children(func() {
@@ -90,29 +96,34 @@ func (a *app) rightPanel(c *ui.Context) {
 	})
 }
 
-// surfaceTab is one open right-panel surface: 28 high, 100-176 wide, 8 px
-// insets, a 6 radius, and a 20 px close button.
+// surfaceTab draws one open right-panel surface with the session tab's
+// look: 30 high, 100-176 wide, 8 px insets, a 7 radius, and an 18 px
+// close button; the active tab sits on palette.surface over the shaded
+// strip.
 func (a *app) surfaceTab(c *ui.Context, index int, kind string) {
 	active := index == a.activeSurface
 	title := a.surfaceTabTitle(kind)
 	tab := ui.ButtonBase(c).Label(title).Height(rightPanelTabHeight).
 		MinWidth(rightPanelTabMinWidth).MaxWidth(rightPanelTabMaxWidth).
-		Padding(0, 8).Radius(6).Gap(6).AlignItems(ui.Center).Shrink(0)
+		Padding(0, 8).Radius(7).Gap(6).AlignItems(ui.Center).Shrink(0)
 	if active {
-		tab.Background(palette.overlayStrong)
-	} else if tab.Pressed() {
-		tab.Background(palette.overlayStrong)
-	} else if tab.Hovered() {
-		tab.Background(palette.overlay)
+		tab.Background(palette.surface)
+	} else {
+		if tab.Hovered() {
+			tab.Background(palette.overlay)
+		}
+		if tab.Pressed() {
+			tab.Background(palette.overlayStrong)
+		}
 	}
 	tab.Children(func() {
-		icon(c, surfaceIcon(kind), 13, palette.textSecondary)
+		icon(c, surfaceIcon(kind), 12, palette.textSecondary)
 		ui.Row(c).Grow(1).MinWidth(0).Children(func() {
 			ui.Text(c, title).FontSize(uiPx(12)).
 				TextColor(choice(active, palette.text, palette.textSecondary)).
 				SingleLine().Ellipsis("...")
 		})
-		closeTab := ui.ButtonBase(c).Label(tr("Close")).Size(20, 20).Radius(5).Center().
+		closeTab := ui.ButtonBase(c).Label(tr("Close")).Size(18, 18).Radius(5).Center().
 			Margin(0, -2, 0, -2)
 		if closeTab.Hovered() {
 			closeTab.Background(palette.overlayStrong)
@@ -137,15 +148,16 @@ func (a *app) surfaceTab(c *ui.Context, index int, kind string) {
 // so one flag is enough.
 var addSurfaceMenuOpen bool
 
-// addSurfaceButton is the header's "+" control: ui.icon_button's 26 box,
-// 7 radius and 14 tertiary glyph, opening the same surfaces the
-// chooser cards offer, with a check on the single-instance ones already
-// open — render_right_panel_header's dropdown_menu.
+// addSurfaceButton is the header's "+" control, styled like the session
+// tab row's new-tab button: a 28 box, 7 radius and 14 tertiary glyph on
+// palette.overlay, opening the same surfaces the chooser cards offer,
+// with a check on the single-instance ones already open —
+// render_right_panel_header's dropdown_menu.
 func (a *app) addSurfaceButton(c *ui.Context) {
 	plus := ui.ButtonBase(c).Label(tr("Open a surface")).
-		Size(26, 26).Center().Radius(7)
+		Size(28, 28).Center().Radius(7).Background(palette.overlay)
 	if plus.Hovered() {
-		plus.Background(palette.overlay)
+		plus.Background(palette.overlayStrong)
 	}
 	if plus.Pressed() {
 		plus.Background(palette.overlayStrong)

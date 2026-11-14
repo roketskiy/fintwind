@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
+	"fintwind-go/internal/backgroundview"
 	"fintwind-go/internal/graph"
 	"fintwind-go/internal/model"
 
@@ -222,37 +222,6 @@ func layoutHistory(commits []capsuleCommit) []historyRow {
 	return rows
 }
 
-// capsuleBackgroundItems decodes the session's background work projection
-// into ordered items. The fold stores raw maps keyed by kind and provider,
-// so the decode sorts by start time to keep rows stable across frames.
-func capsuleBackgroundItems(ext map[string]any) []model.BackgroundWorkItem {
-	raw, _ := ext["backgroundItems"].(map[string]any)
-	items := make([]model.BackgroundWorkItem, 0, len(raw))
-	for key, value := range raw {
-		encoded, err := json.Marshal(value)
-		if err != nil {
-			continue
-		}
-		var item model.BackgroundWorkItem
-		if json.Unmarshal(encoded, &item) != nil || item.Key.ProviderID == "" {
-			continue
-		}
-		if item.Key.Kind == "" {
-			if cut := strings.IndexByte(key, '/'); cut > 0 {
-				item.Key.Kind = key[:cut]
-			}
-		}
-		items = append(items, item)
-	}
-	sort.SliceStable(items, func(i, j int) bool {
-		if items[i].StartedAtMs != items[j].StartedAtMs {
-			return items[i].StartedAtMs < items[j].StartedAtMs
-		}
-		return items[i].Key.ProviderID < items[j].Key.ProviderID
-	})
-	return items
-}
-
 // capsuleState is the capsule's whole projection. Rendering reads only
 // these caches; fetches fill them off-thread behind generation guards.
 type capsuleState struct {
@@ -368,7 +337,7 @@ func (a *app) capsuleItemsFor() []model.BackgroundWorkItem {
 		a.capsule.Items = nil
 		return nil
 	}
-	a.capsule.Items = capsuleBackgroundItems(a.extension(a.detail))
+	a.capsule.Items = backgroundview.Items(a.extension(a.detail))
 	return a.capsule.Items
 }
 

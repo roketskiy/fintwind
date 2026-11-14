@@ -4,18 +4,12 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
-	"unicode/utf8"
 
+	"fintwind-go/internal/backgroundview"
 	"fintwind-go/internal/daemon"
 	"fintwind-go/internal/model"
 
 	"github.com/google/uuid"
-)
-
-const (
-	backgroundEntryLimit = 200
-	backgroundRunLimit   = 32 * 1024
-	backgroundTailLimit  = 16 * 1024
 )
 
 func (a *app) extension(session *model.Session) map[string]any {
@@ -249,12 +243,9 @@ func (a *app) reconcileActiveTranscript(session *model.Session, transcript model
 	return true
 }
 
-// applyBackgroundWorkEvent folds background work into a bounded, ordered
-// projection. The desktop keeps a full registry (src/app/background_work.rs)
-// this client does not render yet; the fold preserves arrival order at run
-// granularity — consecutive deltas of one stream accumulate into a run and
-// activities and snapshots land in order — so subagent tools and their body
-// text stay attributed in provider order.
+// applyBackgroundWorkEvent folds background work into the capsule projection
+// (internal/backgroundview). The stop-request events drive UI state and stay
+// here; the item and transcript events are the package's fold.
 func (a *app) applyBackgroundWorkEvent(session *model.Session, payload json.RawMessage) bool {
 	var decoded map[string]any
 	if json.Unmarshal(payload, &decoded) != nil {
@@ -268,53 +259,16 @@ func (a *app) applyBackgroundWorkEvent(session *model.Session, payload json.RawM
 	}
 	ext := a.extension(session)
 	switch kind, _ := decoded["type"].(string); kind {
-	case "upsert":
-		items := backgroundItems(ext)
-		if key := backgroundKey(decoded["key"]); key != "" {
-			items[key] = decoded
-		}
-	case "reconcileProcesses", "reconcileLive":
-		items := map[string]any{}
-		if list, ok := decoded["items"].([]any); ok {
-			for _, entry := range list {
-				item, _ := entry.(map[string]any)
-				if key := backgroundKey(item["key"]); key != "" {
-					items[key] = item
-				}
-			}
-		}
-		ext["backgroundItems"] = items
-	case "outputDelta":
-		// Deltas for a key the provider never upserted are dropped, the way
-		// the desktop's append_output does.
-		key := backgroundKey(decoded["key"])
-		item, _ := backgroundItems(ext)[key].(map[string]any)
-		if item == nil {
-			return true
-		}
-		delta, _ := decoded["delta"].(string)
-		if delta == "" {
-			return true
-		}
-		output, _ := item["output"].(string)
-		if tail := backgroundTail(output+delta, backgroundTailLimit); len(tail) != len(output)+len(delta) {
-			item["output"] = tail
-			item["outputTruncated"] = true
-		} else {
-			item["output"] = tail
-		}
-	case "transcript":
-		a.applyBackgroundWorkTranscript(ext, decoded)
 	case "stopRequested":
 		ext["backgroundStopRequested"] = decoded
 		a.backgroundStopEventState(session, decoded, "stopping", "")
+		return true
 	case "stopFailed":
 		ext["backgroundStopFailed"] = decoded
 		a.backgroundStopEventState(session, decoded, "running", stopFailedMessage(decoded))
-	default:
-		return false
+		return true
 	}
-	return true
+	return backgroundview.ApplyEvent(ext, payload)
 }
 
 // backgroundStopEventState mirrors the optimistic stop: a requested stop
@@ -335,60 +289,6 @@ func (a *app) backgroundStopEventState(session *model.Session, decoded map[strin
 func stopFailedMessage(decoded map[string]any) string {
 	message, _ := decoded["message"].(string)
 	return message
-}
-
-// applyBackgroundWorkTranscript folds one nested transcript event (externally
-// tagged inside the internally tagged backgroundWork payload, per the wire
-// round-trip test in driver_wire.rs).
-func (a *app) applyBackgroundWorkTranscript(ext map[string]any, decoded map[string]any) {
-	var name string
-	var body map[string]any
-	for _, candidate := range []string{"started", "textDelta", "reasoningDelta", "activity", "snapshot", "finished"} {
-		if value, ok := decoded[candidate].(map[string]any); ok {
-			name, body = candidate, value
-			break
-		}
-	}
-	if name == "" {
-		return
-	}
-	key := backgroundKey(body["key"])
-	if key == "" {
-		return
-	}
-	transcripts := backgroundTranscripts(ext)
-	fold, _ := transcripts[key].(map[string]any)
-	if fold == nil {
-		fold = map[string]any{}
-		transcripts[key] = fold
-	}
-	switch name {
-	case "started":
-		fold["entries"] = []any{}
-		delete(fold, "prompt")
-		if prompt, ok := body["prompt"].(string); ok && prompt != "" {
-			fold["prompt"] = prompt
-		}
-	case "textDelta", "reasoningDelta":
-		if delta, ok := body["delta"].(string); ok && delta != "" {
-			fold["entries"] = appendBackgroundRun(fold["entries"], name, delta)
-		}
-	case "activity":
-		if activity, ok := body["activity"].(map[string]any); ok {
-			fold["entries"] = appendBackgroundEntry(fold["entries"], map[string]any{"activity": activity})
-		}
-	case "snapshot":
-		// An authoritative snapshot replaces the accumulated runs; its own
-		// message order is preserved as delivered.
-		if transcript, ok := body["transcript"].(map[string]any); ok {
-			fold["entries"] = []any{map[string]any{"snapshot": transcript}}
-		}
-	case "finished":
-		if success, ok := body["success"].(bool); ok {
-			fold["success"] = success
-		}
-	}
-	fold["entries"] = capBackgroundEntries(fold["entries"])
 }
 
 // applySubmissionUpdated stores the receipt under the extension store and
@@ -672,84 +572,4 @@ func (a *app) applySteerRejected(session *model.Session, payload json.RawMessage
 		a.post(func() { a.drainQueuedSubmission(session) })
 	}
 	return true
-}
-
-func backgroundItems(ext map[string]any) map[string]any {
-	items, _ := ext["backgroundItems"].(map[string]any)
-	if items == nil {
-		items = map[string]any{}
-		ext["backgroundItems"] = items
-	}
-	return items
-}
-
-func backgroundTranscripts(ext map[string]any) map[string]any {
-	transcripts, _ := ext["backgroundTranscripts"].(map[string]any)
-	if transcripts == nil {
-		transcripts = map[string]any{}
-		ext["backgroundTranscripts"] = transcripts
-	}
-	return transcripts
-}
-
-// backgroundKey renders a BackgroundWorkKey (kind + providerId) as a stable
-// map key.
-func backgroundKey(value any) string {
-	key, _ := value.(map[string]any)
-	if key == nil {
-		return ""
-	}
-	kind, _ := key["kind"].(string)
-	provider, _ := key["providerId"].(string)
-	if kind == "" || provider == "" {
-		return ""
-	}
-	return kind + "/" + provider
-}
-
-// appendBackgroundRun merges a delta into the trailing run of the same
-// stream, so interleaved text, reasoning and activities keep their order.
-func appendBackgroundRun(entriesAny any, name, delta string) []any {
-	entries, _ := entriesAny.([]any)
-	kind := "text"
-	if name == "reasoningDelta" {
-		kind = "reasoning"
-	}
-	if len(entries) > 0 {
-		if last, ok := entries[len(entries)-1].(map[string]any); ok {
-			if run, ok := last[kind].(string); ok && len(run)+len(delta) <= backgroundRunLimit {
-				last[kind] = run + delta
-				return entries
-			}
-		}
-	}
-	return appendBackgroundEntry(entries, map[string]any{kind: delta})
-}
-
-func appendBackgroundEntry(entriesAny any, entry map[string]any) []any {
-	entries, _ := entriesAny.([]any)
-	return append(entries, entry)
-}
-
-// capBackgroundEntries bounds one transcript's history by dropping its oldest
-// runs; the store is a projection, not the durable registry.
-func capBackgroundEntries(entriesAny any) []any {
-	entries, _ := entriesAny.([]any)
-	if len(entries) <= backgroundEntryLimit {
-		return entries
-	}
-	return append([]any(nil), entries[len(entries)-backgroundEntryLimit:]...)
-}
-
-// backgroundTail keeps the newest bytes of an output string without splitting
-// a UTF-8 sequence.
-func backgroundTail(text string, limit int) string {
-	if len(text) <= limit {
-		return text
-	}
-	cut := len(text) - limit
-	for cut < len(text) && !utf8.RuneStart(text[cut]) {
-		cut++
-	}
-	return text[cut:]
 }

@@ -2,11 +2,10 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"strings"
 	"time"
 
+	"fintwind-go/internal/backgroundview"
 	"fintwind-go/internal/model"
 
 	"github.com/egoist/mygo/ui"
@@ -196,7 +195,7 @@ func (a *app) setBackgroundStatus(key model.BackgroundWorkKey, status, message s
 		return
 	}
 	ext := a.extension(a.detail)
-	raw, ok := backgroundItems(ext)[key.Kind+"/"+key.ProviderID].(map[string]any)
+	raw, ok := backgroundview.ItemsMap(ext)[key.Kind+"/"+key.ProviderID].(map[string]any)
 	if ok {
 		if current, _ := raw["status"].(string); current != "" {
 			if status == "stopping" && !backgroundStatusLive(current) {
@@ -342,9 +341,8 @@ func (a *app) rebuildCapsuleAgentRows() {
 }
 
 // buildBackgroundSession projects one background fold into a synthetic
-// session the main transcript builders can render. Message and activity IDs
-// carry the key as a prefix, so their expansion state and markdown caches
-// never collide with the selected session's.
+// session the main transcript builders can render. The projection itself lives
+// in internal/backgroundview; this binds it to the capsule's view state.
 func (a *app) buildBackgroundSession(key model.BackgroundWorkKey, item *model.BackgroundWorkItem) {
 	a.capsule.AgentDisclosure = map[int]int{}
 	a.capsule.AgentRows = nil
@@ -359,145 +357,12 @@ func (a *app) buildBackgroundSession(key model.BackgroundWorkKey, item *model.Ba
 		syn.Model = &name
 	}
 	if item.Key.Kind == "subagent" && a.detail != nil {
-		fold := backgroundFold(a.extension(a.detail), key)
-		a.fillBackgroundSession(syn, prefix, fold, item)
+		fold := backgroundview.Fold(a.extension(a.detail), key)
+		backgroundview.FillSession(syn, prefix, fold, item)
 	}
 	a.capsule.AgentSession = syn
 	if a.expandedTurns == nil {
 		a.expandedTurns = map[string]bool{}
 	}
 	a.capsule.AgentRows = buildTranscriptRows(syn, a.expandedTurns)
-}
-
-func backgroundFold(ext map[string]any, key model.BackgroundWorkKey) map[string]any {
-	transcripts, _ := ext["backgroundTranscripts"].(map[string]any)
-	fold, _ := transcripts[key.Kind+"/"+key.ProviderID].(map[string]any)
-	return fold
-}
-
-func (a *app) fillBackgroundSession(syn *model.Session, prefix string, fold map[string]any, item *model.BackgroundWorkItem) {
-	live := item != nil && item.Live()
-	if prompt, ok := fold["prompt"].(string); ok && prompt != "" {
-		syn.Messages = append(syn.Messages, model.Message{
-			ID: prefix + "-prompt", Role: "user", Content: prompt, CreatedAt: item.StartedAtMs / 1000,
-		})
-	}
-	entries, _ := fold["entries"].([]any)
-	totalTextRuns := countTextRuns(entries)
-	textRuns := 0
-	for _, entryAny := range entries {
-		entry, ok := entryAny.(map[string]any)
-		if !ok {
-			continue
-		}
-		if text, ok := entry["text"].(string); ok {
-			textRuns++
-			syn.Messages = append(syn.Messages, model.Message{
-				ID:        fmt.Sprintf("%s-t%d", prefix, textRuns),
-				Role:      "assistant",
-				Content:   text,
-				Streaming: live && textRuns == totalTextRuns,
-				CreatedAt: item.UpdatedAtMs / 1000,
-			})
-			continue
-		}
-		if reasoning, ok := entry["reasoning"].(string); ok {
-			syn.TranscriptBlocks = append(syn.TranscriptBlocks, model.TranscriptBlock{
-				AfterMessage: max(0, len(syn.Messages)-1),
-				Activities: []model.ActivityItem{{
-					ID:   fmt.Sprintf("%s-r%d", prefix, len(syn.TranscriptBlocks)+1),
-					Kind: model.KindReasoning, Title: "Reasoning", Complete: true,
-					Reasoning: &model.ReasoningBlock{Content: reasoning},
-				}},
-			})
-			continue
-		}
-		if activity, ok := entry["activity"].(map[string]any); ok {
-			var activityItem model.ActivityItem
-			if json.Unmarshal(marshalAny(activity), &activityItem) != nil {
-				continue
-			}
-			if activityItem.ID != "" {
-				activityItem.ID = prefix + "-a-" + activityItem.ID
-			}
-			syn.TranscriptBlocks = append(syn.TranscriptBlocks, model.TranscriptBlock{
-				AfterMessage: max(0, len(syn.Messages)-1),
-				Activities:   []model.ActivityItem{activityItem},
-			})
-			continue
-		}
-		if snapshot, ok := entry["snapshot"].(map[string]any); ok {
-			var native model.NativeTranscript
-			if json.Unmarshal(marshalAny(snapshot), &native) != nil {
-				continue
-			}
-			base := len(syn.Messages)
-			for index := range native.Messages {
-				message := native.Messages[index]
-				message.ID = fmt.Sprintf("%s-m%d", prefix, base+index)
-				message.TurnID = capsuleTurnRef(prefix, message.TurnID)
-				syn.Messages = append(syn.Messages, message)
-			}
-			for _, block := range native.Blocks {
-				for index := range block.Activities {
-					if block.Activities[index].ID != "" {
-						block.Activities[index].ID = prefix + "-a-" + block.Activities[index].ID
-					}
-				}
-				block.TurnID = capsuleTurnRef(prefix, block.TurnID)
-				block.AfterMessage += base
-				syn.TranscriptBlocks = append(syn.TranscriptBlocks, block)
-			}
-			for index := range native.Turns {
-				turn := native.Turns[index]
-				turn.ID = prefix + "-turn-" + turn.ID
-				syn.Turns = append(syn.Turns, turn)
-			}
-		}
-	}
-	// A live run before its first snapshot still reads as a working turn, so
-	// the tail row and the live cluster behave like the main panel's.
-	if live && len(syn.Turns) == 0 {
-		syn.Turns = append(syn.Turns, model.AgentTurn{
-			ID:        prefix + "-live",
-			Status:    "running",
-			StartedAt: item.StartedAtMs / 1000,
-		})
-	}
-	if live {
-		syn.Status = "working"
-	}
-}
-
-// capsuleTurnRef namespaces one provider turn id under the surface's prefix,
-// so the synthetic transcript's fold and footer state never collides with
-// the selected session's.
-func capsuleTurnRef(prefix string, raw *string) *string {
-	if raw == nil || *raw == "" {
-		return nil
-	}
-	ref := prefix + "-turn-" + *raw
-	return &ref
-}
-
-// countTextRuns precounts the text entries so the newest one can render as
-// streaming while the item is live.
-func countTextRuns(entries []any) int {
-	count := 0
-	for _, entryAny := range entries {
-		if entry, ok := entryAny.(map[string]any); ok {
-			if _, ok := entry["text"].(string); ok {
-				count++
-			}
-		}
-	}
-	return count
-}
-
-func marshalAny(value any) []byte {
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return nil
-	}
-	return encoded
 }

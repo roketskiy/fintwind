@@ -307,12 +307,34 @@ func (a *app) applyBackgroundWorkEvent(session *model.Session, payload json.RawM
 		a.applyBackgroundWorkTranscript(ext, decoded)
 	case "stopRequested":
 		ext["backgroundStopRequested"] = decoded
+		a.backgroundStopEventState(session, decoded, "stopping", "")
 	case "stopFailed":
 		ext["backgroundStopFailed"] = decoded
+		a.backgroundStopEventState(session, decoded, "running", stopFailedMessage(decoded))
 	default:
 		return false
 	}
 	return true
+}
+
+// backgroundStopEventState mirrors the optimistic stop: a requested stop
+// shows as stopping, a failed one restores running with the daemon's reason.
+func (a *app) backgroundStopEventState(session *model.Session, decoded map[string]any, status, message string) {
+	if session == nil || session != a.detail {
+		return
+	}
+	keyMap, _ := decoded["key"].(map[string]any)
+	kind, _ := keyMap["kind"].(string)
+	provider, _ := keyMap["providerId"].(string)
+	if kind == "" || provider == "" {
+		return
+	}
+	a.setBackgroundStatus(model.BackgroundWorkKey{Kind: kind, ProviderID: provider}, status, message)
+}
+
+func stopFailedMessage(decoded map[string]any) string {
+	message, _ := decoded["message"].(string)
+	return message
 }
 
 // applyBackgroundWorkTranscript folds one nested transcript event (externally

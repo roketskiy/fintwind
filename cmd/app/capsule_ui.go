@@ -392,20 +392,28 @@ func (a *app) capsuleTaskSection(c *ui.Context, label string, items []model.Back
 }
 
 func (a *app) capsuleTaskRow(c *ui.Context, item model.BackgroundWorkItem) {
-	row := ui.ButtonBase(c).Label(item.Title).FillWidth().Height(30).Padding(0, 8).Radius(7).
-		Gap(8).Justify(ui.Start).AlignItems(ui.Center)
-	if row.Hovered() {
-		row.Background(palette.overlay)
-	}
-	row.Children(func() {
-		a.capsuleStatusIcon(c, item)
-		ui.Text(c, item.Title).FontSize(uiPx(12.5)).TextColor(palette.text).
-			Grow(1).MinWidth(0).SingleLine().Ellipsis("…")
-		ui.Text(c, capsuleElapsed(item)).FontSize(uiPx(11)).TextColor(palette.textTertiary)
+	// The stop control sits beside the row rather than inside it, so the two
+	// click targets never share a press.
+	stoppable := stoppableBackground(&item)
+	ui.Row(c).FillWidth().Height(30).Gap(4).AlignItems(ui.Center).Children(func() {
+		row := ui.ButtonBase(c).Label(item.Title).Grow(1).MinWidth(0).Height(30).Padding(0, 8).
+			Radius(7).Gap(8).Justify(ui.Start).AlignItems(ui.Center)
+		if row.Hovered() {
+			row.Background(palette.overlay)
+		}
+		row.Children(func() {
+			a.capsuleStatusIcon(c, item)
+			ui.Text(c, item.Title).FontSize(uiPx(12.5)).TextColor(palette.text).
+				Grow(1).MinWidth(0).SingleLine().Ellipsis("…")
+			ui.Text(c, capsuleElapsed(item)).FontSize(uiPx(11)).TextColor(palette.textTertiary)
+		})
+		if row.Clicked() {
+			a.openBackgroundSurface(backgroundSurfaceKey(item.Key))
+		}
+		if stoppable {
+			a.backgroundStopButton(c, &item)
+		}
 	})
-	if row.Clicked() {
-		a.openBackgroundSurface(backgroundSurfaceKey(item.Key))
-	}
 }
 
 // capsuleStatusIcon mirrors work_status_icon: a slow loader while live,

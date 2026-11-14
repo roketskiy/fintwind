@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"fintwind-go/internal/graph"
 	"fintwind-go/internal/model"
 
 	"github.com/egoist/mygo/ui"
@@ -203,103 +204,20 @@ type capsuleCommit struct {
 	Pushed    bool         `json:"pushed"`
 }
 
-// capsuleGraphLine is one drawn connection. Without Dot the line flows from
-// the From lane's top edge to the To lane's bottom edge; with Dot it leaves
-// the commit's dot halfway down the row, curving into the To lane.
-type capsuleGraphLine struct {
-	From, To int
-	Color    int
-	Dot      bool
+// historyRow is one commit with its laid-out graph row; the lane model is
+// the port of MyGit's internal/graph in fintwind-go/internal/graph.
+type historyRow struct {
+	Commit capsuleCommit
+	Row    graph.Row
 }
 
-// capsuleGraphRow is one commit with its lane geometry, laid out once per
-// history load so painting stays a read. FlowDown says a parent flows out
-// of the commit's lane below the dot, so the painter draws that segment.
-type capsuleGraphRow struct {
-	Commit   capsuleCommit
-	Lane     int
-	Color    int
-	LaneSpan int
-	FlowDown bool
-	Lines    []capsuleGraphLine
-}
-
-type capsuleLaneSlot struct {
-	Hash  string
-	Color int
-}
-
-// layoutCapsuleGraph assigns lanes and connections newest-first, the way
-// MyGit's logview draws `git log --graph`: every commit flows in one lane,
-// its first parent inherits that lane, further parents open lanes to the
-// right or merge into lanes already flowing toward them, and freed lanes
-// are reused before new ones open.
-func layoutCapsuleGraph(commits []capsuleCommit) []capsuleGraphRow {
-	rows := make([]capsuleGraphRow, 0, len(commits))
-	var lanes []capsuleLaneSlot
-	nextColor := 0
-	freeLane := func() (int, bool) {
-		for index, slot := range lanes {
-			if slot.Hash == "" {
-				return index, true
-			}
-		}
-		return 0, false
-	}
-	laneOf := func(hash string) int {
-		for index, slot := range lanes {
-			if slot.Hash == hash {
-				return index
-			}
-		}
-		return -1
-	}
+// layoutHistory lays the commits' graph out once per fetch, so painting
+// stays a read.
+func layoutHistory(commits []capsuleCommit) []historyRow {
+	rows := make([]historyRow, 0, len(commits))
+	var layout graph.Layout
 	for _, commit := range commits {
-		lane := laneOf(commit.Hash)
-		if lane < 0 {
-			if reused, ok := freeLane(); ok {
-				lane = reused
-			} else {
-				lane = len(lanes)
-				lanes = append(lanes, capsuleLaneSlot{})
-			}
-			lanes[lane] = capsuleLaneSlot{Hash: commit.Hash, Color: nextColor}
-			nextColor++
-		}
-		color := lanes[lane].Color
-		row := capsuleGraphRow{Commit: commit, Lane: lane, Color: color, LaneSpan: len(lanes)}
-		for index, slot := range lanes {
-			if index != lane && slot.Hash != "" {
-				row.Lines = append(row.Lines, capsuleGraphLine{From: index, To: index, Color: slot.Color})
-			}
-		}
-		// Retire the commit. The first parent keeps the lane flowing when it
-		// is not already flowing elsewhere; the rest merge or open lanes.
-		lanes[lane] = capsuleLaneSlot{Color: color}
-		for parentIndex, parent := range commit.Parents {
-			if parent == "" {
-				continue
-			}
-			if existing := laneOf(parent); existing >= 0 {
-				row.Lines = append(row.Lines, capsuleGraphLine{From: lane, To: existing, Color: color, Dot: true})
-				continue
-			}
-			target := lane
-			if parentIndex > 0 {
-				if reused, ok := freeLane(); ok {
-					target = reused
-				} else {
-					target = len(lanes)
-					lanes = append(lanes, capsuleLaneSlot{})
-				}
-			}
-			lanes[target] = capsuleLaneSlot{Hash: parent, Color: color}
-			if target != lane {
-				row.Lines = append(row.Lines, capsuleGraphLine{From: lane, To: target, Color: color, Dot: true})
-			}
-		}
-		row.FlowDown = lanes[lane].Hash != ""
-		rows = append(rows, row)
+		rows = append(rows, historyRow{Commit: commit, Row: layout.Add(commit.Hash, commit.Parents)})
 	}
 	return rows
 }
@@ -351,7 +269,7 @@ type capsuleState struct {
 	// The right panel's History surface: branch-filtered local history with
 	// its lane graph, the chosen row and that commit's file stats.
 	HistoryBranch      string
-	HistoryRows        []capsuleGraphRow
+	HistoryRows        []historyRow
 	HistoryAt          time.Time
 	HistoryGen         uint64
 	HistoryLoading     bool

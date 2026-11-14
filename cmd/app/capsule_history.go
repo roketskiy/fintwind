@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"fintwind-go/internal/graph"
+
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
@@ -18,8 +20,9 @@ import (
 const (
 	historyRowHeight    = 60.0
 	historyDetailsH     = 140.0
-	historyGraphLane    = 16.0
-	historyGraphStroke  = 2.0
+	historyLaneWidth    = 14
+	historyMaxLanes     = 24 // wider graphs are cut, so the subjects keep their room
+	historyGraphStroke  = 1.6
 	historyStatsTimeout = 15 * time.Second
 	// historyLoadBuffer is how close to the loaded tail the virtualized
 	// builder must reach before the next page is requested.
@@ -149,11 +152,12 @@ func (a *app) historyList(c *ui.Context) {
 	a.capsule.HistoryList.Selected = &a.capsule.HistorySel
 	rows := a.capsule.HistoryRows
 	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
+		lanes := a.historyVisibleLanes(rows)
 		list := ui.List(c, &a.capsule.HistoryList, len(rows), func(index int) {
 			if index >= len(rows)-historyLoadBuffer && index >= 0 {
 				a.historyRequestMore()
 			}
-			a.historyRowView(c, &rows[index], index)
+			a.historyRowView(c, &rows[index], lanes, index)
 		}).FillWidth().Grow(1)
 		if list.Changed() && a.capsule.HistorySel >= 0 && a.capsule.HistorySel < len(rows) {
 			a.capsule.HistoryStats = capsuleCommitStats{}
@@ -164,14 +168,14 @@ func (a *app) historyList(c *ui.Context) {
 	})
 }
 
-func (a *app) historyRowView(c *ui.Context, row *capsuleGraphRow, index int) {
+func (a *app) historyRowView(c *ui.Context, row *historyRow, lanes int, index int) {
 	selected := a.capsule.HistorySel == index
 	ui.Row(c).FillWidth().Height(historyRowHeight).Padding(0, 12, 0, 8).Gap(8).
 		AlignItems(ui.Center).Children(func() {
 		if selected {
 			ui.Row(c).Absolute().Left(0).Top(0).Bottom(0).Width(2).Background(palette.accent)
 		}
-		a.historyGraphCell(c, row)
+		a.historyGraphCell(c, row, lanes)
 		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
 			a.historyRowTitle(c, row, index)
 			a.historyRowMeta(c, row)
@@ -180,7 +184,7 @@ func (a *app) historyRowView(c *ui.Context, row *capsuleGraphRow, index int) {
 }
 
 // historyRowTitle is the subject over the ref chips and the unpushed mark.
-func (a *app) historyRowTitle(c *ui.Context, row *capsuleGraphRow, index int) {
+func (a *app) historyRowTitle(c *ui.Context, row *historyRow, index int) {
 	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
 		weight := 500
 		if row.Commit.Head {
@@ -212,7 +216,7 @@ func (a *app) historyRowTitle(c *ui.Context, row *capsuleGraphRow, index int) {
 	})
 }
 
-func (a *app) historyRowMeta(c *ui.Context, row *capsuleGraphRow) {
+func (a *app) historyRowMeta(c *ui.Context, row *historyRow) {
 	hashColor := palette.textTertiary
 	if row.Commit.Head {
 		hashColor = palette.accentText
@@ -244,79 +248,77 @@ func (a *app) historyRefChip(c *ui.Context, ref capsuleRef) {
 	}
 }
 
-// historyGraphCell paints one row's lane geometry, VSCode scmGraph style:
-// two-DIP strokes with S-curve bends, five cycling colors, a ringed HEAD
-// dot, a cored merge dot and a soft halo on the chosen row.
-func (a *app) historyGraphCell(c *ui.Context, row *capsuleGraphRow) {
-	width := float32(row.LaneSpan) * historyGraphLane
-	ui.Box(c).Width(width).MaxWidthPercent(0.35).Height(historyRowHeight).Shrink(0).
-		Draw(func(p *ui.Painter, r ui.Rect) {
-			step := r.W / float32(max(row.LaneSpan, 1))
-			x := func(lane int) float32 {
-				return r.X + step*(float32(lane)+0.5)
-			}
-			mid := r.Y + r.H/2
-			bottom := r.Y + r.H
-			curve := func(x0, y0, x1, y1 float32, color ui.Color) {
-				var path ui.Path
-				path.MoveTo(x0, y0)
-				if (x0-x1) < 0.5 && (x1-x0) < 0.5 {
-					path.LineTo(x1, y1)
-				} else {
-					midX := (x0 + x1) / 2
-					midY := (y0 + y1) / 2
-					path.CubeTo(x0, midY, midX, midY, midX, midY)
-					path.CubeTo(midX, midY, x1, midY, x1, y1)
-				}
-				p.StrokePath(&path, historyGraphStroke, color)
-			}
-			in := x(row.Lane)
-			color := historyLaneColor(row.Color)
-			curve(in, r.Y, in, mid, color)
-			if row.FlowDown {
-				curve(in, mid, in, bottom, color)
-			}
-			for _, line := range row.Lines {
-				lineColor := historyLaneColor(line.Color)
-				if line.Dot {
-					out := x(line.To)
-					curve(in, mid, out, bottom, lineColor)
-					continue
-				}
-				from, to := x(line.From), x(line.To)
-				curve(from, r.Y, to, bottom, lineColor)
-			}
-			dot := min(step, float32(16)) * 0.45
-			center := ui.Point{X: in, Y: mid}
-			paintDot := func(diameter float32, dotColor ui.Color) {
-				p.Fill(ui.Rect{X: center.X - diameter/2, Y: center.Y - diameter/2, W: diameter, H: diameter}, dotColor, diameter/2)
-			}
-			if row.Commit.Head {
-				paintDot(dot+5, color)
-				paintDot(dot*0.5, palette.composer)
-			} else {
-				if sel := a.capsule.HistorySel; sel >= 0 && sel < len(a.capsule.HistoryRows) && a.capsule.HistoryRows[sel].Commit.Hash == row.Commit.Hash {
-					paintDot(dot+5, color.Alpha(0.22))
-				}
-				paintDot(dot, color)
-				if len(row.Commit.Parents) > 1 {
-					paintDot(dot*0.45, palette.composer)
-				}
-			}
-		})
+// historyVisibleLanes is the widest graph of the rows in view, which the
+// graph column takes, so the subjects line up without the room a branch
+// far away would take. Ported from MyGit's logview.
+func (a *app) historyVisibleLanes(rows []historyRow) int {
+	first, last := a.capsule.HistoryList.Visible()
+	if last < first {
+		first, last = 0, 50 // nothing shown yet
+	}
+	lanes := 1
+	for i := max(first, 0); i <= min(last, len(rows)-1); i++ {
+		lanes = max(lanes, rows[i].Row.Width)
+	}
+	return min(lanes, historyMaxLanes)
 }
 
-// historyLaneColor cycles VSCode's scmGraph.foreground registrations so a
-// lane keeps its color across rows.
-func historyLaneColor(index int) ui.Color {
-	colors := []ui.Color{
-		ui.RGB(0xFF, 0xB0, 0x00),
-		ui.RGB(0xDC, 0x26, 0x7F),
-		ui.RGB(0x99, 0x4F, 0x00),
-		ui.RGB(0x40, 0xB0, 0xA6),
-		ui.RGB(0xB6, 0x6D, 0xFF),
+// historyGraphCell is one row's graph column at the shared lane width.
+func (a *app) historyGraphCell(c *ui.Context, row *historyRow, lanes int) {
+	width := float32(lanes*historyLaneWidth + 4)
+	cell := ui.Box(c).Size(width, historyRowHeight).Draw(func(p *ui.Painter, r ui.Rect) {
+		drawHistoryRow(p, r, row, row.Commit.Pushed)
+	})
+	if row.Commit.Pushed {
+		return
 	}
-	return colors[index%len(colors)]
+	cell.Tooltip(tr("Unpushed"))
+}
+
+// historyLaneColors color the graph's lanes in turn.
+var historyLaneColors = []ui.Color{
+	ui.RGB(66, 133, 244), ui.RGB(52, 168, 83), ui.RGB(234, 67, 53), ui.RGB(251, 188, 4),
+	ui.RGB(171, 71, 188), ui.RGB(0, 172, 193), ui.RGB(255, 112, 67), ui.RGB(124, 179, 66),
+}
+
+func historyLaneColor(i int) ui.Color { return historyLaneColors[i%len(historyLaneColors)] }
+
+// historyUnpushedColor draws the commits the upstream hasn't yet.
+var historyUnpushedColor = ui.RGB(245, 130, 32)
+
+// drawHistoryRow paints a row of the graph: its lines, then the commit's
+// dot. Ported from MyGit's logview drawRow.
+func drawHistoryRow(p *ui.Painter, r ui.Rect, row *historyRow, unpushed bool) {
+	x := func(lane int) float32 { return r.X + 2 + float32(lane)*historyLaneWidth + historyLaneWidth/2 }
+	y := func(at graph.Y) float32 { return r.Y + float32(at)*r.H/2 }
+	limit := float32(historyMaxLanes) * historyLaneWidth
+	for _, l := range row.Row.Lines {
+		if l.From.Lane >= historyMaxLanes && l.To.Lane >= historyMaxLanes {
+			continue
+		}
+		x0, y0, x1, y1 := x(l.From.Lane), y(l.From.Y), x(l.To.Lane), y(l.To.Y)
+		x0, x1 = min(x0, r.X+limit), min(x1, r.X+limit)
+		color := historyLaneColor(l.Color)
+		if unpushed && l.From.Lane == row.Row.Lane && l.To.Lane == row.Row.Lane {
+			color = historyUnpushedColor
+		}
+		if x0 == x1 {
+			p.Line(x0, y0, x1, y1, historyGraphStroke, color)
+			continue
+		}
+		var path ui.Path
+		mid := (y0 + y1) / 2
+		path.MoveTo(x0, y0).CubeTo(x0, mid, x1, mid, x1, y1)
+		p.StrokePath(&path, historyGraphStroke, color)
+	}
+	if row.Row.Lane < historyMaxLanes {
+		cx, cy := x(row.Row.Lane), y(graph.Mid)
+		color := historyLaneColor(row.Row.Color)
+		if unpushed {
+			color = historyUnpushedColor
+		}
+		p.Fill(ui.Rect{X: cx - 4, Y: cy - 4, W: 8, H: 8}, color, 4)
+	}
 }
 
 func historyTimeAgo(unix uint64) string {
@@ -439,7 +441,7 @@ func (a *app) historyRefresh() {
 			}
 			err = scRequest(ctx, scope.Client, operation, &response)
 		}
-		var rows []capsuleGraphRow
+		var rows []historyRow
 		if err == nil && response.Type == "commits" {
 			rows = historyMergePages(response.Commits, older)
 		}
@@ -466,7 +468,7 @@ func (a *app) historyRefresh() {
 
 // historyMergePages folds the fresh newest page over the older pages by
 // hash, then relays the whole merged order through one graph layout.
-func historyMergePages(fresh []capsuleCommit, older []capsuleGraphRow) []capsuleGraphRow {
+func historyMergePages(fresh []capsuleCommit, older []historyRow) []historyRow {
 	seen := make(map[string]bool, len(fresh))
 	merged := make([]capsuleCommit, 0, len(fresh)+len(older))
 	for _, commit := range fresh {
@@ -478,7 +480,7 @@ func historyMergePages(fresh []capsuleCommit, older []capsuleGraphRow) []capsule
 			merged = append(merged, row.Commit)
 		}
 	}
-	return layoutCapsuleGraph(merged)
+	return layoutHistory(merged)
 }
 
 // historyRequestMore appends the next page once the virtualized row builder
@@ -541,7 +543,7 @@ func (a *app) historyRequestMore() {
 					merged = append(merged, commit)
 				}
 			}
-			a.capsule.HistoryRows = layoutCapsuleGraph(merged)
+			a.capsule.HistoryRows = layoutHistory(merged)
 		})
 	}()
 }

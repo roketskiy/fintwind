@@ -44,9 +44,9 @@ func capsuleTabs() []capsuleTabMeta {
 }
 
 // capsuleAnchor draws the bar row above the composer card and hosts its
-// popover. It reads as nothing without a workspace. While the card is open
-// the bar reads as invisible, so the card's own tab row is the only switcher
-// on screen, the way render_task_capsule hides its trigger.
+// popover. It reads as nothing without a workspace. The open card covers
+// the bar, popover_covering_trigger style, so the card's own tab row is
+// the only switcher on screen and the bar never appears to vanish.
 func (a *app) capsuleAnchor(c *ui.Context) {
 	a.capsuleEnsure()
 	if a.capsule.Scope == "" {
@@ -62,13 +62,10 @@ func (a *app) capsuleAnchor(c *ui.Context) {
 			bar.Children(func() {
 				a.capsuleChips(c, false)
 			})
-			if a.capsule.Open {
-				bar.Invisible()
-			}
 			trigger = bar
 		})
 		ui.PopoverBase(c, trigger, &a.capsule.Open, func(panel ui.Element) {
-			panel.AttachTo(trigger, ui.AnchorTopRight, ui.AnchorBottomRight).Margin(0, 0, 6, 0)
+			panel.AttachTo(trigger, ui.AnchorBottomRight, ui.AnchorBottomRight)
 			panelWidth := float32(capsulePanelWidth)
 			if winW, _ := c.Size(); float32(winW)-40 < panelWidth {
 				panelWidth = max(float32(winW)-40, 200)

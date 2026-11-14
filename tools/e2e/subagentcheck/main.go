@@ -189,6 +189,9 @@ func run(ctx context.Context, binary string, metadataBudgetOnly bool) (err error
 	if e = verifyLifecycle(events, res); e != nil {
 		return e
 	}
+	if e = verifyClientLiveProjection(events, res); e != nil {
+		return e
+	}
 	state, e := hydrate(ctx, client, sid)
 	if e != nil {
 		return e
@@ -402,6 +405,9 @@ func run(ctx context.Context, binary string, metadataBudgetOnly bool) (err error
 		return e
 	}
 	res.add("raw-background-transcript-blocks", nil)
+	if e = verifyClientRestore(state2, res); e != nil {
+		return e
+	}
 	if e = verifyUnknownSnapshots(state2, res); e != nil {
 		return e
 	}

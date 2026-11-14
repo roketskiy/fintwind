@@ -160,6 +160,48 @@ func applyTranscript(ext map[string]any, decoded map[string]any) {
 	fold["entries"] = capEntries(fold["entries"])
 }
 
+// Restore seeds the projection from the persisted background_work snapshots a
+// hydrated session carries, so a reopened task shows its subagents without a
+// live runtime. It mirrors restore_background_work (src/app/background_work.rs):
+// a projection that live events already built is never overwritten. It reports
+// whether it seeded anything so the caller can invalidate its caches.
+func Restore(ext map[string]any, raw json.RawMessage) bool {
+	if len(raw) == 0 || string(raw) == "null" {
+		return false
+	}
+	if items, _ := ext["backgroundItems"].(map[string]any); len(items) > 0 {
+		return false
+	}
+	var snapshots []model.BackgroundWorkSnapshot
+	if json.Unmarshal(raw, &snapshots) != nil || len(snapshots) == 0 {
+		return false
+	}
+	items := make(map[string]any, len(snapshots))
+	transcripts := make(map[string]any, len(snapshots))
+	for _, snap := range snapshots {
+		if snap.Item.Key.ProviderID == "" {
+			continue
+		}
+		key := snap.Item.Key.Kind + "/" + snap.Item.Key.ProviderID
+		var item map[string]any
+		if json.Unmarshal(marshalAny(snap.Item), &item) != nil {
+			continue
+		}
+		items[key] = item
+		var transcript map[string]any
+		if json.Unmarshal(marshalAny(snap.Transcript), &transcript) != nil {
+			continue
+		}
+		transcripts[key] = map[string]any{"entries": []any{map[string]any{"snapshot": transcript}}}
+	}
+	if len(items) == 0 {
+		return false
+	}
+	ext["backgroundItems"] = items
+	ext["backgroundTranscripts"] = transcripts
+	return true
+}
+
 // Items decodes the projection into ordered items, sorted by start time so
 // rows stay stable across frames.
 func Items(ext map[string]any) []model.BackgroundWorkItem {
@@ -253,7 +295,14 @@ func FillSession(syn *model.Session, prefix string, fold map[string]any, item *m
 			continue
 		}
 		if snapshot, ok := entry["snapshot"].(map[string]any); ok {
-			var native model.NativeTranscript
+			// The daemon's snapshot is a BackgroundWorkTranscript, whose blocks
+			// ride "transcriptBlocks" — not NativeTranscript's "blocks". Reading
+			// the wrong key silently drops every activity the child recorded.
+			var native struct {
+				Messages []model.Message         `json:"messages"`
+				Blocks   []model.TranscriptBlock `json:"transcriptBlocks"`
+				Turns    []model.AgentTurn       `json:"turns"`
+			}
 			if json.Unmarshal(marshalAny(snapshot), &native) != nil {
 				continue
 			}

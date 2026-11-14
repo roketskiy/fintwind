@@ -736,6 +736,7 @@ func (a *app) loadSession(id string) {
 					a.lastProject = detail.Session.ProjectID
 				}
 			}
+			a.restoreBackgroundWork(detail.Session, rawSession)
 			a.expandedTurns = map[string]bool{}
 			a.clusterDisclosure = map[int]int{}
 			a.expandedActivities = map[string]bool{}

@@ -118,6 +118,7 @@ func (a *app) prepareEventBatch(client *daemon.Client, batch []daemon.Event) err
 			if json.Unmarshal(payload, &holder) == nil {
 				state.raw = holder.Session
 			}
+			a.restoreBackgroundWork(detail.Session, state.raw)
 			a.refreshCatalog()
 			return nil
 		}); err != nil {

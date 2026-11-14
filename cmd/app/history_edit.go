@@ -161,6 +161,7 @@ func (a *app) installMessageRewind(operation *sessionOperation, session *model.S
 	state.session, state.raw, state.edit = session, raw, nil
 	state.permission, state.question, state.extension = nil, nil, nil
 	state.textParts, state.reasoningParts = nil, nil
+	a.restoreBackgroundWork(session, raw)
 	state.preparing, state.admissionBusy, state.reconciliationFailed = false, false, false
 	state.admission = nil
 	delete(a.sessionActions.operations, id)

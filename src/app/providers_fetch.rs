@@ -50,11 +50,6 @@ impl Fintwind {
         let workspace = self.provider_workspace();
         cx.notify();
 
-        let session_table = self.models_dev_table.clone();
-        let fresh_table = session_table
-            .as_ref()
-            .filter(|table| table.age() < fintwind_client::models_dev::TABLE_REUSE_WINDOW)
-            .cloned();
         cx.spawn(async move |this, cx| {
             let fetched = cx
                 .background_executor()
@@ -65,13 +60,9 @@ impl Fintwind {
                             custom_providers::ApiListError::Unreachable(error.to_string())
                         })
                         .and_then(|provider| custom_providers::fetch_api_model_list(&provider));
-                    let table = match fresh_table {
-                        Some(table) => Some(table),
-                        None => fintwind_client::models_dev::fetch_catalog_with_fallback(
-                            session_table.as_deref(),
-                        )
-                        .map(std::sync::Arc::new),
-                    };
+                    let table = Some(std::sync::Arc::new(
+                        fintwind_client::models_dev::bundled_catalog(),
+                    ));
                     (api_models, table)
                 })
                 .await;
@@ -215,55 +206,22 @@ impl Fintwind {
 
         models_header_with_button(theme, tr!("providers.models_label"), fetch_button)
     }
-    /// Make sure a metadata table is available for the page's modality
-    /// badges: the session's copy while fresh, else the disk cache, else one
-    /// background download; a stale copy is shown at once while a refresh is
-    /// attempted. Silent on failure — the badges simply wait for a fetch,
-    /// and the explicit fetch button remains the user's lever.
+    /// Make sure the built-in metadata table is available for the page's
+    /// modality badges. The snapshot parses on the background executor;
+    /// render reads only what the app stores.
     pub(super) fn ensure_models_dev_table(&mut self, cx: &mut Context<Self>) {
-        if self
-            .models_dev_table
-            .as_ref()
-            .is_some_and(|table| table.age() < fintwind_client::models_dev::TABLE_REUSE_WINDOW)
-            || self.models_dev_loading
-        {
+        if self.models_dev_table.is_some() || self.models_dev_loading {
             return;
         }
         self.models_dev_loading = true;
-        let session_table = self.models_dev_table.clone();
         cx.spawn(async move |this, cx| {
             let loaded = cx
                 .background_executor()
-                .spawn(async move {
-                    let cached = fintwind_client::models_dev::cached_catalog();
-                    let best = match (&session_table, cached) {
-                        (Some(session), Some(cached)) => {
-                            Some(if session.fetched_at >= cached.fetched_at {
-                                (**session).clone()
-                            } else {
-                                cached
-                            })
-                        }
-                        (Some(session), None) => Some((**session).clone()),
-                        (None, cached) => cached,
-                    };
-                    match best {
-                        Some(table)
-                            if table.age() < fintwind_client::models_dev::TABLE_REUSE_WINDOW =>
-                        {
-                            Some(table)
-                        }
-                        // Stale or missing: go to the network; any known copy
-                        // is the offline fallback.
-                        best => fintwind_client::models_dev::fetch_catalog().ok().or(best),
-                    }
-                })
+                .spawn(async move { fintwind_client::models_dev::bundled_catalog() })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.models_dev_loading = false;
-                if let Some(table) = loaded {
-                    this.models_dev_table = Some(std::sync::Arc::new(table));
-                }
+                this.models_dev_table = Some(std::sync::Arc::new(loaded));
                 cx.notify();
             });
         })
@@ -403,11 +361,6 @@ impl Fintwind {
         let generation = self.providers_form_fetch_generation;
         cx.notify();
 
-        let session_table = self.models_dev_table.clone();
-        let fresh_table = session_table
-            .as_ref()
-            .filter(|table| table.age() < fintwind_client::models_dev::TABLE_REUSE_WINDOW)
-            .cloned();
         cx.spawn(async move |this, cx| {
             let fetched = cx
                 .background_executor()
@@ -418,13 +371,9 @@ impl Fintwind {
                             custom_providers::ApiListError::Unreachable(error.to_string())
                         })
                         .and_then(|provider| custom_providers::fetch_api_model_list(&provider));
-                    let table = match fresh_table {
-                        Some(table) => Some(table),
-                        None => fintwind_client::models_dev::fetch_catalog_with_fallback(
-                            session_table.as_deref(),
-                        )
-                        .map(std::sync::Arc::new),
-                    };
+                    let table = Some(std::sync::Arc::new(
+                        fintwind_client::models_dev::bundled_catalog(),
+                    ));
                     (api_models, table)
                 })
                 .await;
@@ -668,21 +617,14 @@ impl Fintwind {
         self.ensure_models_dev_table(cx);
         if self.providers_builtin.is_none() && !self.providers_builtin_loading {
             self.providers_builtin_loading = true;
-            let session = self.providers_builtin.clone();
             cx.spawn(async move |this, cx| {
                 let loaded = cx
                     .background_executor()
-                    .spawn(async move {
-                        fintwind_client::models_dev::fetch_providers_with_fallback(
-                            session.as_deref(),
-                        )
-                    })
+                    .spawn(async move { fintwind_client::models_dev::bundled_providers() })
                     .await;
                 let _ = this.update(cx, |this, cx| {
                     this.providers_builtin_loading = false;
-                    if let Ok(providers) = loaded {
-                        this.providers_builtin = Some(std::sync::Arc::new(providers));
-                    }
+                    this.providers_builtin = Some(std::sync::Arc::new(loaded));
                     cx.notify();
                 });
             })

@@ -1647,6 +1647,13 @@ impl Fintwind {
         let weak = cx.entity().downgrade();
         let plan = mode == InteractionMode::Plan;
         let mode_label = mode.label();
+        // Build reads blue and Plan orange in every theme — the pair is the
+        // mode's identity, not the palette's accent.
+        let mode_color = if plan {
+            crate::theme::mode_plan_color()
+        } else {
+            crate::theme::mode_build_color()
+        };
         // A demoted chip is a list or a wrench alone, and neither says
         // whether the agent is about to plan or build — so the label moves
         // into a tooltip rather than off the row.
@@ -1664,11 +1671,7 @@ impl Fintwind {
             .cursor_default()
             .text_size(ui_px(12.5))
             .line_height(ui_px(16.0))
-            .text_color(if plan {
-                theme.accent
-            } else {
-                theme.text_secondary
-            })
+            .text_color(mode_color)
             .child(icon(
                 if plan {
                     "icons/list.svg"
@@ -1676,11 +1679,7 @@ impl Fintwind {
                     "icons/wrench.svg"
                 },
                 12.0,
-                if plan {
-                    theme.accent
-                } else {
-                    theme.text_tertiary
-                },
+                mode_color,
             ))
             .when(label, |element| element.child(mode_label))
             .when_some(tooltip, |element, tooltip| element.tooltip(tooltip))

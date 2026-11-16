@@ -896,6 +896,11 @@ impl Fintwind {
                     && let Some(current) = turn.stats.as_mut()
                     && !current.step_ids.is_empty()
                 {
+                    // The durable first-token boundary is this turn's TTFT
+                    // sample; record it only if the turn has none yet.
+                    let sample = stats
+                        .first_token_ms
+                        .filter(|_| current.first_token_ms.is_none());
                     // Keep the step IDs and the final-step model/agent if an
                     // older server omitted that metadata in stored rows.
                     current.model = stats.model.or(current.model.take());
@@ -903,7 +908,11 @@ impl Fintwind {
                     current.output_tokens = stats.output_tokens;
                     current.stream_ms = stats.stream_ms;
                     current.stream_verified = stats.stream_verified;
+                    current.first_token_ms = stats.first_token_ms.or(current.first_token_ms.take());
                     current.step_ids.clear();
+                    if let Some(latency_ms) = sample {
+                        this.add_first_token_sample(session_id, latency_ms);
+                    }
                     this.state.mark_session_dirty(session_id);
                     this.save();
                     cx.notify();

@@ -569,6 +569,14 @@ pub struct TurnStats {
     /// settled throughput against the server's durable stream boundaries.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub step_ids: Vec<String>,
+    /// The turn's first-token latency in milliseconds, from the opening
+    /// step's durable `time.firstToken - time.created` pair — the wait the
+    /// user actually experienced before the first output token. Later steps
+    /// answer tool continuations and never supply it. Absent when the
+    /// provider stored no first-token boundary (older builds, WebSocket
+    /// streaming), and on turns persisted before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_token_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -643,9 +651,11 @@ pub struct ContextUsage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composition: Option<ContextComposition>,
     /// First-token latencies summed across measured turns, in milliseconds;
-    /// the numerator of the session's average first-token latency. Measured
-    /// by the desktop between the turn's `TurnStarted` and its first streamed
-    /// content, so a turn that settles without streaming records no sample.
+    /// the numerator of the session's average first-token latency. Each
+    /// sample is the turn's durable `time.firstToken - time.created` pair
+    /// read from the provider's stored assistant rows once the turn settles,
+    /// so a turn whose provider stored no first-token boundary records no
+    /// sample.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_token_ms: Option<u64>,
     /// Turns with a measured first-token latency; the denominator.
@@ -1856,13 +1866,6 @@ pub enum DriverEvent {
     /// new turn, not output of a preparing submission, so it deliberately
     /// bypasses the preparation barrier and is idempotent on the client.
     ScheduledTurnAdmitted(Box<crate::scheduled_task::ScheduledTurnAdmission>),
-    /// The context plugin measured this turn's first-token latency inside the
-    /// server (between its `http.request` and `http.response` hooks on the
-    /// turn's first step). Carries that sample in milliseconds; the desktop
-    /// prefers it over its own wall-clock measurement.
-    FirstTokenMeasured {
-        latency_ms: u64,
-    },
     /// A validated durable window, published before its TurnFinished. Kept
     /// atomic so a missing early part cannot be appended after a later one.
     TurnTranscriptReconciled {

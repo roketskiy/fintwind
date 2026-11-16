@@ -749,6 +749,8 @@ activity.file_lists: 文件列表
 activity.search: 搜索
 activity.searches: 搜索
 activity.plan_step: 计划步骤
+activity.step_count_one: "%{count} 步"
+activity.step_count: "%{count} 步"
 activity.plan_steps: 计划步骤
 activity.tool_call: 工具调用
 activity.tool_calls: 工具调用

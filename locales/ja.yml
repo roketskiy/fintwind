@@ -752,6 +752,8 @@ activity.file_lists: ファイル一覧
 activity.search: 検索
 activity.searches: 検索
 activity.plan_step: プランのステップ
+activity.step_count_one: "%{count} ステップ"
+activity.step_count: "%{count} ステップ"
 activity.plan_steps: プランのステップ
 activity.tool_call: ツール呼び出し
 activity.tool_calls: ツール呼び出し

@@ -2367,6 +2367,12 @@ pub struct ActivityItem {
     #[serde(default)]
     pub failed: bool,
     pub complete: bool,
+    /// Tool execution timestamps. Missing on older persisted activities;
+    /// reasoning keeps its timestamps in `reasoning` instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at_ms: Option<u64>,
     /// Provider-neutral edit metadata prepared when the tool event arrives.
     /// Rendering reads this directly instead of reparsing potentially large
     /// patches on every frame.
@@ -2409,6 +2415,8 @@ impl ActivityItem {
             image_urls: Vec::new(),
             failed: false,
             complete,
+            started_at_ms: (!complete && kind != ActivityKind::Reasoning).then(unix_time_millis),
+            finished_at_ms: None,
             file_changes: Vec::new(),
             display_target,
             display_description: None,
@@ -2421,6 +2429,27 @@ impl ActivityItem {
             reasoning: Some(reasoning),
             ..Self::new(None, ActivityKind::Reasoning, "Reasoning", None, complete)
         }
+    }
+
+    /// Keep the first observed start across tool-input/result updates. A
+    /// completion first seen without a start remains unknown, not zero-time.
+    pub fn inherit_timing(&mut self, previous: &Self) {
+        self.started_at_ms = previous.started_at_ms.or(self.started_at_ms);
+        self.finished_at_ms = previous.finished_at_ms.or(self.finished_at_ms);
+        if self.complete
+            && !previous.complete
+            && self.started_at_ms.is_some()
+            && self.finished_at_ms.is_none()
+        {
+            self.finished_at_ms = Some(unix_time_millis());
+        }
+    }
+
+    pub fn finish(&mut self) {
+        if !self.complete && self.started_at_ms.is_some() && self.finished_at_ms.is_none() {
+            self.finished_at_ms = Some(unix_time_millis());
+        }
+        self.complete = true;
     }
 
     pub fn with_arguments(mut self, arguments: Option<String>) -> Self {

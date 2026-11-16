@@ -552,7 +552,7 @@ impl BackgroundWorkRegistry {
 
     fn upsert_background_activity(
         transcript: &mut BackgroundWorkTranscript,
-        incoming: ActivityItem,
+        mut incoming: ActivityItem,
     ) {
         Self::finish_live_background_message(transcript);
         Self::finish_live_background_reasoning(transcript);
@@ -568,6 +568,7 @@ impl BackgroundWorkRegistry {
                     .is_some_and(|source| activity.source_id.as_deref() == Some(source))
             });
         if let Some(current) = matching {
+            incoming.inherit_timing(current);
             let id = current.id;
             *current = incoming;
             current.id = id;
@@ -619,7 +620,7 @@ impl BackgroundWorkRegistry {
         }
         for block in &mut transcript.transcript_blocks {
             for activity in &mut block.activities {
-                activity.complete = true;
+                activity.finish();
                 if activity.reasoning.is_some() {
                     activity.failed = !success;
                 }

@@ -15,7 +15,9 @@ pub mod scrollbar;
 pub mod text_field;
 pub mod tooltip;
 
-use crate::model::{ActivityKind, SessionStatus};
+#[cfg(test)]
+use crate::model::ActivityKind;
+use crate::model::SessionStatus;
 use crate::theme::Theme;
 
 /// Shared product card surface. Contents own their padding and layout; the
@@ -569,20 +571,6 @@ pub fn activity_tool_icon(tool_name: &str, kind: ActivityKind) -> &'static str {
         name if name.starts_with("github") => "icons/github.svg",
         name if name.starts_with("git") => "icons/git-branch.svg",
         _ => activity_icon(kind),
-    }
-}
-
-pub fn activity_noun(kind: ActivityKind) -> (String, String) {
-    match kind {
-        ActivityKind::Reasoning => (tr!("activity.thought"), tr!("activity.thoughts")),
-        ActivityKind::Command => (tr!("activity.command"), tr!("activity.commands")),
-        ActivityKind::FileChange => (tr!("activity.file_edit"), tr!("activity.file_edits")),
-        ActivityKind::FileRead => (tr!("activity.file_read"), tr!("activity.file_reads")),
-        ActivityKind::FileSearch => (tr!("activity.file_search"), tr!("activity.file_searches")),
-        ActivityKind::FileList => (tr!("activity.file_list"), tr!("activity.file_lists")),
-        ActivityKind::Search => (tr!("activity.search"), tr!("activity.searches")),
-        ActivityKind::Plan => (tr!("activity.plan_step"), tr!("activity.plan_steps")),
-        ActivityKind::Tool => (tr!("activity.tool_call"), tr!("activity.tool_calls")),
     }
 }
 

@@ -4,7 +4,7 @@ use ely_gpui_component::{
     buttons::{Button, ButtonVariant, SegmentedControl},
     theme::ControlSize,
 };
-use gpui::actions;
+use gpui::{PathBuilder, actions};
 
 use super::composer::next_picker_highlight;
 use super::*;
@@ -26,9 +26,21 @@ pub(super) struct OpenCodeUpdateStatus {
     check_error: Option<String>,
 }
 
-fn general_settings_group(title: String, theme: Theme) -> Div {
+/// The group heading sits outside the card: a quiet label, then one rounded
+/// card of rows, the way a settings document reads.
+fn settings_group_title(title: String, theme: Theme) -> Div {
     div()
-        .mt(px(20.0))
+        .mt(px(24.0))
+        .mb(px(8.0))
+        .px(px(2.0))
+        .text_size(ui_px(12.0))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(theme.text_secondary)
+        .child(title)
+}
+
+fn settings_card(theme: Theme) -> Div {
+    div()
         .w_full()
         .flex()
         .flex_col()
@@ -36,15 +48,86 @@ fn general_settings_group(title: String, theme: Theme) -> Div {
         .overflow_hidden()
         .bg(theme.raised)
         .shadow_xs()
+}
+
+/// The quiet square carrying a row's icon.
+pub(super) fn settings_icon_chip(path: &'static str, theme: Theme) -> Div {
+    div()
+        .size(px(30.0))
+        .rounded(px(8.0))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(theme.composer)
+        .child(icon(path, 15.0, theme.text_secondary))
+}
+
+pub(super) fn settings_row_text(title: String, description: Option<String>, theme: Theme) -> Div {
+    div()
+        .flex_1()
+        .min_w_0()
         .child(
             div()
-                .px(px(20.0))
-                .pt(px(14.0))
-                .pb(px(4.0))
-                .text_size(ui_px(12.0))
+                .text_size(ui_px(13.5))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text_secondary)
+                .text_color(theme.text)
                 .child(title),
+        )
+        .when_some(description, |column, description| {
+            column.child(
+                div()
+                    .mt(px(4.0))
+                    .text_size(ui_px(12.5))
+                    .line_height(ui_px(18.0))
+                    .text_color(theme.text_secondary)
+                    .child(description),
+            )
+        })
+}
+
+/// One setting row: icon chip plus title and description; the caller appends
+/// the control on the right.
+fn settings_row(
+    path: &'static str,
+    title: String,
+    description: Option<String>,
+    theme: Theme,
+) -> Div {
+    div()
+        .w_full()
+        .min_h(px(60.0))
+        .px(px(20.0))
+        .py(px(14.0))
+        .flex()
+        .items_center()
+        .gap(px(14.0))
+        .child(settings_icon_chip(path, theme))
+        .child(settings_row_text(title, description, theme))
+}
+
+/// Dashed hairline between rows, inset to the card padding.
+fn settings_separator(theme: Theme) -> Div {
+    div()
+        .relative()
+        .mx(px(20.0))
+        .h(px(1.0))
+        .child(
+            canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    let y = bounds.origin.y + px(0.5);
+                    let mut builder =
+                        PathBuilder::stroke(px(1.0)).dash_array(&[px(3.0), px(3.0)]);
+                    builder.move_to(point(bounds.origin.x, y));
+                    builder.line_to(point(bounds.origin.x + bounds.size.width, y));
+                    if let Ok(line) = builder.build() {
+                        window.paint_path(line, theme.border);
+                    }
+                },
+            )
+            .absolute()
+            .inset_0(),
         )
 }
 
@@ -446,10 +529,10 @@ impl Fintwind {
             .mx_auto()
             .child(
                 div()
-                    .pt(px(2.0))
+                    .pt(px(6.0))
                     .flex_none()
-                    .text_size(ui_px(18.0))
-                    .font_weight(FontWeight::MEDIUM)
+                    .text_size(ui_px(20.0))
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text)
                     .child(match page {
                         SettingsPage::General => tr!("settings.general"),
@@ -647,616 +730,322 @@ impl Fintwind {
             },
         );
         div()
+            .child(settings_group_title(tr!("settings.group_environment"), theme))
             .child(
-                general_settings_group(tr!("settings.group_environment"), theme)
+                settings_card(theme)
                     .child(self.render_opencode_version_setting(cx))
-                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+                    .child(settings_separator(theme))
                     .child(
-                        div()
-                            .w_full()
-                            .min_h(px(60.0))
-                            .px(px(20.0))
-                            .py(px(12.0))
-                            .flex()
-                            .items_center()
-                            .gap(px(24.0))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .text_size(ui_px(13.5))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(theme.text)
-                                            .child(tr!("settings.network_proxy")),
-                                    )
-                                    .child(
-                                        div()
-                                            .mt(px(5.0))
-                                            .text_size(ui_px(12.5))
-                                            .line_height(ui_px(18.0))
-                                            .text_color(theme.text_secondary)
-                                            .child(tr!("settings.network_proxy_description")),
-                                    ),
+                        settings_row(
+                            "icons/globe.svg",
+                            tr!("settings.network_proxy"),
+                            Some(tr!("settings.network_proxy_description")),
+                            theme,
+                        )
+                        .child(
+                            TextField::new(
+                                "network-proxy-field",
+                                self.network_proxy_input.clone(),
                             )
-                            .child(
-                                TextField::new(
-                                    "network-proxy-field",
-                                    self.network_proxy_input.clone(),
-                                )
-                                .w(px(220.0)),
+                            .w(px(220.0)),
+                        ),
+                    )
+                    .child(settings_separator(theme))
+                    .child(
+                        settings_row(
+                            "icons/terminal-square.svg",
+                            tr!("settings.opencode_shell"),
+                            Some(tr!("settings.opencode_shell_description")),
+                            theme,
+                        )
+                        .child(shell_selector),
+                    )
+                    .child(settings_separator(theme))
+                    .child(
+                        settings_row(
+                            "icons/terminal.svg",
+                            tr!("settings.opencode_binary"),
+                            Some(binary_path.map(str::to_owned).unwrap_or_else(
+                                || tr!("settings.opencode_binary_auto"),
+                            )),
+                            theme,
+                        )
+                        .child(
+                            Button::new(
+                                "opencode-binary-choose",
+                                tr!("settings.opencode_binary_choose"),
+                            )
+                            .variant(ButtonVariant::Secondary)
+                            .size(ControlSize::Sm)
+                            .disabled(
+                                self.opencode_binary_busy
+                                    || self.opencode_management_action.is_some()
+                                    || self.daemon.is_remote(),
+                            )
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.choose_opencode_binary(cx)),
                             ),
-                    )
-                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
-                    .child(
-                        div()
-                            .w_full()
-                            .min_h(px(60.0))
-                            .px(px(20.0))
-                            .py(px(12.0))
-                            .flex()
-                            .items_center()
-                            .gap(px(24.0))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .text_size(ui_px(13.5))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(theme.text)
-                                            .child(tr!("settings.opencode_shell")),
-                                    )
-                                    .child(
-                                        div()
-                                            .mt(px(5.0))
-                                            .text_size(ui_px(12.5))
-                                            .line_height(ui_px(18.0))
-                                            .text_color(theme.text_secondary)
-                                            .child(tr!("settings.opencode_shell_description")),
-                                    ),
-                            )
-                            .child(shell_selector),
-                    )
-                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
-                    .child(
-                        div()
-                            .w_full()
-                            .min_h(px(60.0))
-                            .px(px(20.0))
-                            .py(px(12.0))
-                            .flex()
-                            .items_center()
-                            .gap(px(12.0))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .text_size(ui_px(13.5))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(theme.text)
-                                            .child(tr!("settings.opencode_binary")),
-                                    )
-                                    .child(
-                                        div()
-                                            .mt(px(5.0))
-                                            .text_size(ui_px(12.5))
-                                            .text_color(theme.text_secondary)
-                                            .overflow_hidden()
-                                            .child(binary_path.map(str::to_owned).unwrap_or_else(
-                                                || tr!("settings.opencode_binary_auto"),
-                                            )),
-                                    ),
-                            )
-                            .child(
+                        )
+                        .when(binary_path.is_some(), |row| {
+                            row.child(
                                 Button::new(
-                                    "opencode-binary-choose",
-                                    tr!("settings.opencode_binary_choose"),
+                                    "opencode-binary-reset",
+                                    tr!("settings.opencode_binary_reset"),
                                 )
-                                .variant(ButtonVariant::Secondary)
+                                .variant(ButtonVariant::Ghost)
                                 .size(ControlSize::Sm)
                                 .disabled(
                                     self.opencode_binary_busy
-                                        || self.opencode_management_action.is_some()
-                                        || self.daemon.is_remote(),
+                                        || self.opencode_management_action.is_some(),
                                 )
-                                .on_click(
-                                    cx.listener(|this, _, _, cx| this.choose_opencode_binary(cx)),
-                                ),
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| this.set_opencode_binary(None, cx),
+                                )),
                             )
-                            .when(binary_path.is_some(), |row| {
-                                row.child(
-                                    Button::new(
-                                        "opencode-binary-reset",
-                                        tr!("settings.opencode_binary_reset"),
-                                    )
-                                    .variant(ButtonVariant::Ghost)
-                                    .size(ControlSize::Sm)
-                                    .disabled(
-                                        self.opencode_binary_busy
-                                            || self.opencode_management_action.is_some(),
-                                    )
-                                    .on_click(cx.listener(
-                                        |this, _, _, cx| this.set_opencode_binary(None, cx),
-                                    )),
-                                )
-                            }),
+                        }),
                     ),
             )
+            .child(settings_group_title(tr!("settings.group_features"), theme))
             .child(
-                general_settings_group(tr!("settings.group_features"), theme)
+                settings_card(theme)
                     .child(
-                        div()
-                            .w_full()
-                            .min_h(px(60.0))
-                            .px(px(20.0))
-                            .py(px(12.0))
-                            .flex()
-                            .items_center()
-                            .gap(px(24.0))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_size(ui_px(13.5))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.text)
-                                    .child(tr!("settings.busy_send_mode")),
-                            )
-                            .child(
-                                SegmentedControl::new(
-                                    "busy-send-mode",
-                                    match self.state.busy_send_mode {
-                                        crate::persistence::BusySendMode::Queue => "queue",
-                                        crate::persistence::BusySendMode::Steer => "steer",
-                                    },
-                                )
-                                .segment("queue", tr!("settings.busy_send_queue"), None)
-                                .segment("steer", tr!("composer.steer"), None)
-                                .size(ControlSize::Sm)
-                                .on_change({
-                                    let weak = cx.entity().downgrade();
-                                    move |value, _, cx| {
-                                        let _ = weak.update(cx, |this, cx| {
-                                            this.state.busy_send_mode = if value == "steer" {
-                                                crate::persistence::BusySendMode::Steer
-                                            } else {
-                                                crate::persistence::BusySendMode::Queue
-                                            };
-                                            if this.save() {
-                                                this.show_success_toast(tr!(
-                                                    "settings.option_updated",
-                                                    name = tr!("settings.busy_send_mode")
-                                                ));
-                                            }
-                                            cx.notify();
-                                        });
-                                    }
-                                }),
-                            ),
-                    )
-                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
-                    .child(
-                        div()
-                            .w_full()
-                            .min_h(px(60.0))
-                            .px(px(20.0))
-                            .py(px(12.0))
-                            .flex()
-                            .items_center()
-                            .gap(px(24.0))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .text_size(ui_px(13.5))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(theme.text)
-                                            .child(tr!("settings.browser_tools")),
-                                    )
-                                    .child(
-                                        div()
-                                            .mt(px(5.0))
-                                            .text_size(ui_px(12.5))
-                                            .line_height(ui_px(18.0))
-                                            .text_color(theme.text_secondary)
-                                            .child(tr!("settings.browser_tools_description")),
-                                    ),
-                            )
-                            .child(toggle_switch(
-                                "browser-tools-toggle",
-                                self.state.browser_tools_enabled,
-                                false,
-                                theme,
-                                window,
-                                cx,
-                                move |this: &mut Self, _, cx| {
-                                    this.set_browser_tools_enabled(
-                                        !this.state.browser_tools_enabled,
-                                        cx,
-                                    );
+                        settings_row(
+                            "icons/send.svg",
+                            tr!("settings.busy_send_mode"),
+                            None,
+                            theme,
+                        )
+                        .child(
+                            SegmentedControl::new(
+                                "busy-send-mode",
+                                match self.state.busy_send_mode {
+                                    crate::persistence::BusySendMode::Queue => "queue",
+                                    crate::persistence::BusySendMode::Steer => "steer",
                                 },
-                            )),
-                    )
-                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
-                    .child(
-                        div()
-                            .w_full()
-                            .min_h(px(60.0))
-                            .px(px(20.0))
-                            .py(px(12.0))
-                            .flex()
-                            .items_center()
-                            .gap(px(24.0))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .text_size(ui_px(13.5))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(theme.text)
-                                            .child(tr!("settings.todo_list")),
-                                    )
-                                    .child(
-                                        div()
-                                            .mt(px(5.0))
-                                            .text_size(ui_px(12.5))
-                                            .line_height(ui_px(18.0))
-                                            .text_color(theme.text_secondary)
-                                            .child(tr!("settings.todo_list_description")),
-                                    ),
                             )
-                            .child(toggle_switch(
-                                "todo-list-toggle",
-                                self.state.todo_enabled,
-                                false,
-                                theme,
-                                window,
-                                cx,
-                                move |this: &mut Self, _, cx| {
-                                    this.set_todo_enabled(!this.state.todo_enabled, cx);
-                                },
-                            )),
+                            .segment("queue", tr!("settings.busy_send_queue"), None)
+                            .segment("steer", tr!("composer.steer"), None)
+                            .size(ControlSize::Sm)
+                            .on_change({
+                                let weak = cx.entity().downgrade();
+                                move |value, _, cx| {
+                                    let _ = weak.update(cx, |this, cx| {
+                                        this.state.busy_send_mode = if value == "steer" {
+                                            crate::persistence::BusySendMode::Steer
+                                        } else {
+                                            crate::persistence::BusySendMode::Queue
+                                        };
+                                        if this.save() {
+                                            this.show_success_toast(tr!(
+                                                "settings.option_updated",
+                                                name = tr!("settings.busy_send_mode")
+                                            ));
+                                        }
+                                        cx.notify();
+                                    });
+                                }
+                            }),
+                        ),
                     )
-                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+                    .child(settings_separator(theme))
                     .child(
-                        div()
-                            .w_full()
-                            .min_h(px(60.0))
-                            .px(px(20.0))
-                            .py(px(12.0))
-                            .flex()
-                            .items_center()
-                            .gap(px(24.0))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .text_size(ui_px(13.5))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(theme.text)
-                                            .child(tr!("settings.scheduled_tools")),
-                                    )
-                                    .child(
-                                        div()
-                                            .mt(px(5.0))
-                                            .text_size(ui_px(12.5))
-                                            .line_height(ui_px(18.0))
-                                            .text_color(theme.text_secondary)
-                                            .child(tr!("settings.scheduled_tools_description")),
-                                    ),
-                            )
-                            .child(toggle_switch(
-                                "scheduled-tools-toggle",
-                                self.state.scheduled_tools_enabled,
-                                false,
-                                theme,
-                                window,
-                                cx,
-                                move |this: &mut Self, _, cx| {
-                                    this.set_scheduled_tools_enabled(
-                                        !this.state.scheduled_tools_enabled,
-                                        cx,
-                                    );
-                                },
-                            )),
+                        settings_row(
+                            "icons/app-window.svg",
+                            tr!("settings.browser_tools"),
+                            Some(tr!("settings.browser_tools_description")),
+                            theme,
+                        )
+                        .child(toggle_switch(
+                            "browser-tools-toggle",
+                            self.state.browser_tools_enabled,
+                            false,
+                            theme,
+                            window,
+                            cx,
+                            move |this: &mut Self, _, cx| {
+                                this.set_browser_tools_enabled(
+                                    !this.state.browser_tools_enabled,
+                                    cx,
+                                );
+                            },
+                        )),
                     )
-                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+                    .child(settings_separator(theme))
                     .child(
-                        div()
-                            .w_full()
-                            .min_h(px(60.0))
-                            .px(px(20.0))
-                            .py(px(12.0))
-                            .flex()
-                            .items_center()
-                            .gap(px(24.0))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .text_size(ui_px(13.5))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(theme.text)
-                                            .child(tr!("settings.image_generation")),
-                                    )
-                                    .child(
-                                        div()
-                                            .mt(px(5.0))
-                                            .text_size(ui_px(12.5))
-                                            .line_height(ui_px(18.0))
-                                            .text_color(theme.text_secondary)
-                                            .child(tr!("settings.image_generation_description")),
-                                    ),
-                            )
-                            .child(toggle_switch(
-                                "image-generation-toggle",
-                                image_generate_enabled,
-                                self.image_generate.is_none() || self.image_generate_busy,
-                                theme,
-                                window,
-                                cx,
-                                move |this: &mut Self, _, cx| {
-                                    let enabled = this
-                                        .image_generate
-                                        .as_ref()
-                                        .is_some_and(|config| config.enabled);
-                                    this.set_image_generate_enabled(!enabled, cx);
-                                },
-                            )),
+                        settings_row(
+                            "icons/list.svg",
+                            tr!("settings.todo_list"),
+                            Some(tr!("settings.todo_list_description")),
+                            theme,
+                        )
+                        .child(toggle_switch(
+                            "todo-list-toggle",
+                            self.state.todo_enabled,
+                            false,
+                            theme,
+                            window,
+                            cx,
+                            move |this: &mut Self, _, cx| {
+                                this.set_todo_enabled(!this.state.todo_enabled, cx);
+                            },
+                        )),
+                    )
+                    .child(settings_separator(theme))
+                    .child(
+                        settings_row(
+                            "icons/clock.svg",
+                            tr!("settings.scheduled_tools"),
+                            Some(tr!("settings.scheduled_tools_description")),
+                            theme,
+                        )
+                        .child(toggle_switch(
+                            "scheduled-tools-toggle",
+                            self.state.scheduled_tools_enabled,
+                            false,
+                            theme,
+                            window,
+                            cx,
+                            move |this: &mut Self, _, cx| {
+                                this.set_scheduled_tools_enabled(
+                                    !this.state.scheduled_tools_enabled,
+                                    cx,
+                                );
+                            },
+                        )),
+                    )
+                    .child(settings_separator(theme))
+                    .child(
+                        settings_row(
+                            "icons/modality-image.svg",
+                            tr!("settings.image_generation"),
+                            Some(tr!("settings.image_generation_description")),
+                            theme,
+                        )
+                        .child(toggle_switch(
+                            "image-generation-toggle",
+                            image_generate_enabled,
+                            self.image_generate.is_none() || self.image_generate_busy,
+                            theme,
+                            window,
+                            cx,
+                            move |this: &mut Self, _, cx| {
+                                let enabled = this
+                                    .image_generate
+                                    .as_ref()
+                                    .is_some_and(|config| config.enabled);
+                                this.set_image_generate_enabled(!enabled, cx);
+                            },
+                        )),
                     )
                     .when(image_generate_enabled, |group| {
-                        group
-                            .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
-                            .child(
-                            div()
-                                .w_full()
-                                .min_h(px(60.0))
-                                .px(px(20.0))
-                                .py(px(12.0))
-                                .flex()
-                                .items_center()
-                                .gap(px(24.0))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .child(
-                                            div()
-                                                .text_size(ui_px(13.5))
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .text_color(theme.text)
-                                                .child(tr!("settings.image_generation_model")),
-                                        )
-                                        .child(
-                                            div()
-                                                .mt(px(5.0))
-                                                .text_size(ui_px(12.5))
-                                                .line_height(ui_px(18.0))
-                                                .text_color(theme.text_secondary)
-                                                .child(tr!(
-                                                    "settings.image_generation_model_description"
-                                                )),
-                                        ),
-                                )
-                                .child(image_model_selector),
+                        group.child(settings_separator(theme)).child(
+                            settings_row(
+                                "icons/sparkle.svg",
+                                tr!("settings.image_generation_model"),
+                                Some(tr!("settings.image_generation_model_description")),
+                                theme,
+                            )
+                            .child(image_model_selector),
                         )
                     })
-                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+                    .child(settings_separator(theme))
                     .child(
-                        div()
-                            .w_full()
-                            .min_h(px(60.0))
-                            .px(px(20.0))
-                            .py(px(12.0))
-                            .flex()
-                            .items_center()
-                            .gap(px(24.0))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .text_size(ui_px(13.5))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(theme.text)
-                                            .child(tr!("settings.mermaid_visualization")),
-                                    )
-                                    .child(
-                                        div()
-                                            .mt(px(5.0))
-                                            .text_size(ui_px(12.5))
-                                            .line_height(ui_px(18.0))
-                                            .text_color(theme.text_secondary)
-                                            .child(tr!(
-                                                "settings.mermaid_visualization_description"
-                                            )),
-                                    ),
-                            )
-                            .child(toggle_switch(
-                                "mermaid-visualization-toggle",
-                                self.state.mermaid_visualization_enabled,
-                                false,
-                                theme,
-                                window,
-                                cx,
-                                move |this: &mut Self, _, cx| {
-                                    this.set_mermaid_visualization_enabled(
-                                        !this.state.mermaid_visualization_enabled,
-                                        cx,
-                                    );
-                                },
-                            )),
+                        settings_row(
+                            "icons/chart-column.svg",
+                            tr!("settings.mermaid_visualization"),
+                            Some(tr!("settings.mermaid_visualization_description")),
+                            theme,
+                        )
+                        .child(toggle_switch(
+                            "mermaid-visualization-toggle",
+                            self.state.mermaid_visualization_enabled,
+                            false,
+                            theme,
+                            window,
+                            cx,
+                            move |this: &mut Self, _, cx| {
+                                this.set_mermaid_visualization_enabled(
+                                    !this.state.mermaid_visualization_enabled,
+                                    cx,
+                                );
+                            },
+                        )),
                     )
-                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+                    .child(settings_separator(theme))
                     .child(
-                        div()
-                            .w_full()
-                            .min_h(px(60.0))
-                            .px(px(20.0))
-                            .py(px(12.0))
-                            .flex()
-                            .items_center()
-                            .gap(px(24.0))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .text_size(ui_px(13.5))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(theme.text)
-                                            .child(tr!("settings.keep_screen_awake")),
-                                    )
-                                    .child(
-                                        div()
-                                            .mt(px(5.0))
-                                            .text_size(ui_px(12.5))
-                                            .line_height(ui_px(18.0))
-                                            .text_color(theme.text_secondary)
-                                            .child(tr!("settings.keep_screen_awake_description")),
-                                    ),
-                            )
-                            .child(toggle_switch(
-                                "keep-screen-awake-toggle",
-                                self.state.keep_screen_awake,
-                                false,
-                                theme,
-                                window,
-                                cx,
-                                move |this: &mut Self, _, cx| {
-                                    this.set_keep_screen_awake(!this.state.keep_screen_awake, cx);
-                                },
-                            )),
+                        settings_row(
+                            "icons/sun.svg",
+                            tr!("settings.keep_screen_awake"),
+                            Some(tr!("settings.keep_screen_awake_description")),
+                            theme,
+                        )
+                        .child(toggle_switch(
+                            "keep-screen-awake-toggle",
+                            self.state.keep_screen_awake,
+                            false,
+                            theme,
+                            window,
+                            cx,
+                            move |this: &mut Self, _, cx| {
+                                this.set_keep_screen_awake(!this.state.keep_screen_awake, cx);
+                            },
+                        )),
                     ),
             )
+            .child(settings_group_title(tr!("settings.group_context"), theme))
             .child(
-                general_settings_group(tr!("settings.group_context"), theme)
+                settings_card(theme)
                     .child(
-                        div()
-                            .w_full()
-                            .min_h(px(60.0))
-                            .px(px(20.0))
-                            .py(px(12.0))
-                            .flex()
-                            .items_center()
-                            .gap(px(24.0))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .text_size(ui_px(13.5))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(theme.text)
-                                            .child(tr!("settings.auto_compact")),
-                                    )
-                                    .child(
-                                        div()
-                                            .mt(px(5.0))
-                                            .text_size(ui_px(12.5))
-                                            .line_height(ui_px(18.0))
-                                            .text_color(theme.text_secondary)
-                                            .child(tr!("settings.auto_compact_description")),
-                                    ),
-                            )
-                            .child(toggle_switch(
-                                "auto-compact-toggle",
-                                self.state.auto_compact_enabled,
-                                false,
-                                theme,
-                                window,
-                                cx,
-                                move |this: &mut Self, _, cx| {
-                                    this.set_auto_compact_enabled(
-                                        !this.state.auto_compact_enabled,
-                                        cx,
-                                    );
-                                },
-                            )),
+                        settings_row(
+                            "icons/archive.svg",
+                            tr!("settings.auto_compact"),
+                            Some(tr!("settings.auto_compact_description")),
+                            theme,
+                        )
+                        .child(toggle_switch(
+                            "auto-compact-toggle",
+                            self.state.auto_compact_enabled,
+                            false,
+                            theme,
+                            window,
+                            cx,
+                            move |this: &mut Self, _, cx| {
+                                this.set_auto_compact_enabled(
+                                    !this.state.auto_compact_enabled,
+                                    cx,
+                                );
+                            },
+                        )),
                     )
-                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+                    .child(settings_separator(theme))
                     .child(
-                        div()
-                            .w_full()
-                            .min_h(px(60.0))
-                            .px(px(20.0))
-                            .py(px(12.0))
-                            .flex()
-                            .items_center()
-                            .gap(px(24.0))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .text_size(ui_px(13.5))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(theme.text)
-                                            .child(tr!("settings.auto_compact_threshold")),
-                                    )
-                                    .child(
-                                        div()
-                                            .mt(px(5.0))
-                                            .text_size(ui_px(12.5))
-                                            .line_height(ui_px(18.0))
-                                            .text_color(theme.text_secondary)
-                                            .child(tr!(
-                                                "settings.auto_compact_threshold_description"
-                                            )),
-                                    ),
+                        settings_row(
+                            "icons/gauge.svg",
+                            tr!("settings.auto_compact_threshold"),
+                            Some(tr!("settings.auto_compact_threshold_description")),
+                            theme,
+                        )
+                        .child(
+                            TextField::new(
+                                "auto-compact-threshold-field",
+                                self.auto_compact_threshold_input.clone(),
                             )
-                            .child(
-                                TextField::new(
-                                    "auto-compact-threshold-field",
-                                    self.auto_compact_threshold_input.clone(),
-                                )
-                                .w(px(120.0)),
-                            ),
+                            .w(px(120.0)),
+                        ),
                     ),
             )
+            .child(settings_group_title(tr!("settings.group_data"), theme))
             .child(
-                general_settings_group(tr!("settings.group_data"), theme)
+                settings_card(theme)
                     .child(self.render_general_workspace_setting(cx))
-                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
-                    .child(
-                        div()
-                            .w_full()
-                            .min_h(px(60.0))
-                            .px(px(20.0))
-                            .py(px(12.0))
-                            .child(
-                                div()
-                                    .text_size(ui_px(13.5))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.text)
-                                    .child(tr!("settings.local_by_default")),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(5.0))
-                                    .text_size(ui_px(12.5))
-                                    .line_height(ui_px(18.0))
-                                    .text_color(theme.text_secondary)
-                                    .child(tr!("settings.local_by_default_description")),
-                            ),
-                    )
-                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+                    .child(settings_separator(theme))
+                    .child(settings_row(
+                        "icons/laptop.svg",
+                        tr!("settings.local_by_default"),
+                        Some(tr!("settings.local_by_default_description")),
+                        theme,
+                    ))
+                    .child(settings_separator(theme))
                     .child(self.render_session_cleanup(cx)),
             )
             .child(
@@ -1540,268 +1329,94 @@ impl Fintwind {
         );
 
         div()
-            .mt(px(15.0))
-            .w_full()
-            .flex()
-            .flex_col()
-            .rounded(px(13.0))
-            .overflow_hidden()
-            .bg(theme.raised)
-            .shadow_xs()
+            .child(settings_group_title(tr!("settings.group_theme"), theme))
             .child(
-                div()
-                    .w_full()
-                    .min_h(px(60.0))
-                    .px(px(20.0))
-                    .py(px(12.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(24.0))
+                settings_card(theme)
                     .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .text_size(ui_px(13.5))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.text)
-                                    .child(tr!("settings.theme")),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(5.0))
-                                    .text_size(ui_px(12.5))
-                                    .line_height(ui_px(18.0))
-                                    .text_color(theme.text_secondary)
-                                    .child(tr!("settings.theme_description")),
-                            ),
+                        settings_row(
+                            "icons/appearance.svg",
+                            tr!("settings.theme"),
+                            Some(tr!("settings.theme_description")),
+                            theme,
+                        )
+                        .child(theme_selector),
                     )
-                    .child(theme_selector),
+                    .child(settings_separator(theme))
+                    .child(
+                        settings_row(
+                            "icons/palette.svg",
+                            tr!("settings.scheme"),
+                            Some(tr!("settings.scheme_description")),
+                            theme,
+                        )
+                        .child(scheme_selector),
+                    )
+                    .child(settings_separator(theme))
+                    .child(
+                        settings_row(
+                            "icons/languages.svg",
+                            tr!("language.title"),
+                            Some(tr!("language.description")),
+                            theme,
+                        )
+                        .child(language_selector),
+                    ),
             )
-            .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+            .child(settings_group_title(tr!("settings.group_text"), theme))
             .child(
-                div()
-                    .w_full()
-                    .min_h(px(60.0))
-                    .px(px(20.0))
-                    .py(px(12.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(24.0))
+                settings_card(theme)
                     .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .text_size(ui_px(13.5))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.text)
-                                    .child(tr!("settings.scheme")),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(5.0))
-                                    .text_size(ui_px(12.5))
-                                    .line_height(ui_px(18.0))
-                                    .text_color(theme.text_secondary)
-                                    .child(tr!("settings.scheme_description")),
-                            ),
+                        settings_row(
+                            "icons/a-large-small.svg",
+                            tr!("settings.ui_text_size"),
+                            Some(tr!("settings.ui_text_size_description")),
+                            theme,
+                        )
+                        .child(ui_text_size_selector),
                     )
-                    .child(scheme_selector),
+                    .child(settings_separator(theme))
+                    .child(
+                        settings_row(
+                            "icons/code.svg",
+                            tr!("settings.code_text_size"),
+                            Some(tr!("settings.code_text_size_description")),
+                            theme,
+                        )
+                        .child(code_text_size_selector),
+                    )
+                    .child(settings_separator(theme))
+                    .child(
+                        settings_row(
+                            "icons/panel-right.svg",
+                            tr!("settings.transcript_width"),
+                            Some(tr!("settings.transcript_width_description")),
+                            theme,
+                        )
+                        .child(transcript_width_selector),
+                    ),
             )
-            .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+            .child(settings_group_title(tr!("settings.group_fonts"), theme))
             .child(
-                div()
-                    .w_full()
-                    .min_h(px(60.0))
-                    .px(px(20.0))
-                    .py(px(12.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(24.0))
+                settings_card(theme)
                     .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .text_size(ui_px(13.5))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.text)
-                                    .child(tr!("language.title")),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(5.0))
-                                    .text_size(ui_px(12.5))
-                                    .line_height(ui_px(18.0))
-                                    .text_color(theme.text_secondary)
-                                    .child(tr!("language.description")),
-                            ),
+                        settings_row(
+                            "icons/type.svg",
+                            tr!("settings.ui_font"),
+                            Some(tr!("settings.ui_font_description")),
+                            theme,
+                        )
+                        .child(ui_font_selector),
                     )
-                    .child(language_selector),
-            )
-            .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
-            .child(
-                div()
-                    .w_full()
-                    .min_h(px(60.0))
-                    .px(px(20.0))
-                    .py(px(12.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(24.0))
+                    .child(settings_separator(theme))
                     .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .text_size(ui_px(13.5))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.text)
-                                    .child(tr!("settings.ui_text_size")),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(5.0))
-                                    .text_size(ui_px(12.5))
-                                    .line_height(ui_px(18.0))
-                                    .text_color(theme.text_secondary)
-                                    .child(tr!("settings.ui_text_size_description")),
-                            ),
-                    )
-                    .child(ui_text_size_selector),
-            )
-            .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
-            .child(
-                div()
-                    .w_full()
-                    .min_h(px(60.0))
-                    .px(px(20.0))
-                    .py(px(12.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(24.0))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .text_size(ui_px(13.5))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.text)
-                                    .child(tr!("settings.ui_font")),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(5.0))
-                                    .text_size(ui_px(12.5))
-                                    .line_height(ui_px(18.0))
-                                    .text_color(theme.text_secondary)
-                                    .child(tr!("settings.ui_font_description")),
-                            ),
-                    )
-                    .child(ui_font_selector),
-            )
-            .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
-            .child(
-                div()
-                    .w_full()
-                    .min_h(px(60.0))
-                    .px(px(20.0))
-                    .py(px(12.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(24.0))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .text_size(ui_px(13.5))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.text)
-                                    .child(tr!("settings.code_text_size")),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(5.0))
-                                    .text_size(ui_px(12.5))
-                                    .line_height(ui_px(18.0))
-                                    .text_color(theme.text_secondary)
-                                    .child(tr!("settings.code_text_size_description")),
-                            ),
-                    )
-                    .child(code_text_size_selector),
-            )
-            .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
-            .child(
-                div()
-                    .w_full()
-                    .min_h(px(60.0))
-                    .px(px(20.0))
-                    .py(px(12.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(24.0))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .text_size(ui_px(13.5))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.text)
-                                    .child(tr!("settings.code_font")),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(5.0))
-                                    .text_size(ui_px(12.5))
-                                    .line_height(ui_px(18.0))
-                                    .text_color(theme.text_secondary)
-                                    .child(tr!("settings.code_font_description")),
-                            ),
-                    )
-                    .child(code_font_selector),
-            )
-            .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
-            .child(
-                div()
-                    .w_full()
-                    .min_h(px(60.0))
-                    .px(px(20.0))
-                    .py(px(12.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(24.0))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .text_size(ui_px(13.5))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.text)
-                                    .child(tr!("settings.transcript_width")),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(5.0))
-                                    .text_size(ui_px(12.5))
-                                    .line_height(ui_px(18.0))
-                                    .text_color(theme.text_secondary)
-                                    .child(tr!("settings.transcript_width_description")),
-                            ),
-                    )
-                    .child(transcript_width_selector),
+                        settings_row(
+                            "icons/terminal-square.svg",
+                            tr!("settings.code_font"),
+                            Some(tr!("settings.code_font_description")),
+                            theme,
+                        )
+                        .child(code_font_selector),
+                    ),
             )
             .into_any_element()
     }
@@ -1840,34 +1455,13 @@ impl Fintwind {
                 }
             },
         };
-        div()
-            .w_full()
-            .min_h(px(60.0))
-            .px(px(20.0))
-            .py(px(12.0))
-            .flex()
-            .items_center()
-            .gap(px(12.0))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(
-                        div()
-                            .text_size(ui_px(13.5))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text)
-                            .child("OpenCode"),
-                    )
-                    .child(
-                        div()
-                            .mt(px(5.0))
-                            .text_size(ui_px(12.5))
-                            .text_color(theme.text_secondary)
-                            .child(detail),
-                    ),
-            )
-            .when(status.is_some_and(|status| status.path.is_none()), |row| {
+        settings_row(
+            "icons/provider-opencode.svg",
+            "OpenCode".to_owned(),
+            Some(detail),
+            theme,
+        )
+        .when(status.is_some_and(|status| status.path.is_none()), |row| {
                 row.child(
                     Button::new("opencode-install", tr!("settings.opencode_install"))
                         .variant(ButtonVariant::Secondary)
@@ -2029,39 +1623,17 @@ impl Fintwind {
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_default();
         let custom = self.state.general_workspace_path().is_some();
-        div()
-            .w_full()
-            .min_h(px(60.0))
-            .px(px(20.0))
-            .py(px(12.0))
-            .flex()
-            .items_center()
-            .gap(px(12.0))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(
-                        div()
-                            .text_size(ui_px(13.5))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text)
-                            .child(tr!("settings.general_workspace")),
-                    )
-                    .child(
-                        div()
-                            .mt(px(5.0))
-                            .text_size(ui_px(12.5))
-                            .text_color(theme.text_secondary)
-                            .overflow_hidden()
-                            .child(path),
-                    ),
+        settings_row(
+            "icons/folder.svg",
+            tr!("settings.general_workspace"),
+            Some(path),
+            theme,
+        )
+        .child(
+            Button::new(
+                "general-workspace-choose",
+                tr!("settings.general_workspace_choose"),
             )
-            .child(
-                Button::new(
-                    "general-workspace-choose",
-                    tr!("settings.general_workspace_choose"),
-                )
                 .variant(ButtonVariant::Outline)
                 .size(ControlSize::Sm)
                 .disabled(self.general_workspace_busy || self.daemon.is_remote())

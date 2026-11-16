@@ -3570,6 +3570,12 @@ settings.group_environment:
   en: Runtime environment
 settings.group_data:
   en: Data management
+settings.group_theme:
+  en: Theme & language
+settings.group_text:
+  en: Text
+settings.group_fonts:
+  en: Fonts
 usage.composition_estimated:
   en: Estimated composition
 usage.composition_pending:

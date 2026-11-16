@@ -16,8 +16,17 @@ macro_rules! icons {
 }
 
 const ICONS: &[(&str, &[u8])] = icons![
+    "a-large-small",
     "alert",
+    "app-window",
     "appearance",
+    "archive",
+    "code",
+    "languages",
+    "palette",
+    "send",
+    "sun",
+    "type",
     "arrow-down",
     "arrow-left",
     "arrow-right",

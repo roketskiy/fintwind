@@ -1770,6 +1770,9 @@ settings.group_features: 功能
 settings.group_context: 上下文管理
 settings.group_environment: 运行环境
 settings.group_data: 数据管理
+settings.group_theme: 主题与语言
+settings.group_text: 文本
+settings.group_fonts: 字体
 usage.composition_estimated: 估算构成
 usage.composition_pending: 下次请求后可用
 usage.composition_system: 系统与规则

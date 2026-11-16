@@ -1801,6 +1801,9 @@ settings.group_features: 機能
 settings.group_context: コンテキスト管理
 settings.group_environment: 実行環境
 settings.group_data: データ管理
+settings.group_theme: テーマと言語
+settings.group_text: テキスト
+settings.group_fonts: フォント
 usage.composition_estimated: 推定構成
 usage.composition_pending: 次のリクエスト後に利用可能
 usage.composition_system: システムとルール

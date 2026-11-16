@@ -12,6 +12,9 @@ use uuid::Uuid;
 /// viewable read-only.
 pub const OPENCODE_PROVIDER: &str = "opencode";
 
+/// Explicit identity of this machine; a fixed sentinel, never parsed from input.
+pub const LOCAL_ENVIRONMENT_ID: Uuid = Uuid::nil();
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(
     rename_all = "camelCase",

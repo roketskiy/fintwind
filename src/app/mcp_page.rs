@@ -343,13 +343,20 @@ impl Fintwind {
 
     /// Commit the working roster straight into OpenCode's configuration.
     /// OpenCode watches the file and hot-reloads, so running serves pick the
-    /// change up without a restart.
-    pub(super) fn commit_mcp_servers(&mut self, cx: &mut Context<Self>) {
+    /// change up without a restart. Returns false on a failed write, whose
+    /// toast is already up — callers must not claim success on top of it.
+    pub(super) fn commit_mcp_servers(&mut self, cx: &mut Context<Self>) -> bool {
         self.mcp_load_generation += 1;
-        if let Err(error) = fintwind_client::opencode_config::save_mcp_servers(&self.mcp_servers) {
-            self.show_toast(tr!("mcp.sync_failed", error = error.to_string()));
-        }
+        let saved =
+            match fintwind_client::opencode_config::save_mcp_servers(&self.mcp_servers) {
+                Ok(()) => true,
+                Err(error) => {
+                    self.show_toast(tr!("mcp.sync_failed", error = error.to_string()));
+                    false
+                }
+            };
         cx.notify();
+        saved
     }
 
     /// Debounced commit for keystroke-level edits (command, URL), so a burst
@@ -535,12 +542,14 @@ impl Fintwind {
         };
         self.mcp_servers.push(server);
         self.mcp_adding = false;
-        self.commit_mcp_servers(cx);
+        let saved = self.commit_mcp_servers(cx);
         self.select_mcp_server(key, cx);
         // The new server joins the workspace's roster on the next refresh;
         // its connection state arrives with it.
         self.refresh_mcp_statuses(cx);
-        self.show_success_toast(tr!("mcp.added_toast", name = name));
+        if saved {
+            self.show_success_toast(tr!("mcp.added_toast", name = name));
+        }
     }
 
     fn delete_mcp_server(&mut self, name: String, cx: &mut Context<Self>) {
@@ -549,7 +558,7 @@ impl Fintwind {
         if let Some(statuses) = self.mcp_statuses.as_mut() {
             statuses.remove(&name);
         }
-        self.commit_mcp_servers(cx);
+        let saved = self.commit_mcp_servers(cx);
         if self.mcp_selected.as_deref() == Some(name.as_str()) {
             // Land the detail on whichever server the fallback picks next.
             self.mcp_selected = None;
@@ -559,18 +568,30 @@ impl Fintwind {
                 self.load_mcp_fields(&next.name, cx);
             }
         }
-        self.show_success_toast(tr!("mcp.deleted_toast", name = name));
+        if saved {
+            self.show_success_toast(tr!("mcp.deleted_toast", name = name));
+        }
     }
 
     fn toggle_mcp_server_enabled(&mut self, name: String, cx: &mut Context<Self>) {
-        if let Some(server) = self
+        let Some(enabled) = self
             .mcp_servers
             .iter_mut()
             .find(|server| server.name == name)
-        {
-            server.enabled = !server.enabled;
+            .map(|server| {
+                server.enabled = !server.enabled;
+                server.enabled
+            })
+        else {
+            return;
+        };
+        if self.commit_mcp_servers(cx) {
+            self.show_success_toast(if enabled {
+                tr!("mcp.enabled_toast", name = name)
+            } else {
+                tr!("mcp.disabled_toast", name = name)
+            });
         }
-        self.commit_mcp_servers(cx);
         // OpenCode hot-reloads the file and reconnects the server; its new
         // connection state lands with the next refresh.
         self.refresh_mcp_statuses(cx);
@@ -587,13 +608,16 @@ impl Fintwind {
                 return;
             }
             server.kind = kind;
-            self.commit_mcp_servers(cx);
+            let saved = self.commit_mcp_servers(cx);
             // A kind switch changes what the server connects to, so the
             // old status no longer describes it.
             if let Some(statuses) = self.mcp_statuses.as_mut() {
                 statuses.remove(&name);
             }
             self.refresh_mcp_statuses(cx);
+            if saved {
+                self.show_success_toast(tr!("mcp.kind_updated", name = name));
+            }
         }
     }
 
@@ -608,7 +632,9 @@ impl Fintwind {
                 return;
             }
             server.oauth.mode = mode;
-            self.commit_mcp_servers(cx);
+            if self.commit_mcp_servers(cx) {
+                self.show_success_toast(tr!("mcp.oauth_mode_updated", name = name));
+            }
         }
     }
 

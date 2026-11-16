@@ -417,7 +417,7 @@ fn fetch_api_model_list_with_timeout(
 /// the endpoint speaks a model list.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConnectivityOutcome {
-    Reachable { models: usize, latency: Duration },
+    Reachable { latency: Duration },
     Failed { error: ApiListError },
 }
 
@@ -427,8 +427,7 @@ pub enum ConnectivityOutcome {
 pub fn probe_connectivity(provider: &CustomProvider) -> ConnectivityOutcome {
     let started = Instant::now();
     match fetch_api_model_list_with_timeout(provider, CONNECTIVITY_TIMEOUT_SECS) {
-        Ok(models) => ConnectivityOutcome::Reachable {
-            models: models.len(),
+        Ok(_) => ConnectivityOutcome::Reachable {
             latency: started.elapsed(),
         },
         Err(error) => ConnectivityOutcome::Failed { error },

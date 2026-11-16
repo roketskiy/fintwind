@@ -826,7 +826,12 @@ impl Fintwind {
                                             } else {
                                                 crate::persistence::BusySendMode::Queue
                                             };
-                                            this.save();
+                                            if this.save() {
+                                                this.show_success_toast(tr!(
+                                                    "settings.option_updated",
+                                                    name = tr!("settings.busy_send_mode")
+                                                ));
+                                            }
                                             cx.notify();
                                         });
                                     }
@@ -2117,6 +2122,7 @@ impl Fintwind {
         let key = fintwind_protocol::settings::GENERAL_WORKSPACE_PATH_KEY;
         let mut settings = self.state.daemon_settings();
         let value = path.map(|path| path.to_string_lossy().into_owned());
+        let is_reset = value.is_none();
         match &value {
             Some(path) => {
                 settings.extra.insert(key.to_owned(), path.clone().into());
@@ -2169,7 +2175,16 @@ impl Fintwind {
                         }
                         this.switch_provider_location();
                         this.refresh_provider_detection();
-                        this.save();
+                        if this.save() {
+                            this.show_success_toast(if is_reset {
+                                tr!("settings.general_workspace_reset_done")
+                            } else {
+                                tr!(
+                                    "settings.option_updated",
+                                    name = tr!("settings.general_workspace")
+                                )
+                            });
+                        }
                     }
                     Err(error) => {
                         this.show_toast(tr!("settings.general_workspace_failed", error = error))
@@ -2215,6 +2230,7 @@ impl Fintwind {
         self.opencode_binary_busy = true;
         let mut settings = self.state.daemon_settings();
         let key = fintwind_protocol::settings::OPENCODE_BINARY_PATH_KEY;
+        let is_reset = path.is_none();
         match &path {
             Some(path) => {
                 settings.extra.insert(key.to_owned(), path.clone().into());
@@ -2244,7 +2260,13 @@ impl Fintwind {
                 match result {
                     Ok(()) => {
                         this.state.set_opencode_binary_path(path);
-                        this.save();
+                        if this.save() {
+                            this.show_success_toast(if is_reset {
+                                tr!("settings.opencode_binary_reset_done")
+                            } else {
+                                tr!("settings.opencode_binary_updated")
+                            });
+                        }
                         this.refresh_opencode_after_management(cx);
                     }
                     Err(error) => {
@@ -2317,7 +2339,10 @@ impl Fintwind {
                 }
                 this.opencode_shell_busy = false;
                 match result {
-                    Ok(()) => this.opencode_shell_selected = selected,
+                    Ok(()) => {
+                        this.opencode_shell_selected = selected;
+                        this.show_success_toast(tr!("settings.shell_updated"));
+                    }
                     Err(error) => {
                         this.show_toast(tr!("settings.shell_failed", error = error.to_string()))
                     }
@@ -2512,6 +2537,7 @@ impl Fintwind {
     ) {
         self.image_generate_generation += 1;
         let previous = self.image_generate.clone();
+        let enabled = config.enabled;
         self.image_generate = Some(config.clone());
         self.image_generate_busy = true;
         cx.notify();
@@ -2522,12 +2548,29 @@ impl Fintwind {
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.image_generate_busy = false;
-                if let Err(error) = result {
-                    this.image_generate = previous;
-                    this.show_toast(tr!(
-                        "settings.image_generation_save_failed",
-                        error = error.to_string()
-                    ));
+                match result {
+                    Ok(()) => {
+                        let name = tr!("settings.image_generation");
+                        let toggled = previous
+                            .as_ref()
+                            .is_some_and(|previous| previous.enabled != enabled);
+                        this.show_success_toast(if toggled {
+                            if enabled {
+                                tr!("settings.toggle_on", name = name)
+                            } else {
+                                tr!("settings.toggle_off", name = name)
+                            }
+                        } else {
+                            tr!("settings.option_updated", name = name)
+                        });
+                    }
+                    Err(error) => {
+                        this.image_generate = previous;
+                        this.show_toast(tr!(
+                            "settings.image_generation_save_failed",
+                            error = error.to_string()
+                        ));
+                    }
                 }
                 cx.notify();
             });
@@ -2543,7 +2586,13 @@ impl Fintwind {
             return;
         }
         self.state.browser_tools_enabled = enabled;
-        self.save();
+        if self.save() {
+            self.show_success_toast(if enabled {
+                tr!("settings.toggle_on", name = tr!("settings.browser_tools"))
+            } else {
+                tr!("settings.toggle_off", name = tr!("settings.browser_tools"))
+            });
+        }
         cx.notify();
     }
 
@@ -2564,7 +2613,13 @@ impl Fintwind {
             self.task_capsule_tab = super::background_work::capsule::CapsuleTab::Changes;
         }
         self.invalidate_capsule_todos();
-        self.save();
+        if self.save() {
+            self.show_success_toast(if enabled {
+                tr!("settings.toggle_on", name = tr!("settings.todo_list"))
+            } else {
+                tr!("settings.toggle_off", name = tr!("settings.todo_list"))
+            });
+        }
         cx.notify();
     }
 
@@ -2577,7 +2632,13 @@ impl Fintwind {
         }
         self.state.keep_screen_awake = enabled;
         crate::platform::set_keep_awake(enabled);
-        self.save();
+        if self.save() {
+            self.show_success_toast(if enabled {
+                tr!("settings.keep_screen_awake_on")
+            } else {
+                tr!("settings.keep_screen_awake_off")
+            });
+        }
         cx.notify();
     }
 
@@ -2586,7 +2647,13 @@ impl Fintwind {
             return;
         }
         self.state.scheduled_tools_enabled = enabled;
-        self.save();
+        if self.save() {
+            self.show_success_toast(if enabled {
+                tr!("settings.toggle_on", name = tr!("settings.scheduled_tools"))
+            } else {
+                tr!("settings.toggle_off", name = tr!("settings.scheduled_tools"))
+            });
+        }
         cx.notify();
     }
 
@@ -2599,7 +2666,19 @@ impl Fintwind {
             return;
         }
         self.state.mermaid_visualization_enabled = enabled;
-        self.save();
+        if self.save() {
+            self.show_success_toast(if enabled {
+                tr!(
+                    "settings.toggle_on",
+                    name = tr!("settings.mermaid_visualization")
+                )
+            } else {
+                tr!(
+                    "settings.toggle_off",
+                    name = tr!("settings.mermaid_visualization")
+                )
+            });
+        }
         cx.notify();
     }
 
@@ -2608,7 +2687,13 @@ impl Fintwind {
             return;
         }
         self.state.auto_compact_enabled = enabled;
-        self.save();
+        if self.save() {
+            self.show_success_toast(if enabled {
+                tr!("settings.toggle_on", name = tr!("settings.auto_compact"))
+            } else {
+                tr!("settings.toggle_off", name = tr!("settings.auto_compact"))
+            });
+        }
         cx.notify();
     }
 
@@ -2625,7 +2710,12 @@ impl Fintwind {
         }
         self.state.auto_compact_threshold_tokens = tokens;
         self.sync_auto_compact_threshold_input(cx);
-        self.save();
+        if self.save() {
+            self.show_success_toast(tr!(
+                "settings.option_updated",
+                name = tr!("settings.auto_compact_threshold")
+            ));
+        }
         cx.notify();
     }
 
@@ -2666,10 +2756,17 @@ impl Fintwind {
             self.sync_network_proxy_input(cx);
             return;
         }
+        let cleared = stored.is_empty();
         self.state.network_proxy_url = stored;
         fintwind_protocol::http::set_active_proxy(self.state.network_proxy_url());
         self.sync_network_proxy_input(cx);
-        self.save();
+        if self.save() {
+            self.show_success_toast(if cleared {
+                tr!("settings.toggle_off", name = tr!("settings.network_proxy"))
+            } else {
+                tr!("settings.option_updated", name = tr!("settings.network_proxy"))
+            });
+        }
         cx.notify();
     }
 
@@ -2705,7 +2802,12 @@ impl Fintwind {
         }
         self.state.ui_text_scale = scale;
         crate::theme::set_ui_text_scale(scale);
-        self.save();
+        if self.save() {
+            self.show_success_toast(tr!(
+                "settings.option_updated",
+                name = tr!("settings.ui_text_size")
+            ));
+        }
         window.refresh();
         cx.notify();
     }
@@ -2717,7 +2819,12 @@ impl Fintwind {
         }
         self.state.code_text_scale = scale;
         crate::theme::set_code_text_scale(scale);
-        self.save();
+        if self.save() {
+            self.show_success_toast(tr!(
+                "settings.option_updated",
+                name = tr!("settings.code_text_size")
+            ));
+        }
         window.refresh();
         cx.notify();
     }
@@ -2731,7 +2838,12 @@ impl Fintwind {
         }
         self.state.transcript_width = width;
         crate::theme::set_transcript_width(width);
-        self.save();
+        if self.save() {
+            self.show_success_toast(tr!(
+                "settings.option_updated",
+                name = tr!("settings.transcript_width")
+            ));
+        }
         window.refresh();
         cx.notify();
     }
@@ -2742,7 +2854,9 @@ impl Fintwind {
         }
         self.state.ui_font_family = family.clone();
         crate::theme::set_ui_font_family(family);
-        self.save();
+        if self.save() {
+            self.show_success_toast(tr!("settings.option_updated", name = tr!("settings.ui_font")));
+        }
         window.refresh();
         cx.notify();
     }
@@ -2758,7 +2872,12 @@ impl Fintwind {
         }
         self.state.code_font_family = family.clone();
         crate::theme::set_code_font_family(family);
-        self.save();
+        if self.save() {
+            self.show_success_toast(tr!(
+                "settings.option_updated",
+                name = tr!("settings.code_font")
+            ));
+        }
         window.refresh();
         cx.notify();
     }
@@ -2774,7 +2893,9 @@ impl Fintwind {
         }
         self.state.theme = preference;
         crate::theme::apply_theme_preference(preference, self.state.theme_scheme, window, cx);
-        self.save();
+        if self.save() {
+            self.show_success_toast(tr!("settings.option_updated", name = tr!("settings.theme")));
+        }
         cx.notify();
     }
 
@@ -2789,7 +2910,9 @@ impl Fintwind {
         }
         self.state.theme_scheme = scheme;
         crate::theme::apply_theme_preference(self.state.theme, scheme, window, cx);
-        self.save();
+        if self.save() {
+            self.show_success_toast(tr!("settings.option_updated", name = tr!("settings.scheme")));
+        }
         cx.notify();
     }
 
@@ -2841,7 +2964,9 @@ impl Fintwind {
         self.invalidate_composer_sources(cx);
 
         crate::set_app_menus(cx);
-        self.save();
+        if self.save() {
+            self.show_success_toast(tr!("settings.option_updated", name = tr!("language.title")));
+        }
         window.refresh();
         cx.notify();
     }

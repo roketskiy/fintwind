@@ -1983,10 +1983,9 @@ pub struct Fintwind {
     providers_auth_loading: bool,
     /// Only the newest integration snapshot may replace connection state.
     providers_integrations_generation: u64,
-    /// A connectivity probe of the selected built-in provider is in flight.
-    providers_builtin_catalog_check: Option<providers_fetch::BuiltinCatalogState>,
-    /// The id of the built-in provider the current connectivity probe names;
-    /// a stale result for a different provider never renders.
+    /// The built-in provider whose local catalog check is in flight; the
+    /// verdict lands as a toast, and a result for another provider never
+    /// toasts.
     providers_builtin_catalog_check_id: Option<String>,
     provider_quota: providers_quota::SubscriptionBoard,
     /// Desktop-local subscription cache (Claude/Codex sign-in): account
@@ -2017,10 +2016,13 @@ pub struct Fintwind {
     image_models: Vec<fintwind_client::models_dev::ImageModelChoice>,
     image_models_generation: u64,
     image_models_loading: bool,
-    /// The Providers page's connectivity probes, keyed by provider id. The
-    /// page's one network-status memory; render reads only what a finished
-    /// probe stored.
-    provider_connectivity: HashMap<String, providers_fetch::ProviderConnectivityState>,
+    /// The custom providers whose connectivity probe is in flight, each with
+    /// its generation token; the verdict lands as a toast, and a superseded
+    /// probe never toasts.
+    provider_connectivity_testing: HashMap<String, u64>,
+    /// Monotonic token source for the connectivity probes; it outlives the
+    /// in-flight entries so an edit-and-retest cannot reuse an old token.
+    provider_connectivity_generation: u64,
     /// The Providers page's first-token probes, keyed by (provider id,
     /// model id).
     model_latency: HashMap<(String, String), providers_fetch::ModelLatencyState>,
@@ -2057,9 +2059,9 @@ pub struct Fintwind {
     /// submitted draft keeps what the fetch learned.
     providers_form_model_catalog:
         HashMap<String, fintwind_client::custom_providers::CustomProviderModel>,
-    /// The add-provider form's connectivity probe: the form's own network
-    /// verdict while the provider it describes does not exist yet.
-    providers_form_connectivity: Option<providers_fetch::ProviderConnectivityState>,
+    /// The add-provider form's connectivity probe is in flight; the verdict
+    /// lands as a toast.
+    providers_form_connectivity_testing: bool,
     /// The add-provider form's model-list fetch is in flight.
     providers_form_fetching: bool,
     /// Generation tokens for the form's in-flight fetch and probe; leaving
@@ -3543,12 +3545,14 @@ impl Fintwind {
                     // Return in any field is an honest attempt to save.
                     ComposerEvent::Submit(_) => this.submit_provider_form(cx),
                     ComposerEvent::Edited if this.providers_adding => {
-                        // An endpoint or key edit voids the form's probe
-                        // verdict; it no longer describes these fields.
+                        // An endpoint or key edit voids the form's probe;
+                        // it no longer describes these fields, so a late
+                        // result must not toast.
                         if input == this.provider_form_base_url
                             || input == this.provider_form_api_key
                         {
-                            this.providers_form_connectivity = None;
+                            this.providers_form_connectivity_testing = false;
+                            this.providers_form_probe_generation += 1;
                         }
                         cx.notify();
                     }
@@ -4071,7 +4075,6 @@ impl Fintwind {
                 providers_oauth_generation: 0,
                 providers_auth_loading: false,
                 providers_integrations_generation: 0,
-                providers_builtin_catalog_check: None,
                 providers_builtin_catalog_check_id: None,
                 provider_quota: Default::default(),
                 local_quota_cache: std::sync::Arc::new(
@@ -4087,7 +4090,8 @@ impl Fintwind {
                 image_models: Vec::new(),
                 image_models_generation: 0,
                 image_models_loading: false,
-                provider_connectivity: HashMap::new(),
+                provider_connectivity_testing: HashMap::new(),
+                provider_connectivity_generation: 0,
                 model_latency: HashMap::new(),
                 native_reconcile_generation: 0,
                 native_moved_sessions: HashSet::new(),
@@ -4100,7 +4104,7 @@ impl Fintwind {
                 providers_form_format: Default::default(),
                 providers_form_models: Vec::new(),
                 providers_form_model_catalog: HashMap::new(),
-                providers_form_connectivity: None,
+                providers_form_connectivity_testing: false,
                 providers_form_fetching: false,
                 providers_form_fetch_generation: 0,
                 providers_form_probe_generation: 0,

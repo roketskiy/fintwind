@@ -242,6 +242,15 @@ settings.shell_failed: "无法更新 Shell 设置：%{error}"
 settings.network_proxy_description: 作用于更新检查、模型目录与新建会话
 settings.network_proxy_placeholder: 如 http://127.0.0.1:7897
 settings.network_proxy_invalid: 代理地址格式不对
+settings.option_updated: "%{name}已更新"
+settings.toggle_on: "%{name}已开启"
+settings.toggle_off: "%{name}已关闭"
+settings.keep_screen_awake_on: 屏幕常亮已开启
+settings.keep_screen_awake_off: 屏幕常亮已关闭
+settings.general_workspace_reset_done: 通用工作区已恢复默认
+settings.opencode_binary_updated: OpenCode 路径已更新
+settings.opencode_binary_reset_done: 已恢复自动检测 OpenCode
+settings.shell_updated: Shell 设置已更新
 settings.app_version: fintwind %{version}
 providers.coding_agents: 编程智能体
 providers.description: fintwind 调用安装在本机上的智能体命令行工具。请先安装相应工具或完成登录，然后刷新
@@ -381,12 +390,12 @@ providers.fetch_failed: "无法获取模型列表：%{error}"
 providers.connectivity_label: 连通性
 providers.test_connection: 测试连接
 providers.testing_connection: 测试中…
-providers.connection_tooltip: 向 OpenCode 服务查询该供应商可用的模型数量并测量响应
-providers.connection_ok: "已连通 · %{latency} · %{count} 个模型"
+providers.connection_tooltip: 向该供应商的端点发送一次模型列表请求并测量响应
+providers.connection_ok: "已连通 · %{latency}"
 providers.builtin_catalog_check: 检查模型目录
 providers.builtin_catalog_checking: 正在查询目录…
 providers.builtin_catalog_tooltip: 查询本机 OpenCode 服务中的该供应商模型目录；此操作不会检测供应商 API 的实际连通性
-providers.builtin_catalog_ok: "模型目录可用 · %{count} 个模型"
+providers.builtin_catalog_ok: 模型目录可用
 providers.builtin_catalog_failed: "模型目录查询失败：%{error}"
 providers.connection_failed: "连接失败：%{error}"
 providers.error_invalid_url: Base URL 不是 http(s) 地址
@@ -467,6 +476,10 @@ mcp.delete_server: 删除服务器
 mcp.confirm_delete_server: 确认删除?
 mcp.added_toast: "已添加服务器 %{name}"
 mcp.deleted_toast: "已删除服务器 %{name}"
+mcp.enabled_toast: "已启用服务器 %{name}"
+mcp.disabled_toast: "已停用服务器 %{name}"
+mcp.kind_updated: "服务器 %{name} 的类型已更新"
+mcp.oauth_mode_updated: "服务器 %{name} 的认证方式已更新"
 mcp.duplicate_name: 已存在同名服务器
 mcp.duplicate_variable: 该名称已在此列表中使用
 mcp.hint_need_command: 请输入启动服务器的命令。
@@ -859,6 +872,8 @@ skills.path_copied: 已复制路径
 skills.delete: 删除
 skills.confirm_delete: 确认删除
 skills.deleted_toast: "已将“%{name}”移到废纸篓"
+skills.enabled_toast: "已启用技能 %{name}"
+skills.disabled_toast: "已停用技能 %{name}"
 skills.delete_failed: "无法删除技能：%{error}"
 skills.toggle_failed: "无法更新技能：%{error}"
 skills.empty_title: 还没有技能

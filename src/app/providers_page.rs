@@ -255,12 +255,10 @@ impl Fintwind {
         self.providers_model_editor = None;
         self.providers_model_editor_modalities.clear();
         self.providers_model_editor_output_modalities.clear();
-        // A probe verdict describes one catalog provider; another selection
-        // must not show it, and an in-flight one must not land on the new
-        // selection.
+        // A catalog check describes one provider; another selection must
+        // not receive its in-flight result.
         let catalog_id = id.strip_prefix(BUILTIN_SELECTION_PREFIX);
         if self.providers_builtin_catalog_check_id.as_deref() != catalog_id {
-            self.providers_builtin_catalog_check = None;
             self.providers_builtin_catalog_check_id = None;
         }
         self.load_provider_fields(&id, cx);
@@ -609,7 +607,7 @@ impl Fintwind {
         // A fresh blank form: an in-flight fetch or probe from a previous
         // visit must not land its result here.
         self.providers_form_model_catalog.clear();
-        self.providers_form_connectivity = None;
+        self.providers_form_connectivity_testing = false;
         self.providers_form_fetch_generation += 1;
         self.providers_form_probe_generation += 1;
         for input in [
@@ -1554,10 +1552,7 @@ impl Fintwind {
         // it and logout explains instead of pretending to remove it.
         let env_names = self.provider_env_names(&provider.id);
 
-        let state = self.providers_builtin_catalog_check.as_ref().filter(|_| {
-            self.providers_builtin_catalog_check_id.as_deref() == Some(provider.id.as_str())
-        });
-        let catalog_check = self.render_builtin_catalog_check(state, provider, theme, cx);
+        let catalog_check = self.render_builtin_catalog_check(provider, theme, cx);
 
         let mut model_rows = div().flex().flex_col();
         if provider.models.is_empty() {
@@ -2804,7 +2799,8 @@ impl Fintwind {
             input.set_content(String::new(), cx);
             input.set_obscured(true, cx);
         });
-        self.providers_form_connectivity = None;
+        self.providers_form_connectivity_testing = false;
+        self.providers_form_probe_generation += 1;
         cx.notify();
     }
 
@@ -3701,7 +3697,8 @@ impl Fintwind {
                                 this.providers_form_format = format;
                                 // The form's probe spoke the old format's
                                 // dialect; its verdict no longer stands.
-                                this.providers_form_connectivity = None;
+                                this.providers_form_connectivity_testing = false;
+                                this.providers_form_probe_generation += 1;
                                 cx.notify();
                             });
                         })

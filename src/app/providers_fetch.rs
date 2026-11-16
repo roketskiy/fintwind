@@ -21,19 +21,6 @@ use super::providers_page::{
 };
 
 use super::*;
-/// A provider connectivity probe's lifecycle on the page.
-#[derive(Clone, Debug)]
-pub(super) enum ProviderConnectivityState {
-    Testing,
-    Done(custom_providers::ConnectivityOutcome),
-}
-
-/// A check of the local OpenCode model catalog for a built-in provider.
-#[derive(Clone, Debug)]
-pub(super) enum BuiltinCatalogState {
-    Testing,
-    Done(Result<usize, String>),
-}
 
 /// A model first-token probe's lifecycle on the page.
 #[derive(Clone, Debug)]
@@ -285,22 +272,22 @@ impl Fintwind {
 
     /// The connectivity probe: one model-list request through the provider's
     /// endpoint with a short deadline, timed end to end. The provider under
-    /// the selection when the button was clicked is the one probed.
+    /// the selection when the button was clicked is the one probed; the
+    /// verdict lands as a toast.
     pub(super) fn probe_provider_connectivity(&mut self, cx: &mut Context<Self>) {
         let Some(provider) = self.selected_custom_provider() else {
             return;
         };
-        if matches!(
-            self.provider_connectivity.get(&provider.id),
-            Some(ProviderConnectivityState::Testing)
-        ) {
+        if self.provider_connectivity_testing.contains_key(&provider.id) {
             return;
         }
         let provider_id = provider.id.clone();
         let credentials = fintwind_client::persistence::StateStore::remote(self.daemon.clone());
         let workspace = self.provider_workspace();
-        self.provider_connectivity
-            .insert(provider_id.clone(), ProviderConnectivityState::Testing);
+        self.provider_connectivity_generation += 1;
+        let generation = self.provider_connectivity_generation;
+        self.provider_connectivity_testing
+            .insert(provider_id.clone(), generation);
         cx.notify();
         cx.spawn(async move |this, cx| {
             let outcome = cx
@@ -315,12 +302,36 @@ impl Fintwind {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                this.provider_connectivity
-                    .insert(provider_id, ProviderConnectivityState::Done(outcome));
+                // An endpoint or key edit mid-flight drops the entry, and a
+                // retest mints a new token; either way this probe no longer
+                // describes the provider, so it stays mute.
+                if this.provider_connectivity_testing.get(&provider_id) == Some(&generation) {
+                    this.provider_connectivity_testing.remove(&provider_id);
+                    this.toast_connectivity_outcome(outcome);
+                }
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    /// A connectivity probe's verdict as a toast: the measured latency on
+    /// success, the localized failure reason otherwise.
+    fn toast_connectivity_outcome(&mut self, outcome: custom_providers::ConnectivityOutcome) {
+        match outcome {
+            custom_providers::ConnectivityOutcome::Reachable { latency } => {
+                self.show_success_toast(tr!(
+                    "providers.connection_ok",
+                    latency = format_probe_latency(latency)
+                ));
+            }
+            custom_providers::ConnectivityOutcome::Failed { error } => {
+                self.show_toast(tr!(
+                    "providers.connection_failed",
+                    error = api_list_error_text(&error)
+                ));
+            }
+        }
     }
 
     // ── The add-provider form's actions ────────────────────────────────────
@@ -520,12 +531,9 @@ impl Fintwind {
     }
 
     /// The add form's connectivity probe: the saved provider's request
-    /// against the transient provider, with the verdict on the form.
+    /// against the transient provider, with the verdict as a toast.
     pub(super) fn probe_form_connectivity(&mut self, cx: &mut Context<Self>) {
-        if matches!(
-            self.providers_form_connectivity,
-            Some(ProviderConnectivityState::Testing)
-        ) {
+        if self.providers_form_connectivity_testing {
             return;
         }
         if !self.form_endpoint_ready(cx) {
@@ -537,7 +545,7 @@ impl Fintwind {
         let credentials = fintwind_client::persistence::StateStore::remote(self.daemon.clone());
         let workspace = self.provider_workspace();
         let generation = self.providers_form_probe_generation;
-        self.providers_form_connectivity = Some(ProviderConnectivityState::Testing);
+        self.providers_form_connectivity_testing = true;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let outcome = cx
@@ -553,8 +561,8 @@ impl Fintwind {
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.providers_form_probe_generation == generation {
-                    this.providers_form_connectivity =
-                        Some(ProviderConnectivityState::Done(outcome));
+                    this.providers_form_connectivity_testing = false;
+                    this.toast_connectivity_outcome(outcome);
                 }
                 cx.notify();
             });
@@ -577,7 +585,7 @@ impl Fintwind {
         self.tear_down_provider_oauth(cx);
         self.providers_adding = false;
         self.providers_form_stage = ProviderFormStage::Picking;
-        self.providers_form_connectivity = None;
+        self.providers_form_connectivity_testing = false;
         self.providers_form_model_catalog.clear();
         self.providers_form_fetch_generation += 1;
         self.providers_form_probe_generation += 1;
@@ -643,10 +651,9 @@ impl Fintwind {
     }
 
     /// A provider's probes stop being current the moment its endpoint or key
-    /// changes; drop them so the UI shows "unknown" rather than a stale
-    /// verdict.
+    /// changes; drop them so a stale verdict neither renders nor toasts.
     pub(super) fn clear_provider_probe_results(&mut self, provider_id: &str) {
-        self.provider_connectivity.remove(provider_id);
+        self.provider_connectivity_testing.remove(provider_id);
         self.model_latency
             .retain(|(owner, _), _| owner != provider_id);
     }
@@ -910,7 +917,6 @@ impl Fintwind {
                         if this.providers_builtin_catalog_check_id.as_deref()
                             == Some(provider_id.as_str())
                         {
-                            this.providers_builtin_catalog_check = None;
                             this.providers_builtin_catalog_check_id = None;
                         }
                         // Env-backed connections are not stored state: the
@@ -1398,7 +1404,8 @@ impl Fintwind {
     }
 
     /// Check the local OpenCode model catalog for the selected built-in
-    /// provider. This does not make a request to the provider's endpoint.
+    /// provider. This does not make a request to the provider's endpoint;
+    /// the verdict lands as a toast.
     pub(super) fn check_builtin_provider_catalog(&mut self, cx: &mut Context<Self>) {
         let Some(catalog_id) = self.selected_builtin_catalog_id().map(str::to_owned) else {
             return;
@@ -1406,11 +1413,7 @@ impl Fintwind {
         // Per-provider in-flight guard: a probe running for another provider
         // must not mute this one's button, and a second click here must not
         // stack a duplicate request.
-        if matches!(
-            self.providers_builtin_catalog_check,
-            Some(BuiltinCatalogState::Testing)
-        ) && self.providers_builtin_catalog_check_id.as_deref() == Some(catalog_id.as_str())
-        {
+        if self.providers_builtin_catalog_check_id.as_deref() == Some(catalog_id.as_str()) {
             return;
         }
         if !self.provider_is_authorized(&catalog_id) {
@@ -1419,7 +1422,6 @@ impl Fintwind {
         let Some(workspace) = self.provider_workspace() else {
             return;
         };
-        self.providers_builtin_catalog_check = Some(BuiltinCatalogState::Testing);
         self.providers_builtin_catalog_check_id = Some(catalog_id.clone());
         cx.notify();
         let probe_id = catalog_id.clone();
@@ -1436,7 +1438,18 @@ impl Fintwind {
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.providers_builtin_catalog_check_id.as_deref() == Some(catalog_id.as_str()) {
-                    this.providers_builtin_catalog_check = Some(BuiltinCatalogState::Done(outcome));
+                    this.providers_builtin_catalog_check_id = None;
+                    match outcome {
+                        Ok(_) => {
+                            this.show_success_toast(tr!("providers.builtin_catalog_ok"));
+                        }
+                        Err(detail) => {
+                            this.show_toast(tr!(
+                                "providers.builtin_catalog_failed",
+                                error = detail
+                            ));
+                        }
+                    }
                 }
                 cx.notify();
             });
@@ -1450,12 +1463,12 @@ impl Fintwind {
     /// without a key method (OAuth-gated) show a note instead of a button.
     pub(super) fn render_builtin_catalog_check(
         &self,
-        state: Option<&BuiltinCatalogState>,
         provider: &fintwind_client::models_dev::ModelsDevProvider,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let testing = matches!(state, Some(BuiltinCatalogState::Testing));
+        let testing =
+            self.providers_builtin_catalog_check_id.as_deref() == Some(provider.id.as_str());
         if !self.provider_supports_key(&provider.id) {
             return info_note(
                 theme,
@@ -1502,7 +1515,6 @@ impl Fintwind {
             .items_center()
             .gap(px(10.0))
             .child(button)
-            .children(builtin_catalog_verdict(state, theme))
             .into_any_element()
     }
 }
@@ -1596,17 +1608,15 @@ pub(super) fn format_probe_latency(latency: Duration) -> String {
 }
 
 impl Fintwind {
-    /// The endpoint section's connectivity row: the test button beside its
-    /// verdict — spinner while probing, a reachable line with the measured
-    /// latency, or the failure reason in the danger color.
+    /// The endpoint section's connectivity row: the test button, spinning
+    /// while probing; the verdict lands as a toast.
     pub(super) fn render_connectivity_field(
         &self,
         provider: &fintwind_client::custom_providers::CustomProvider,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let state = self.provider_connectivity.get(&provider.id);
-        let testing = matches!(state, Some(ProviderConnectivityState::Testing));
+        let testing = self.provider_connectivity_testing.contains_key(&provider.id);
         let mut button = outline_button(
             "test-provider-connection",
             if testing {
@@ -1645,21 +1655,19 @@ impl Fintwind {
             .items_center()
             .gap(px(10.0))
             .child(button)
-            .children(connectivity_verdict(state, theme))
             .into_any_element()
     }
 
     /// The add form's connectivity row: the same test for the provider the
-    /// form describes, which does not exist yet, so the verdict lives on the
-    /// form. Like the form's fetch button, it stays clickable with an
-    /// unusable Base URL — the action explains itself with a toast.
+    /// form describes, which does not exist yet. Like the form's fetch
+    /// button, it stays clickable with an unusable Base URL — the action
+    /// explains itself with a toast.
     pub(super) fn render_form_connectivity_field(
         &self,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let state = self.providers_form_connectivity.as_ref();
-        let testing = matches!(state, Some(ProviderConnectivityState::Testing));
+        let testing = self.providers_form_connectivity_testing;
         let mut button = outline_button(
             "test-provider-form-connection",
             if testing {
@@ -1698,123 +1706,7 @@ impl Fintwind {
             .items_center()
             .gap(px(10.0))
             .child(button)
-            .children(connectivity_verdict(state, theme))
             .into_any_element()
-    }
-}
-
-/// A connectivity probe's verdict: a reachable line with the measured
-/// latency, or the failure reason. `None` while unknown or probing.
-fn connectivity_verdict(
-    state: Option<&ProviderConnectivityState>,
-    theme: &Theme,
-) -> Option<AnyElement> {
-    match state? {
-        ProviderConnectivityState::Testing => None,
-        ProviderConnectivityState::Done(custom_providers::ConnectivityOutcome::Reachable {
-            models,
-            latency,
-        }) => Some(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(6.0))
-                .min_w_0()
-                .child(icon("icons/check.svg", 12.0, theme.success))
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(ui_px(10.5))
-                        .text_color(theme.success_text)
-                        .child(SharedString::from(tr!(
-                            "providers.connection_ok",
-                            latency = format_probe_latency(*latency),
-                            count = *models
-                        ))),
-                )
-                .into_any_element(),
-        ),
-        ProviderConnectivityState::Done(custom_providers::ConnectivityOutcome::Failed {
-            error,
-        }) => {
-            let text = api_list_error_text(error);
-            Some(
-                div()
-                    .id("provider-connectivity-verdict")
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .min_w_0()
-                    .tooltip(Tooltip::text(text.clone()))
-                    .child(icon("icons/alert.svg", 12.0, theme.danger))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(ui_px(10.5))
-                            .text_color(theme.danger_text)
-                            .child(SharedString::from(tr!(
-                                "providers.connection_failed",
-                                error = text
-                            ))),
-                    )
-                    .into_any_element(),
-            )
-        }
-    }
-}
-
-/// The built-in provider probe only reads the local OpenCode model catalog;
-/// its result must not be presented as remote connectivity or latency.
-fn builtin_catalog_verdict(
-    state: Option<&BuiltinCatalogState>,
-    theme: &Theme,
-) -> Option<AnyElement> {
-    match state? {
-        BuiltinCatalogState::Testing => None,
-        BuiltinCatalogState::Done(Ok(models)) => Some(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(6.0))
-                .min_w_0()
-                .child(icon("icons/check.svg", 12.0, theme.success))
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(ui_px(10.5))
-                        .text_color(theme.success_text)
-                        .child(SharedString::from(tr!(
-                            "providers.builtin_catalog_ok",
-                            count = *models
-                        ))),
-                )
-                .into_any_element(),
-        ),
-        BuiltinCatalogState::Done(Err(detail)) => Some(
-            div()
-                .id("builtin-catalog-verdict")
-                .flex()
-                .items_center()
-                .gap(px(6.0))
-                .min_w_0()
-                .tooltip(Tooltip::text(detail.clone()))
-                .child(icon("icons/alert.svg", 12.0, theme.danger))
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(ui_px(10.5))
-                        .text_color(theme.danger_text)
-                        .child(SharedString::from(tr!(
-                            "providers.builtin_catalog_failed",
-                            error = detail
-                        ))),
-                )
-                .into_any_element(),
-        ),
     }
 }
 

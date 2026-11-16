@@ -157,15 +157,13 @@ impl Fintwind {
         enabled: bool,
         cx: &mut Context<Self>,
     ) {
-        let dirs = self
-            .skills_catalog
-            .as_ref()
-            .and_then(|catalog| {
-                catalog
-                    .skills
-                    .iter()
-                    .find(|skill| skill.primary().dir == primary_dir)
-            })
+        let skill = self.skills_catalog.as_ref().and_then(|catalog| {
+            catalog
+                .skills
+                .iter()
+                .find(|skill| skill.primary().dir == primary_dir)
+        });
+        let dirs = skill
             .map(|skill| {
                 skill
                     .installs
@@ -174,6 +172,16 @@ impl Fintwind {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_else(|| vec![primary_dir.clone()]);
+        // A delete mid-flight can void the catalog entry; the folder name
+        // still names the skill the switch acted on.
+        let name = skill
+            .map(|skill| skill.name.clone())
+            .or_else(|| {
+                primary_dir
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .unwrap_or_default();
         // The switch answers immediately; the rescan confirms from disk.
         if let Some(catalog) = self.skills_catalog.as_ref() {
             let mut updated = catalog.as_ref().clone();
@@ -208,8 +216,18 @@ impl Fintwind {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                if let Err(error) = result {
-                    this.show_toast(tr!("skills.toggle_failed", error = error));
+                match result {
+                    Ok(_) if !name.is_empty() => {
+                        this.show_success_toast(if enabled {
+                            tr!("skills.enabled_toast", name = name)
+                        } else {
+                            tr!("skills.disabled_toast", name = name)
+                        });
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        this.show_toast(tr!("skills.toggle_failed", error = error));
+                    }
                 }
                 this.invalidate_skills_catalog(cx);
             });

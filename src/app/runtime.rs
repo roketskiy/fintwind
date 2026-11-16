@@ -1243,13 +1243,20 @@ impl Fintwind {
             .unwrap_or(&[])
     }
 
-    pub(super) fn save(&mut self) {
+    /// Persist the live state. Returns false when the snapshot could not
+    /// start; the failure toast is already up, so a caller must not claim
+    /// success on top of it.
+    pub(super) fn save(&mut self) -> bool {
         self.last_stream_save = Instant::now();
         match self.store.save(&mut self.state) {
-            Ok(accepted) => self.stream_state_dirty = !accepted,
+            Ok(accepted) => {
+                self.stream_state_dirty = !accepted;
+                true
+            }
             Err(error) => {
                 self.stream_state_dirty = true;
                 self.show_toast(tr!("errors.save_local_state", error = error));
+                false
             }
         }
     }
@@ -3155,7 +3162,9 @@ impl Fintwind {
         }
         if let Some(result) = self.store.finish_save(&mut self.state) {
             match result {
-                Ok(()) if self.stream_state_dirty => self.save(),
+                Ok(()) if self.stream_state_dirty => {
+                    self.save();
+                }
                 Ok(()) => {}
                 Err(error) => {
                     self.stream_state_dirty = true;

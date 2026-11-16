@@ -7,6 +7,11 @@
 // Usage:
 //   bun scripts/bundle-windows.ts                    # stable (CI uses this)
 //   bun scripts/bundle-windows.ts --channel=beta     # personal beta, local only
+//   bun scripts/bundle-windows.ts --no-build         # package exes already in
+//                                                    # target/release; copy the
+//                                                    # build-school.py outputs
+//                                                    # there first (its download
+//                                                    # dir is target/school-compute)
 //
 // Env:
 //   CARGO_TARGET_DIR              cargo target directory (default: target)
@@ -39,6 +44,7 @@ if (channelInput !== "stable" && channelInput !== "beta") {
 }
 const channel = channelInput as ReleaseChannel;
 const beta = channel === "beta";
+const skipBuild = process.argv.includes("--no-build");
 
 /** Installer naming uses the Rust arch name, so the installer carries
  *  that rather than the full triple. */
@@ -197,7 +203,11 @@ const installer = join(
   `fintwind-${version}${channelSuffix}-${architecture}-Setup.exe`,
 );
 
-if (beta) {
+if (skipBuild) {
+  // The caller owns the binaries' provenance and channel; packaging only
+  // copies what already sits in the release directory.
+  console.log("Skipping cargo build; packaging existing release executables.");
+} else if (beta) {
   await $`cargo build --locked --release --features beta --package fintwind --bin fintwind --package fintwind-daemon --bin fintwind-daemon`;
 } else {
   await $`cargo build --locked --release --package fintwind --bin fintwind --package fintwind-daemon --bin fintwind-daemon`;

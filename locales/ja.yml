@@ -235,6 +235,15 @@ settings.shell_failed: "シェル設定を更新できませんでした: %{erro
 settings.network_proxy_description: 更新確認・モデルカタログ・新規セッションに適用されます
 settings.network_proxy_placeholder: 例：http://127.0.0.1:7897
 settings.network_proxy_invalid: プロキシアドレスの形式が正しくありません
+settings.option_updated: "%{name}を更新しました"
+settings.toggle_on: "%{name}を有効にしました"
+settings.toggle_off: "%{name}を無効にしました"
+settings.keep_screen_awake_on: 画面の常時点灯を有効にしました
+settings.keep_screen_awake_off: 画面の常時点灯を無効にしました
+settings.general_workspace_reset_done: 共通ワークスペースを既定に戻しました
+settings.opencode_binary_updated: OpenCode のパスを更新しました
+settings.opencode_binary_reset_done: OpenCode の自動検出に戻しました
+settings.shell_updated: シェル設定を更新しました
 settings.app_version: fintwind %{version}
 
 providers.coding_agents: コーディングエージェント
@@ -375,12 +384,12 @@ providers.fetch_failed: "モデル一覧を取得できませんでした：%{er
 providers.connectivity_label: 接続状態
 providers.test_connection: 接続テスト
 providers.testing_connection: テスト中…
-providers.connection_tooltip: OpenCode サーバーにこのプロバイダーの利用可能モデル数を問い合わせ、応答を測定します
-providers.connection_ok: "応答あり · %{latency} · %{count}モデル"
+providers.connection_tooltip: このプロバイダーのエンドポイントにモデル一覧リクエストを 1 回送り、応答を測定します
+providers.connection_ok: "応答あり · %{latency}"
 providers.builtin_catalog_check: モデルカタログを確認
 providers.builtin_catalog_checking: カタログを確認中…
 providers.builtin_catalog_tooltip: ローカルの OpenCode サーバーにあるこのプロバイダーのモデルカタログを確認します。プロバイダー API への接続はテストしません
-providers.builtin_catalog_ok: "モデルカタログを確認済み · %{count}モデル"
+providers.builtin_catalog_ok: モデルカタログを確認済み
 providers.builtin_catalog_failed: "モデルカタログの照会に失敗：%{error}"
 providers.connection_failed: "接続失敗：%{error}"
 providers.error_invalid_url: Base URL が http(s) アドレスではありません
@@ -461,6 +470,10 @@ mcp.delete_server: サーバーを削除
 mcp.confirm_delete_server: 削除しますか?
 mcp.added_toast: "サーバー %{name} を追加しました"
 mcp.deleted_toast: "サーバー %{name} を削除しました"
+mcp.enabled_toast: "サーバー %{name} を有効にしました"
+mcp.disabled_toast: "サーバー %{name} を無効にしました"
+mcp.kind_updated: "サーバー %{name} の種類を更新しました"
+mcp.oauth_mode_updated: "サーバー %{name} の認証方式を更新しました"
 mcp.duplicate_name: 同じ名前のサーバーが既に存在します
 mcp.duplicate_variable: この名前はこの表で既に使われています
 mcp.hint_need_command: サーバーを起動するコマンドを入力してください。
@@ -871,6 +884,8 @@ skills.path_copied: パスをコピーしました
 skills.delete: 削除
 skills.confirm_delete: 削除を確認
 skills.deleted_toast: "「%{name}」をゴミ箱に移動しました"
+skills.enabled_toast: "スキル %{name} を有効にしました"
+skills.disabled_toast: "スキル %{name} を無効にしました"
 skills.delete_failed: "スキルを削除できませんでした：%{error}"
 skills.toggle_failed: "スキルを更新できませんでした：%{error}"
 skills.empty_title: スキルはまだありません

@@ -3439,6 +3439,7 @@ impl Fintwind {
                         BackgroundWorkEvent::OutputDelta { .. }
                             | BackgroundWorkEvent::Transcript(
                                 BackgroundWorkTranscriptEvent::Started { .. }
+                                    | BackgroundWorkTranscriptEvent::Steered { .. }
                                     | BackgroundWorkTranscriptEvent::TextDelta { .. }
                                     | BackgroundWorkTranscriptEvent::ReasoningDelta { .. }
                                     | BackgroundWorkTranscriptEvent::Activity { .. }

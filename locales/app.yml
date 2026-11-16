@@ -2360,6 +2360,8 @@ background.monitor:
   en: Monitor
 background.subagent:
   en: Subagent
+background.image:
+  en: Image generation
 background.child_deleted:
   en: Session was deleted
 background.no_work:

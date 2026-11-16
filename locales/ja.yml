@@ -1184,6 +1184,7 @@ background.no_agents: サブエージェントなし
 background.process: プロセス
 background.monitor: モニター
 background.subagent: サブエージェント
+background.image: 画像生成
 background.child_deleted: セッションが削除されました
 background.no_work: バックグラウンドの作業はありません
 background.no_work_description: 長時間実行されるコマンドとサブエージェントがここに表示されます。

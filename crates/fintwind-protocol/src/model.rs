@@ -2034,6 +2034,7 @@ pub enum BackgroundWorkKind {
     Process,
     Monitor,
     Subagent,
+    Image,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -2096,6 +2097,11 @@ pub enum BackgroundWorkTranscriptEvent {
     Started {
         key: BackgroundWorkKey,
         prompt: Option<String>,
+    },
+    /// A user input delivered into a running child execution.
+    Steered {
+        key: BackgroundWorkKey,
+        text: String,
     },
     TextDelta {
         key: BackgroundWorkKey,
@@ -2219,6 +2225,10 @@ pub enum BackgroundWorkEvent {
     /// Authoritative snapshot of all provider work still live. Used by
     /// transports which publish a level signal in addition to edge events.
     ReconcileLive {
+        items: Vec<BackgroundWorkItem>,
+    },
+    /// The provider's active and unconsumed image jobs, not image history.
+    ReconcileImages {
         items: Vec<BackgroundWorkItem>,
     },
     /// Incremental structured transcript for a detached subagent. This is

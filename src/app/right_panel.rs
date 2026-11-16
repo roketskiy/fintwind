@@ -582,6 +582,7 @@ impl RightPanelSurface {
                         BackgroundWorkKind::Process => tr!("background.process"),
                         BackgroundWorkKind::Monitor => tr!("background.monitor"),
                         BackgroundWorkKind::Subagent => tr!("background.subagent"),
+                        BackgroundWorkKind::Image => tr!("background.image"),
                     }
                 } else {
                     title.clone()

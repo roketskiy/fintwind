@@ -397,7 +397,6 @@ impl Fintwind {
             commit_status: self.commit_operation_status_label(),
             changes_focus: self.transcript_control_focus("environment-summary-changes", cx),
             commit_focus: self.transcript_control_focus("environment-summary-commit", cx),
-            compare_focus: self.transcript_control_focus("environment-summary-compare", cx),
             history_focus: self.transcript_control_focus("environment-summary-history", cx),
         };
         render_git_tools_section(environment, handle.clone(), cx.entity().downgrade(), &theme)

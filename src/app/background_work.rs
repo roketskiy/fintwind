@@ -144,7 +144,6 @@ struct EnvironmentSummary {
     commit_status: Option<String>,
     changes_focus: FocusHandle,
     commit_focus: FocusHandle,
-    compare_focus: FocusHandle,
     history_focus: FocusHandle,
 }
 
@@ -2254,13 +2253,6 @@ fn render_git_tools_section(
             });
         },
     );
-    let branch = render_capsule_info_row(
-        "environment-summary-branch",
-        "icons/git-branch.svg",
-        environment.branch.unwrap_or_else(|| "—".to_owned()),
-        theme,
-    );
-
     let history_handle = handle.clone();
     let history_weak = weak.clone();
     let history = render_environment_action_row(
@@ -2304,69 +2296,38 @@ fn render_git_tools_section(
         },
     );
 
-    let compare_handle = handle;
-    let compare_weak = weak;
-    let compare = render_environment_action_row(
-        "environment-summary-compare",
-        &environment.compare_focus,
-        "icons/github.svg",
-        tr!("environment.compare_branch"),
-        true,
-        false,
-        Some(icon("icons/arrow-up-right.svg", 13.0, theme.text_tertiary).into_any_element()),
-        theme,
-        move |window, cx| {
-            compare_handle.close(window, cx);
-            window.refresh();
-            let _ = compare_weak.update(cx, |this, cx| {
-                this.open_review_page(ReviewDiffSource::Branch, cx);
-            });
-        },
-    );
-
     div()
         .w_full()
         .flex()
         .flex_col()
         .gap_0()
-        .child(render_capsule_section_header(
-            "task-capsule-git-header",
-            tr!("capsule.git_tools"),
-            theme,
-        ))
+        .child(
+            render_capsule_section_header(
+                "task-capsule-git-header",
+                tr!("capsule.git_tools"),
+                theme,
+            )
+            .gap(px(12.0))
+            .child(
+                div()
+                    .id("environment-summary-branch")
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.0))
+                    .child(icon("icons/git-branch.svg", 14.0, theme.text_secondary))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(theme.text_secondary)
+                            .child(environment.branch.unwrap_or_else(|| "—".to_owned())),
+                    ),
+            ),
+        )
         .child(changes)
-        .child(branch)
         .child(history)
         .child(commit)
-        .child(compare)
-}
-
-/// A read-only informational row: icon plus a single-line label.
-fn render_capsule_info_row(
-    id: &'static str,
-    icon_path: &'static str,
-    label: String,
-    theme: &Theme,
-) -> Stateful<Div> {
-    div()
-        .id(id)
-        .min_h(px(32.0))
-        .w_full()
-        .px(px(8.0))
-        .rounded(px(8.0))
-        .flex()
-        .items_center()
-        .gap(px(10.0))
-        .child(icon(icon_path, 14.0, theme.text_secondary))
-        .child(
-            div()
-                .min_w_0()
-                .flex_1()
-                .truncate()
-                .text_size(ui_px(13.5))
-                .text_color(theme.text_secondary)
-                .child(label),
-        )
 }
 
 fn render_environment_action_row(

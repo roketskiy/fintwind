@@ -1,12 +1,14 @@
 //! The models.dev catalog as Fintwind's model metadata table.
 //!
 //! [models.dev](https://models.dev/models/) publishes every provider and
-//! model it tracks as one JSON document (`api.json`). This module downloads
-//! that document and flattens it into a table of model records grouped by
-//! normalized id, so one lookup answers any provider's copy of a model. The
-//! Providers page's "fetch models" action matches the models the provider's
-//! own API listed against the table and fills in basic data — display names
-//! and token limits — without clobbering anything the user recorded by hand.
+//! model it tracks as one JSON document (`api.json`). Fintwind ships a
+//! reduced snapshot of that document (recent models; name, lab, context,
+//! modalities, reasoning options) and never downloads it: the snapshot is
+//! flattened into a table of model records grouped by normalized id, so one
+//! lookup answers any provider's copy of a model. The Providers page's
+//! "fetch models" action matches the models the provider's own API listed
+//! against the table and fills in basic data — display names and token
+//! limits — without clobbering anything the user recorded by hand.
 //!
 //! Everything here blocks on the network or the filesystem and must run on
 //! the background executor; render reads only what the app entity stores.
@@ -15,21 +17,26 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context as _, anyhow};
+use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::custom_providers::{CustomProvider, CustomProviderModel};
 
-const MODELS_DEV_CATALOG_URL: &str = "https://models.dev/api.json";
+/// The built-in snapshot of the models.dev catalog: first-party entries of
+/// recognizable AI labs (relays, gateways and cloud/hardware hosts excluded),
+/// models released within two years of the snapshot, reduced to the fields
+/// Fintwind reads (name, lab, context, modalities, reasoning options) plus
+/// provider identity. Data: models.dev (MIT), see
+/// docs/licenses/models-dev-MIT.txt.
+const BUNDLED_CATALOG: &str = include_str!("../../../resources/models-dev-builtin.json");
 
 /// A fresh in-memory table answers the fetch button without another
 /// download — enough to cover stepping through a few providers in a row.
 pub const TABLE_REUSE_WINDOW: Duration = Duration::from_secs(600);
 
-/// The api.json document is a few megabytes and grows; a runaway response is
-/// a network fault, not a catalog.
-const MAX_CATALOG_BYTES: usize = 64 * 1024 * 1024;
+#[cfg(test)]
+const MODELS_DEV_CATALOG_URL: &str = "https://models.dev/api.json";
 
 /// One record of the catalog. The catalog describes models with far more
 /// (dates, flags); these fields are the ones anything reads, so only
@@ -717,83 +724,22 @@ fn normalize_model_id(id: &str) -> String {
         .collect()
 }
 
-/// Fetch the catalog over the network, parse it, and refresh the on-disk
-/// cache. Blocking; call from the background executor.
-pub fn fetch_catalog() -> anyhow::Result<ModelsDevTable> {
-    let (status, body) = http_get(MODELS_DEV_CATALOG_URL)?;
-    if status != 200 {
-        return Err(anyhow!("HTTP {status}"));
-    }
-    if body.len() > MAX_CATALOG_BYTES {
-        return Err(anyhow!("response of {} bytes is not a catalog", body.len()));
-    }
-    let table = parse_catalog(&body)
-        .map_err(|error| anyhow!("the response is not a models.dev catalog: {error}"))?;
-    write_cached_catalog(&table);
-    Ok(table)
+/// The built-in model table, parsed once per process. Parsing blocks, so
+/// call from the background executor; render reads what the app stores.
+pub fn bundled_catalog() -> ModelsDevTable {
+    static TABLE: std::sync::OnceLock<ModelsDevTable> = std::sync::OnceLock::new();
+    TABLE
+        .get_or_init(|| parse_catalog(BUNDLED_CATALOG).expect("the bundled catalog parses"))
+        .clone()
 }
 
-/// Fetch the catalog, falling back to the newest known copy — the table this
-/// session already holds, then the on-disk cache — when the network fails.
-/// `None` means no copy could be had at all.
-pub fn fetch_catalog_with_fallback(
-    session_table: Option<&ModelsDevTable>,
-) -> Option<ModelsDevTable> {
-    match fetch_catalog() {
-        Ok(table) => Some(table),
-        Err(_) => session_table.cloned().or_else(cached_catalog),
-    }
-}
-
-/// Fetch the provider roster, through the same download and cache as the
-/// model table. `session` is the in-memory copy held across a visit; a fresh
-/// one answers without the network. `Err` means no copy — session, cache, or
-/// network — could be had.
-pub fn fetch_providers_with_fallback(
-    session: Option<&ModelsDevProviders>,
-) -> anyhow::Result<ModelsDevProviders> {
-    if let Some(session) = session.filter(|providers| providers.age() < TABLE_REUSE_WINDOW) {
-        return Ok(session.clone());
-    }
-    match http_get(MODELS_DEV_CATALOG_URL) {
-        Ok((200, body)) if body.len() <= MAX_CATALOG_BYTES => {
-            let providers = parse_providers(&body)
-                .map_err(|error| anyhow!("the response is not a models.dev catalog: {error}"))?;
-            write_cached_providers(&providers);
-            Ok(providers)
-        }
-        Ok((status, _)) => Err(anyhow!("HTTP {status}")),
-        Err(error) => {
-            if let Some(session) = session {
-                return Ok(session.clone());
-            }
-            cached_providers().ok_or_else(|| anyhow!("no cached catalog: {error}"))
-        }
-    }
-}
-
-/// The provider roster cached by the last successful fetch, or `None`. Reads
-/// the filesystem, so call it from the background executor, never from
-/// render.
-pub fn cached_providers() -> Option<ModelsDevProviders> {
-    let contents = std::fs::read(providers_cache_path()).ok()?;
-    serde_json::from_slice(&contents).ok()
-}
-
-/// Best-effort, beside the model-table cache: a failed write only costs the
-/// next launch its head start.
-fn write_cached_providers(providers: &ModelsDevProviders) {
-    let path = providers_cache_path();
-    let Ok(bytes) = serde_json::to_vec(providers) else {
-        return;
-    };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let temporary = path.with_extension("json.tmp");
-    if std::fs::write(&temporary, bytes).is_ok() {
-        let _ = std::fs::rename(&temporary, &path);
-    }
+/// The built-in provider roster, parsed once per process from the same
+/// snapshot. Blocking like [`bundled_catalog`].
+pub fn bundled_providers() -> ModelsDevProviders {
+    static PROVIDERS: std::sync::OnceLock<ModelsDevProviders> = std::sync::OnceLock::new();
+    PROVIDERS
+        .get_or_init(|| parse_providers(BUNDLED_CATALOG).expect("the bundled catalog parses"))
+        .clone()
 }
 
 /// Where the fetched table is cached, following the OpenCode catalog cache:
@@ -820,32 +766,13 @@ fn catalog_cache_path() -> PathBuf {
     cache_directory().join("models-dev.json")
 }
 
-fn providers_cache_path() -> PathBuf {
-    cache_directory().join("models-dev-providers.json")
-}
-
-/// The table cached by the last successful fetch, or `None` when no fetch has
-/// cached one or the file no longer parses. Reads the filesystem, so call it
-/// from the background executor, never from render.
+/// The table an older build cached, or `None`. Model metadata now comes
+/// from the bundled snapshot; this legacy cache only still carries official
+/// prices for the usage page, which the snapshot omits. Reads the
+/// filesystem, so call it from the background executor, never from render.
 pub fn cached_catalog() -> Option<ModelsDevTable> {
     let contents = std::fs::read(catalog_cache_path()).ok()?;
     serde_json::from_slice(&contents).ok()
-}
-
-/// Best-effort: a cache that fails to write only costs the next launch its
-/// head start.
-fn write_cached_catalog(table: &ModelsDevTable) {
-    let path = catalog_cache_path();
-    let Ok(bytes) = serde_json::to_vec(table) else {
-        return;
-    };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let temporary = path.with_extension("json.tmp");
-    if std::fs::write(&temporary, bytes).is_ok() {
-        let _ = std::fs::rename(&temporary, &path);
-    }
 }
 
 /// Flatten the models.dev document into the metadata table. serde_json's
@@ -1051,7 +978,9 @@ fn string_field(entry: &serde_json::Map<String, Value>, key: &str) -> Option<Str
         .map(str::to_owned)
 }
 
-/// One HTTPS GET through the shared curl helper. Blocking.
+/// One HTTPS GET through the shared curl helper. Blocking. Only the ignored
+/// live-catalog test still talks to models.dev.
+#[cfg(test)]
 fn http_get(url: &str) -> anyhow::Result<(u16, String)> {
     fintwind_protocol::http::http_get(
         url,

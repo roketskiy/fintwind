@@ -339,7 +339,9 @@ impl Fintwind {
                     if local.as_ref().is_some_and(|table| table.age() < PRICE_TTL) {
                         return local;
                     }
-                    models_dev::fetch_catalog().ok().map(Arc::new).or(local)
+                    // Prices only live in legacy caches; the bundled
+                    // snapshot omits them, so no download is worth making.
+                    local
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {

@@ -246,12 +246,11 @@ fn directory_cache_key(directory: Option<&Path>) -> String {
 
 fn parse_opencode_catalog(value: &serde_json::Value) -> Vec<ProviderModel> {
     use serde_json::Value;
-    // The models.dev catalog cached by the last fetch describes each model's
-    // thinking modes and which one to start on. Discovery already runs on a
-    // blocking thread, so the one cached-catalog read costs nothing here;
-    // the fetch itself stays the app's job, and a model the cache does not
-    // describe keeps the server's variant ids verbatim with no default.
-    let catalog = fintwind_client::models_dev::cached_catalog();
+    // The built-in models.dev snapshot describes each model's thinking
+    // modes and which one to start on. Discovery already runs on a blocking
+    // thread; a model the snapshot does not describe keeps the server's
+    // variant ids verbatim with no default.
+    let catalog = Some(fintwind_client::models_dev::bundled_catalog());
     value
         .get("data")
         .and_then(Value::as_array)

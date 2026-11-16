@@ -351,6 +351,17 @@ fn provider_from_config(key: &str, entry: &Value, disabled: &HashSet<String>) ->
                         output_limit: spec.pointer("/limit/output").and_then(Value::as_u64),
                         input_modalities: modalities("input"),
                         output_modalities: modalities("output"),
+                        reasoning_efforts: spec
+                            .get("reasoningEfforts")
+                            .and_then(Value::as_array)
+                            .map(|levels| {
+                                levels
+                                    .iter()
+                                    .filter_map(Value::as_str)
+                                    .map(str::to_owned)
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
                     }
                 })
                 .collect()
@@ -865,6 +876,23 @@ fn legacy_provider_entry(provider: &CustomProvider, catalog: Option<&ModelsDevTa
             }
         }
         set_or_remove_modalities(&mut spec, "output", &output_modalities);
+        // The levels the user recorded ride as a UI-owned list: variants
+        // alone cannot tell them from catalog-derived modes on read-back.
+        if model.reasoning_efforts.is_empty() {
+            spec.remove("reasoningEfforts");
+        } else {
+            spec.insert(
+                "reasoningEfforts".into(),
+                Value::Array(
+                    model
+                        .reasoning_efforts
+                        .iter()
+                        .cloned()
+                        .map(Value::String)
+                        .collect(),
+                ),
+            );
+        }
         // The pre-OpenCode-config mirror wrote `contextWindow`; superseded
         // by `limit.context` and never read back once `limit` exists.
         spec.remove("contextWindow");
@@ -874,15 +902,25 @@ fn legacy_provider_entry(provider: &CustomProvider, catalog: Option<&ModelsDevTa
         // falls through to the cross-provider majority. A model the entry
         // lists no modes for takes the standard effort ladder; a commit
         // with no catalog at all leaves the spec untouched.
-        let thinking = catalog
-            .and_then(|catalog| catalog.resolve_thinking_for(&model.id, Some(&provider.slug)))
-            .unwrap_or_default();
-        crate::provider_thinking::fill_model_variants(
-            &mut spec,
-            catalog.map(|_| &thinking),
-            model.display_name(),
-            provider.api_format,
-        );
+        // Levels the user recorded on the model outrank the catalog; with
+        // none recorded, a catalog that answers fills the ladder and a
+        // commit with no catalog at all leaves the spec untouched.
+        let thinking = crate::provider_thinking::recorded_thinking(&model.reasoning_efforts)
+            .or_else(|| {
+                catalog.map(|catalog| {
+                    catalog
+                        .resolve_thinking_for(&model.id, Some(&provider.slug))
+                        .unwrap_or_default()
+                })
+            });
+        if let Some(thinking) = thinking {
+            crate::provider_thinking::fill_model_variants(
+                &mut spec,
+                Some(&thinking),
+                model.display_name(),
+                provider.api_format,
+            );
+        }
         models.insert(model.id.clone(), Value::Object(spec));
     }
     entry.insert("models".into(), Value::Object(models));

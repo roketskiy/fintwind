@@ -1929,6 +1929,10 @@ project.name_placeholder:
   en: Enter a name…
 project.add_confirm:
   en: Add
+providers.reasoning_efforts_label:
+  en: Thinking effort
+providers.reasoning_efforts_hint:
+  en: Empty follows the model catalog
 errors.remote_project_picker:
   en: Adding a daemon-host project needs a remote path picker, which is not available yet
 

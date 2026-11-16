@@ -1912,6 +1912,7 @@ pub struct Fintwind {
     /// editor opens and written to the model on confirm. Empty records none,
     /// leaving the image badge and image-model list to the models.dev table.
     providers_model_editor_output_modalities: Vec<String>,
+    providers_model_editor_efforts: Vec<String>,
     providers_model_editor_package: Option<String>,
     /// Generation token for the debounced commit of keystroke-level field
     /// edits; a newer edit supersedes the pending one.
@@ -4047,6 +4048,7 @@ impl Fintwind {
                 providers_model_editor: None,
                 providers_model_editor_modalities: Vec::new(),
                 providers_model_editor_output_modalities: Vec::new(),
+                providers_model_editor_efforts: Vec::new(),
                 providers_model_editor_package: None,
                 providers_commit_generation: 0,
                 providers_save_in_flight: false,

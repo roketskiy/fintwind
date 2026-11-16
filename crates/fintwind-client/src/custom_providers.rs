@@ -83,6 +83,11 @@ pub const INPUT_MODALITIES: [&str; 5] = ["text", "image", "audio", "video", "pdf
 /// Providers page offers them.
 pub const OUTPUT_MODALITIES: [&str; 4] = ["text", "image", "audio", "video"];
 
+/// The thinking effort levels the Providers page offers for a custom model,
+/// in ladder order. `none` is the disabled level; the wire mapping keys it
+/// `nothinking`.
+pub const REASONING_EFFORTS: [&str; 6] = ["none", "low", "medium", "high", "xhigh", "max"];
+
 /// One model of a [`CustomProvider`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -111,6 +116,12 @@ pub struct CustomProviderModel {
     /// models.dev catalog.
     #[serde(default)]
     pub output_modalities: Vec<String>,
+    /// Thinking effort levels the user recorded for this model, e.g.
+    /// `["low", "medium", "high"]`. Empty means unset: the catalog's modes
+    /// (or the standard ladder) apply. A non-empty list is authoritative
+    /// when the config's variants are written.
+    #[serde(default)]
+    pub reasoning_efforts: Vec<String>,
 }
 
 impl Default for CustomProviderModel {
@@ -123,6 +134,7 @@ impl Default for CustomProviderModel {
             output_limit: None,
             input_modalities: Vec::new(),
             output_modalities: Vec::new(),
+            reasoning_efforts: Vec::new(),
         }
     }
 }

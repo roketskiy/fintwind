@@ -965,6 +965,8 @@ project.folder_pick: クリックしてフォルダーを選択
 project.name_label: プロジェクト名
 project.name_placeholder: 名前を入力…
 project.add_confirm: 追加
+providers.reasoning_efforts_label: 思考レベル
+providers.reasoning_efforts_hint: 空欄ならモデルカタログに従います
 errors.remote_project_picker: デーモンホスト上のプロジェクトを追加するにはリモートパス選択が必要ですが、まだ利用できません
 
 session.stopped: 停止しました

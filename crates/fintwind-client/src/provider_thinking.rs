@@ -16,6 +16,28 @@ use crate::models_dev::{ModelsDevThinking, ModelsDevThinkingMode};
 /// disabled mode.
 const FALLBACK_MODES: [&str; 6] = ["nothinking", "low", "medium", "high", "xhigh", "max"];
 
+/// The thinking modes a user recorded on a custom model, in ladder order.
+/// `None` when nothing was recorded — the catalog (or the standard ladder)
+/// stays authoritative. `none` maps to the wire's disabled key.
+pub(crate) fn recorded_thinking(efforts: &[String]) -> Option<ModelsDevThinking> {
+    if efforts.is_empty() {
+        return None;
+    }
+    let modes = crate::custom_providers::REASONING_EFFORTS
+        .iter()
+        .filter(|level| efforts.iter().any(|effort| effort == *level))
+        .map(|level| ModelsDevThinkingMode {
+            mode_key: if *level == "none" {
+                "nothinking".to_owned()
+            } else {
+                (*level).to_owned()
+            },
+            thinking_budget_tokens: None,
+        })
+        .collect();
+    Some(ModelsDevThinking { modes })
+}
+
 pub(crate) fn fill_model_variants(
     spec: &mut Map<String, Value>,
     thinking: Option<&ModelsDevThinking>,

@@ -947,6 +947,8 @@ project.folder_pick: 点击选择文件夹
 project.name_label: 项目名称
 project.name_placeholder: 输入名称…
 project.add_confirm: 添加
+providers.reasoning_efforts_label: 思考程度
+providers.reasoning_efforts_hint: 留空则跟随模型目录
 errors.remote_project_picker: 添加守护进程主机上的项目需要远程路径选择器，但该功能尚不可用
 session.stopped: 已停止
 session.turn_completed: 本轮已完成

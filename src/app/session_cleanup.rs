@@ -246,14 +246,14 @@ impl Fintwind {
             Phase::Finished { errors, .. } => errors.first().cloned(),
             _ => None,
         };
-        div().w_full().p(px(20.0))
-            .child(div().flex().items_center().gap(px(12.0))
-                .child(div().flex_1().text_size(ui_px(13.5)).font_weight(FontWeight::MEDIUM).child(tr!("cleanup.title")))
+        div().w_full().px(px(20.0)).py(px(14.0)).flex().flex_col()
+            .child(div().flex().items_center().gap(px(14.0))
+                .child(super::settings::settings_icon_chip("icons/trash.svg", theme))
+                .child(super::settings::settings_row_text(tr!("cleanup.title"), Some(tr!("cleanup.scope")), theme))
                 .child(selector)
                 .child(Button::new("cleanup-preview", tr!("cleanup.preview"))
                     .variant(ButtonVariant::Secondary).size(ControlSize::Sm).disabled(busy)
                     .on_click(cx.listener(|this, _, _, cx| this.preview_session_cleanup(cx)))))
-            .child(div().mt(px(6.0)).text_size(ui_px(12.5)).text_color(theme.text_secondary).child(tr!("cleanup.scope")))
             .children(status.map(|status| div().mt(px(12.0)).text_size(ui_px(12.5)).text_color(theme.text_secondary).child(status)))
             .children(error.map(|error| div().mt(px(6.0)).text_size(ui_px(12.0)).text_color(theme.danger_text).child(error)))
             .when(matches!(&self.session_cleanup.phase, Phase::Preview(preview) if !preview.session_ids.is_empty()), |panel| {

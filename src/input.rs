@@ -1279,8 +1279,8 @@ impl ComposerInput {
                 cx.emit(ComposerEvent::Submit(self.content.to_string()));
             }
             FieldMode::Composer => {
-                let value = self.content.trim().to_owned();
-                if !value.is_empty() || self.submit_empty {
+                let value = self.content.to_string();
+                if !value.trim().is_empty() || self.submit_empty {
                     cx.emit(ComposerEvent::Submit(value));
                     self.clear(cx);
                 }
@@ -1304,8 +1304,8 @@ impl ComposerInput {
             cx.propagate();
             return;
         }
-        let value = self.content.trim().to_owned();
-        if !value.is_empty() || self.submit_empty {
+        let value = self.content.to_string();
+        if !value.trim().is_empty() || self.submit_empty {
             cx.emit(ComposerEvent::SubmitSteer(value));
             self.clear(cx);
         }
@@ -1325,9 +1325,9 @@ impl ComposerInput {
             return;
         };
         let text = match self.mode {
-            // A composer is one prompt — and a search box one query — so
-            // pasted line breaks become spaces.
-            FieldMode::Composer | FieldMode::Search => text.replace(['\n', '\r'], " "),
+            // Search remains a single query; a composer preserves paragraphs.
+            FieldMode::Search => text.replace(['\n', '\r'], " "),
+            FieldMode::Composer => text.replace("\r\n", "\n").replace('\r', "\n"),
             FieldMode::Code => text.replace('\r', ""),
         };
         // A paste is its own undo step, never part of the typing around it —

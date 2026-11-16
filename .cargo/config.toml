@@ -14,10 +14,17 @@ TS_RS_LARGE_INT = "number"
 # arm64 machine almost never has the arm64 redistributable already, so a
 # dynamically linked build dies at startup on `VCRUNTIME140.dll`.
 #
-# Use the default MSVC link.exe. A custom linker here (rust-lld) made every
-# rustc invocation uncacheable for mbx, the local Cargo build cache, so all
-# compilations bypassed the shared cache and worktrees could not reuse work.
+# Link with rust-lld, shipped inside the rustc sysroot, as Zed does for its
+# Windows GPUI builds: linking is the slowest step of a Fintwind build and lld
+# is markedly faster than MSVC link.exe. rustc selects lld's MSVC flavor
+# automatically, and lld-link accepts the `/stack` argument from build.rs.
+#
+# History: this used to be the default link.exe because a custom linker made
+# every rustc invocation uncacheable for mbx, the local Cargo build cache, so
+# worktrees could not reuse work. mbx is not in use now; if it returns,
+# re-evaluate this trade-off.
 [target.'cfg(target_os = "windows")']
+linker = "rust-lld"
 rustflags = ["-C", "target-feature=+crt-static"]
 
 [build]

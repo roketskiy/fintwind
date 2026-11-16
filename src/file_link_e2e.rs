@@ -68,7 +68,8 @@ impl Render for Harness {
 fn inline_file_menu_e2e(cx: &mut TestAppContext) {
     // Failures: no inline hit target; eager launch before confirmation;
     // lost relative base or URL decoding; web links intercepted; code treated
-    // as a path; dismiss still launches; keyboard cannot confirm the menu.
+    // as a path; right-click activates a link; dismiss still launches;
+    // keyboard cannot confirm the menu.
     cx.update(crate::ui::menu::init);
     let scenarios = [
         (
@@ -126,6 +127,22 @@ fn inline_file_menu_e2e(cx: &mut TestAppContext) {
         cx.simulate_mouse_move(target, None, Modifiers::none());
         cx.simulate_event(MouseDownEvent {
             position: target,
+            button: MouseButton::Right,
+            click_count: 1,
+            ..Default::default()
+        });
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        cx.simulate_mouse_up(target, MouseButton::Right, Modifiers::none());
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        let right_click_inert = cx.read_entity(&view, |view, _| {
+            !view.menu.is_open()
+                && view.opened.borrow().is_empty()
+                && view.external.borrow().is_empty()
+        });
+        cx.simulate_event(MouseDownEvent {
+            position: target,
             button: MouseButton::Left,
             click_count: 1,
             ..Default::default()
@@ -176,11 +193,13 @@ fn inline_file_menu_e2e(cx: &mut TestAppContext) {
         });
         let expected_paths = expected.into_iter().map(str::to_owned).collect::<Vec<_>>();
         let expected_web = web.into_iter().map(str::to_owned).collect::<Vec<_>>();
-        let passed = before == (expected.is_some(), 0)
+        let passed = right_click_inert
+            && before == (expected.is_some(), 0)
             && (expected.is_none() || dismissed)
             && opened == expected_paths
             && external == expected_web;
         results.push(serde_json::json!({"scenario": name, "passed": passed,
+            "rightClickInert": right_click_inert,
             "menuBeforeConfirmation": before.0, "openedBeforeConfirmation": before.1,
             "dismissedWithoutOpening": dismissed, "opened": opened, "external": external}));
     }

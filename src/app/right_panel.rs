@@ -1530,9 +1530,6 @@ impl Fintwind {
                 .right_panel_terminals
                 .get(&terminal_id)
                 .cloned()
-                .inspect(|terminal| {
-                    terminal.update(cx, |terminal, _| terminal.set_panel_width(width));
-                })
                 .map(IntoElement::into_any_element)
                 .unwrap_or_else(|| {
                     self.render_right_panel_empty_message(

@@ -376,11 +376,6 @@ impl ReasoningView {
         self
     }
 
-    pub fn with_release_notes_style(mut self) -> Self {
-        self.release_notes = true;
-        self
-    }
-
     pub fn set_source(
         &mut self,
         source: &str,

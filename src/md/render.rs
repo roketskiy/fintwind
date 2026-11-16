@@ -174,7 +174,7 @@ impl Metrics {
         Self::COMPACT.adjusted()
     }
 
-    pub(super) fn release_notes() -> Self {
+    pub(crate) fn release_notes() -> Self {
         Self {
             text_size: 12.5,
             line_height: 20.0,

@@ -7,9 +7,12 @@
 //! the Release workflow publishes from, so the card can never drift from the
 //! published release notes.
 
-use crate::md::virtualized::ReasoningView;
 use crate::ui::ActivationExt;
-use gpui::{KeyBinding, actions};
+use ely_gpui_component::{
+    data_display::{TimelineItem, Tone},
+    theme::{ActiveTheme as _, ControlSize},
+};
+use gpui::{KeyBinding, ListAlignment, ListState, actions, list};
 
 use super::*;
 
@@ -65,8 +68,31 @@ fn released_changelog_markdown() -> Option<SharedString> {
 pub(super) struct ChangelogCard {
     focus: FocusHandle,
     close_focus: FocusHandle,
-    notes: Option<Entity<ReasoningView>>,
+    notes_focus: FocusHandle,
+    releases: Rc<Vec<ChangelogRelease>>,
+    list: ListState,
+    scrollbar: Rc<ScrollbarState>,
     selection: TranscriptSelection,
+}
+
+struct ChangelogRelease {
+    title: MarkdownView,
+    body: MarkdownView,
+}
+
+fn changelog_releases(markdown: &str) -> Vec<ChangelogRelease> {
+    markdown
+        .split("\n## ")
+        .map(|section| section.strip_prefix("## ").unwrap_or(section))
+        .map(|section| {
+            let (version, body) = section.split_once('\n').unwrap_or((section, ""));
+            let mut title = MarkdownView::new();
+            title.set_text(&format!("## {version}"), false);
+            let mut notes = MarkdownView::new();
+            notes.set_text(body, false);
+            ChangelogRelease { title, body: notes }
+        })
+        .collect()
 }
 
 impl Fintwind {
@@ -96,26 +122,24 @@ impl Fintwind {
             return;
         }
         let selection = TranscriptSelection::default();
-        let notes = released_changelog_markdown().map(|markdown| {
-            cx.new(|cx| {
-                let mut view = ReasoningView::new(
-                    "changelog-notes".into(),
-                    selection.clone(),
-                    Rc::new(|url, _, cx| cx.open_url(url)),
-                    Some(px(0.0)),
-                    cx,
-                )
-                .with_height(gpui::relative(1.0))
-                .with_release_notes_style();
-                view.set_source(&markdown, (1, 1), false, cx);
-                view
-            })
+        let releases = Rc::new(
+            released_changelog_markdown()
+                .map(|markdown| changelog_releases(&markdown))
+                .unwrap_or_default(),
+        );
+        let list = ListState::new(releases.len(), ListAlignment::Top, px(160.0));
+        let view = cx.entity().downgrade();
+        list.set_scroll_handler(move |_, _, cx| {
+            let _ = view.update(cx, |_, cx| cx.notify());
         });
         let focus = cx.focus_handle();
         self.changelog = Some(ChangelogCard {
             focus: focus.clone(),
             close_focus: cx.focus_handle(),
-            notes,
+            notes_focus: cx.focus_handle(),
+            releases,
+            list,
+            scrollbar: ScrollbarState::new(),
             selection,
         });
         // Like Fintwind's other deferred surfaces, the modal joins the dispatch
@@ -152,6 +176,55 @@ impl Fintwind {
         )
         .absolute()
         .size(px(0.0));
+        let releases = card.releases.clone();
+        let selection = card.selection.clone();
+        let palette = MarkdownPalette::from_theme(&theme);
+        let slot = cx.theme().control_height(ControlSize::Sm);
+        let timeline = list(card.list.clone(), move |index, _, _| {
+            let release = &releases[index];
+            let title_ctx = MarkdownCtx::new(
+                format!("changelog-{index}-title"),
+                &palette,
+                MarkdownMetrics::release_notes(),
+                selection.clone(),
+            )
+            .with_streaming_animation(false);
+            let body_ctx = MarkdownCtx::new(
+                format!("changelog-{index}-body"),
+                &palette,
+                MarkdownMetrics::release_notes(),
+                selection.clone(),
+            )
+            .with_streaming_animation(false);
+            let title = div().children(md::render::markdown(&release.title, &title_ctx));
+            let body = div().children(md::render::markdown(&release.body, &body_ctx));
+            let item = TimelineItem::new(title)
+                .tone(if index == 0 {
+                    Tone::Accent
+                } else {
+                    Tone::Neutral
+                })
+                .child(body);
+            div()
+                .relative()
+                .w_full()
+                .when(index + 1 < releases.len(), |row| row.pb(px(24.0)))
+                .child(
+                    div()
+                        .absolute()
+                        .left(slot / 2.0)
+                        .top_0()
+                        .bottom_0()
+                        .when(index == 0, |rail| rail.top(slot / 2.0))
+                        .when(index + 1 == releases.len(), |rail| {
+                            rail.bottom_auto().h(slot / 2.0)
+                        })
+                        .border_l_1()
+                        .border_color(theme.border),
+                )
+                .child(item)
+                .into_any_element()
+        });
 
         let close = icon_button("dismiss-changelog", "icons/x.svg", theme)
             .track_focus(&card.close_focus)
@@ -237,9 +310,22 @@ impl Fintwind {
                     .flex_1()
                     .min_h_0()
                     .min_w_0()
+                    .relative()
                     .overflow_hidden()
-                    .children(card.notes.clone())
-                    .when(card.notes.is_none(), |element| {
+                    .when(!card.releases.is_empty(), |element| {
+                        element
+                            .track_focus(&card.notes_focus)
+                            .tab_index(0)
+                            .focus_visible(|style| style.border_1().border_color(theme.accent))
+                            .child(
+                                div()
+                                    .size_full()
+                                    .px(px(24.0))
+                                    .child(timeline.size_full().py(px(20.0))),
+                            )
+                            .child(scrollbar::vertical(&card.list, &card.scrollbar))
+                    })
+                    .when(card.releases.is_empty(), |element| {
                         element.child(
                             div()
                                 .p(px(20.0))

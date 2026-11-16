@@ -437,7 +437,7 @@ pub(crate) fn fetch_turn_stats(
         return Ok(None);
     }
     let mut stats = TurnStats::default();
-    for id in step_ids {
+    for (index, id) in step_ids.iter().enumerate() {
         let row = &found[id];
         if row.get("type").and_then(Value::as_str) != Some("assistant")
             || row
@@ -462,6 +462,11 @@ pub(crate) fn fetch_turn_stats(
         }
         stats.output_tokens = stats.output_tokens.saturating_add(step.output_tokens);
         stats.stream_ms = stats.stream_ms.saturating_add(step.stream_ms);
+        // Only the opening step's first-token boundary describes the wait
+        // the user experienced; later steps answer tool continuations.
+        if index == 0 {
+            stats.first_token_ms = step.first_token_ms;
+        }
     }
     stats.stream_verified = true;
     Ok(Some(stats))
@@ -2265,6 +2270,9 @@ fn translate_native_rows(
                     }
                     stats.output_tokens = stats.output_tokens.saturating_add(step.output_tokens);
                     stats.stream_ms = stats.stream_ms.saturating_add(step.stream_ms);
+                    // The opening step owns the turn's first-token latency;
+                    // a later step's boundary answers a tool continuation.
+                    stats.first_token_ms = stats.first_token_ms.or(step.first_token_ms);
                     // One step carrying both timestamps measures the turn's
                     // streaming duration, so a later step that never streams
                     // must not withdraw what an earlier one established —
@@ -2390,7 +2398,9 @@ fn translate_rows(rows: &[Value]) -> NativeTranscript {
 /// stored rows — unlike the live step events, which carry no times — keep the
 /// `time.streamed`/`time.created` pair the TUI's own footer divides by, so
 /// the import path can reproduce the exact numbers a live turn accumulates.
-/// A row that reports nothing measurable folds in as `None`.
+/// `time.firstToken` (opencode 2.3+) marks the first output token; against
+/// `time.created` it measures this step's first-token latency. A row that
+/// reports nothing measurable folds in as `None`.
 fn turn_stats_step(row: &Value) -> Option<TurnStats> {
     let model = row.get("model").and_then(|model| {
         let provider = model.get("providerID").and_then(Value::as_str)?;
@@ -2416,20 +2426,30 @@ fn turn_stats_step(row: &Value) -> Option<TurnStats> {
         .and_then(Value::as_u64)
         .unwrap_or(0);
     let output = output.saturating_add(reasoning);
+    let created = row.pointer("/time/created").and_then(Value::as_u64);
     let stream_ms = match (
         row.pointer("/time/streamed").and_then(Value::as_u64),
-        row.pointer("/time/created").and_then(Value::as_u64),
+        created,
     ) {
         (Some(streamed), Some(created)) => streamed.saturating_sub(created),
         _ => 0,
     };
-    (model.is_some() || agent.is_some() || output > 0 || stream_ms > 0).then_some(TurnStats {
-        model,
-        agent,
-        output_tokens: output,
-        stream_ms,
-        ..TurnStats::default()
-    })
+    let first_token_ms = match (
+        row.pointer("/time/firstToken").and_then(Value::as_u64),
+        created,
+    ) {
+        (Some(first_token), Some(created)) => Some(first_token.saturating_sub(created)),
+        _ => None,
+    };
+    (model.is_some() || agent.is_some() || output > 0 || stream_ms > 0 || first_token_ms.is_some())
+        .then_some(TurnStats {
+            model,
+            agent,
+            output_tokens: output,
+            stream_ms,
+            first_token_ms,
+            ..TurnStats::default()
+        })
 }
 
 fn assistant_parts_visible(parts: Option<&Vec<Value>>) -> bool {

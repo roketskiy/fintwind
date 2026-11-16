@@ -6,8 +6,7 @@ type ContextEvent = {
   messages?: unknown;
   tools?: unknown;
 };
-type HttpRequestEvent = { sessionID?: unknown; kind?: unknown };
-type HookKind = "context" | "http.request" | "http.response";
+type HookKind = "context";
 type Composition = {
   version: 2;
   model: string;
@@ -242,7 +241,6 @@ const definition = {
   id: "fintwind.context",
   methods: {
     get: { input, output: {} },
-    ttft: { input, output: {} },
   },
   events: {},
 };
@@ -400,38 +398,6 @@ export default {
         throw new Error("OpenCode did not register the Fintwind mermaid check tool.");
       }
     }
-    // First-token latency, measured inside the server: `http.request` opens
-    // the provider call, `http.response` fires when the stream opens, so the
-    // difference is the provider's own time to first byte for that request.
-    // Only the agent loop's primary requests count; compaction, title, and
-    // generate calls carry other kinds. WebSocket-streaming providers bypass
-    // these hooks, so those sessions report nothing and the desktop falls
-    // back to its own wall-clock sample.
-    //
-    // The sample rides plugin storage, not a closure Map: OpenCode can
-    // re-setup this plugin while the earlier instance's hooks still receive
-    // events, and storage is the one state every instance shares.
-    const isPrimary = (event: HttpRequestEvent) =>
-      typeof event.sessionID === "string" && (event.sessionID as string).length > 0 && event.kind === "primary";
-    const ttftKey = (sessionID: string) => `ttft:${sessionID}`;
-    let timingHooks: Registration | undefined;
-    try {
-      const requestHook = await ctx.session.hook<HttpRequestEvent>("http.request", event => {
-        if (isPrimary(event)) {
-          void ctx.storage.set(`ttft-request:${event.sessionID as string}`, Date.now()).catch(() => {});
-        }
-      });
-      const responseHook = await ctx.session.hook<HttpRequestEvent>("http.response", async event => {
-        if (!isPrimary(event)) return;
-        const sessionID = event.sessionID as string;
-        const requestKey = `ttft-request:${sessionID}`;
-        const started = await ctx.storage.get(requestKey).catch(() => undefined);
-        if (typeof started !== "number") return;
-        void ctx.storage.remove(requestKey).catch(() => {});
-        await ctx.storage.set(ttftKey(sessionID), Math.max(0, Date.now() - started)).catch(() => {});
-      });
-      timingHooks = { async dispose() { await requestHook.dispose(); await responseHook.dispose(); } };
-    } catch {}
     function instruction(sessionID: string): Promise<string | undefined> {
       const saved = instructions.get(sessionID);
       if (saved) return saved;
@@ -493,24 +459,11 @@ export default {
         latest.set(id, result);
         return result;
       },
-      // Consume-on-read: the desktop asks once per turn's first settled step,
-      // so a stored sample always belongs to the request that just finished.
-      // An empty answer means the provider path bypassed the HTTP hooks (or
-      // the hooks are unavailable on this OpenCode build).
-      async ttft(raw: unknown) {
-        const request = object(raw);
-        const id = request?.sessionID;
-        if (typeof id !== "string" || !id) throw new Error("Missing sessionID");
-        const value = await ctx.storage.get(ttftKey(id)).catch(() => undefined);
-        void ctx.storage.remove(ttftKey(id)).catch(() => {});
-        return typeof value === "number" ? value : null;
-      },
     });
     return async () => {
       await hook.dispose();
       await rpc.dispose();
       await checkRegistration?.dispose().catch(() => {});
-      await timingHooks?.dispose().catch(() => {});
       await Promise.all([...writes.values()].map(write => write.catch(() => {})));
       writes.clear();
       latest.clear();

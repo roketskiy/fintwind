@@ -95,6 +95,22 @@ pub fn code_px(size: f32) -> Pixels {
     px((size * code_text_scale() * 4.0).round() / 4.0)
 }
 
+/// Fixed semantic colors that hold across every theme and scheme, unlike the
+/// palette-driven status colors. Mid-tones chosen to stay legible on both the
+/// light and dark canvases: the error card's rail reads red, Build reads blue,
+/// Plan reads orange.
+pub fn error_rail_color() -> Hsla {
+    rgb(0xE24947).into()
+}
+
+pub fn mode_build_color() -> Hsla {
+    rgb(0x3B82F6).into()
+}
+
+pub fn mode_plan_color() -> Hsla {
+    rgb(0xEA580C).into()
+}
+
 fn stored_font(slot: &Mutex<Option<SharedString>>, default: &'static str) -> SharedString {
     slot.lock()
         .clone()

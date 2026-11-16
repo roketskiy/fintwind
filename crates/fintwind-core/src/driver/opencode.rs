@@ -2667,10 +2667,6 @@ struct OpenCodeStreamState {
     /// here until the turn settles, then leave as one `TurnStatsUpdated`;
     /// `None` between turns and until the first `session.step.started`.
     turn_stats: Option<OpenCodeTurnStats>,
-    /// Whether the step now settling is the turn's first, and so the only one
-    /// whose plugin-measured first-token latency describes the wait the user
-    /// actually experienced. Later steps answer tool continuations.
-    turn_first_step_pending: bool,
 }
 
 /// Collect durable step IDs and metadata; throughput is resolved from stored
@@ -3999,16 +3995,8 @@ fn handle_event(
             // starting while no turn is active starts from zero.
             let stale = state.turn_stats.is_some() && !*turn_active.lock();
             let mut stats = match (state.turn_stats.take(), stale) {
-                (Some(existing), false) => {
-                    state.turn_first_step_pending = false;
-                    existing
-                }
-                // A fresh accumulator is the turn's opening step, the only one
-                // whose first-token latency describes the user's wait.
-                _ => {
-                    state.turn_first_step_pending = true;
-                    OpenCodeTurnStats::default()
-                }
+                (Some(existing), false) => existing,
+                _ => OpenCodeTurnStats::default(),
             };
             if stats.step_id.is_some() {
                 stats.incomplete = true;
@@ -4100,22 +4088,6 @@ fn handle_event(
                     cache_read,
                     prompt_tokens,
                 });
-            }
-            if state.turn_first_step_pending {
-                state.turn_first_step_pending = false;
-                // The plugin measured this turn's first-token latency inside
-                // the server, which no client-side clock can see past. An
-                // absent sample (WebSocket providers, older builds) leaves the
-                // desktop to its own wall-clock fallback.
-                if !state.directory.is_empty()
-                    && let Ok(Some(latency_ms)) = crate::context_plugin::first_token_on_port(
-                        port,
-                        &state.directory,
-                        session_id,
-                    )
-                {
-                    let _ = events.send(DriverEvent::FirstTokenMeasured { latency_ms });
-                }
             }
             if !state.directory.is_empty()
                 && let Ok(Some(composition)) =
@@ -4482,6 +4454,9 @@ fn apply_recovered_turn(
         total.output_tokens = total.output_tokens.saturating_add(stats.output_tokens);
         total.stream_ms = total.stream_ms.saturating_add(stats.stream_ms);
         total.stream_verified |= stats.stream_verified;
+        // The opening step owns the turn's first-token latency; recovered
+        // turns settle here with empty step IDs, so no later fold supplies it.
+        total.first_token_ms = total.first_token_ms.or(stats.first_token_ms);
     }
     let _ = events.send(DriverEvent::TurnTranscriptReconciled {
         transcript: recovered.transcript,

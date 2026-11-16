@@ -451,8 +451,9 @@ pub(super) struct MessageRender<'a> {
     pub(super) assistant_before_footer: Option<AnyElement>,
     /// The settled turn's always-visible stats line — "Build · Model · 25.9s
     /// · 64.5 tok/s" — shown under the body (and the changed-files card)
-    /// of the message that owns the response footer.
-    pub(super) assistant_turn_stats: Option<SharedString>,
+    /// of the message that owns the response footer. Split so the agent
+    /// segment carries the fixed Build/Plan mode color.
+    pub(super) assistant_turn_stats: Option<transcript::AssistantTurnStats>,
     pub(super) copied: bool,
     pub(super) assistant_message_action: Option<AssistantMessageAction>,
     pub(super) user_message_rewind: UserMessageRewind,
@@ -1009,6 +1010,11 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                         .items_center()
                         .gap(px(8.0))
                         .when_some(assistant_turn_stats, |row, stats| {
+                            let agent_color = match stats.agent_mode {
+                                Some(InteractionMode::Build) => crate::theme::mode_build_color(),
+                                Some(InteractionMode::Plan) => crate::theme::mode_plan_color(),
+                                None => theme.text_tertiary,
+                            };
                             row.child(
                                 div()
                                     // `.tooltip` is a `StatefulInteractiveElement`
@@ -1018,12 +1024,26 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                                     )))
                                     .min_w_0()
                                     .flex_1()
-                                    .text_ellipsis()
+                                    .flex()
+                                    .items_baseline()
                                     .text_size(ui_px(11.5))
                                     .line_height(ui_px(16.0))
                                     .text_color(theme.text_tertiary)
-                                    .tooltip(Tooltip::text(stats.clone()))
-                                    .child(stats),
+                                    .tooltip(Tooltip::text(stats.line.clone()))
+                                    .child(
+                                        div()
+                                            .flex_none()
+                                            .text_color(agent_color)
+                                            .child(SharedString::from(stats.agent.clone())),
+                                    )
+                                    .when_some(stats.rest, |row, rest| {
+                                        row.child(div().flex_none().child(" · ")).child(
+                                            div()
+                                                .min_w_0()
+                                                .truncate()
+                                                .child(SharedString::from(rest)),
+                                        )
+                                    }),
                             )
                         })
                         .when_some(assistant_footer_copy_content, |row, copy_content| {
@@ -1045,41 +1065,39 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
             column
         }
         MessageRole::System => {
-            // A recorded session error. The role exists for exactly this, so
-            // it is styled as a notice rather than a neutral pill: an icon
-            // carries the meaning for anyone who cannot separate the colour,
-            // and the tinted surface keeps a long provider message readable
-            // instead of dissolving into the transcript.
-            div().w_full().flex().justify_center().child(
-                div()
-                    .max_w(px(560.0))
-                    .min_w_0()
-                    .px(px(10.0))
-                    .py(px(6.0))
-                    .rounded(px(8.0))
-                    .bg(theme.danger_soft)
-                    .border_1()
-                    .border_color(theme.danger)
-                    .flex()
-                    .items_start()
-                    .gap(px(7.0))
-                    .text_size(ui_px(11.5))
-                    .line_height(ui_px(16.0))
-                    .child(div().flex_none().pt(px(1.0)).child(icon(
-                        "icons/alert.svg",
-                        13.0,
-                        theme.danger_text,
-                    )))
-                    .child(div().flex_1().min_w_0().whitespace_normal().child(
-                        md::render::plain_text(
-                            content.clone(),
-                            md::render::sans_family(),
-                            FontWeight::NORMAL,
-                            theme.text,
-                            &ctx,
-                        ),
-                    )),
-            )
+            // A recorded session error, persisted with the transcript. It
+            // presents as an activity card: the same full-width surface and
+            // left rail as tool work, with the rail fixed red in every theme
+            // so a failure reads as one at a glance. The alert icon carries
+            // the meaning for anyone who cannot separate the colour, and the
+            // whole message stays visible — an error has nothing to disclose.
+            div()
+                .w_full()
+                .min_w_0()
+                .border_l(px(3.0))
+                .border_color(crate::theme::error_rail_color())
+                .bg(theme.raised)
+                .px(px(12.0))
+                .py(px(8.0))
+                .flex()
+                .items_start()
+                .gap(px(8.0))
+                .text_size(ui_px(12.0))
+                .line_height(ui_px(17.0))
+                .child(div().flex_none().pt(px(2.0)).child(icon(
+                    "icons/alert.svg",
+                    13.0,
+                    theme.danger_text,
+                )))
+                .child(div().flex_1().min_w_0().whitespace_normal().child(
+                    md::render::plain_text(
+                        content.clone(),
+                        md::render::sans_family(),
+                        FontWeight::NORMAL,
+                        theme.text,
+                        &ctx,
+                    ),
+                ))
         }
         MessageRole::Compaction => {
             // The settled summary is provider bookkeeping, not conversation:

@@ -1029,17 +1029,6 @@ struct SessionRuntime {
     last_driver_error: Option<String>,
     /// When this session last sent or received anything, for idle reaping.
     last_active_at: Instant,
-    /// Turn-start anchor for the first-token latency meter: set on
-    /// `TurnStarted`, paired with the first streamed content when the turn
-    /// settles without a plugin measurement. Presentation bookkeeping that
-    /// never persists and dies with the turn.
-    turn_started_at: Option<Instant>,
-    /// When this turn's first streamed content arrived, for the wall-clock
-    /// fallback sample. Runtime state that dies with the turn.
-    first_content_at: Option<Instant>,
-    /// Whether this turn already contributed a first-token sample, so the
-    /// plugin measurement and the wall-clock fallback never both record.
-    first_token_recorded: bool,
     /// Background-process snapshots are provider IPC. Keep the polling clock
     /// on the runtime so switching tasks never creates duplicate probes.
     last_background_refresh_at: Instant,
@@ -2256,7 +2245,7 @@ pub struct Fintwind {
     /// fingerprint — mixed with the provider catalog's size, because the
     /// model segment resolves its display name through it — moves. See
     /// `assistant_turn_stats_cached`.
-    assistant_turn_stats_cache: RefCell<HashMap<usize, Option<SharedString>>>,
+    assistant_turn_stats_cache: RefCell<HashMap<usize, Option<transcript::AssistantTurnStats>>>,
     /// The fingerprint `assistant_turn_stats_cache` was built under.
     assistant_turn_stats_fingerprint: Cell<Option<u64>>,
     /// Checkpoint-ref existence per (session, retained turn count), filled by

@@ -53,9 +53,6 @@ pub fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
         DriverEvent::ScheduledTurnAdmitted(admission) => {
             ("scheduledTurnAdmitted", serde_json::to_value(admission)?)
         }
-        DriverEvent::FirstTokenMeasured { latency_ms } => {
-            ("firstTokenMeasured", json!({ "latencyMs": latency_ms }))
-        }
         DriverEvent::TurnTranscriptReconciled {
             transcript,
             continuation,
@@ -202,12 +199,6 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
         "scheduledTurnAdmitted" => {
             DriverEvent::ScheduledTurnAdmitted(serde_json::from_value(payload)?)
         }
-        "firstTokenMeasured" => DriverEvent::FirstTokenMeasured {
-            latency_ms: payload
-                .get("latencyMs")
-                .and_then(Value::as_u64)
-                .context("missing firstTokenMeasured latencyMs")?,
-        },
         "turnTranscriptReconciled" => DriverEvent::TurnTranscriptReconciled {
             transcript: serde_json::from_value(
                 payload

@@ -104,7 +104,10 @@ impl Fintwind {
     /// because the model segment resolves its display name through the
     /// provider probe, which can land after the turn did; without it a late
     /// catalog would leave the cached line on the raw `provider/id` key.
-    pub(super) fn assistant_turn_stats_cached(&self, message_index: usize) -> Option<SharedString> {
+    pub(super) fn assistant_turn_stats_cached(
+        &self,
+        message_index: usize,
+    ) -> Option<AssistantTurnStats> {
         self.refresh_transcript_row_kinds();
         let fingerprint = self.transcript_row_kinds_fingerprint.get().map(|rows| {
             mix(
@@ -122,8 +125,7 @@ impl Fintwind {
         }
         let value = self
             .selected_session()
-            .and_then(|session| assistant_turn_stats(self, session, message_index))
-            .map(SharedString::from);
+            .and_then(|session| assistant_turn_stats(self, session, message_index));
         self.assistant_turn_stats_cache
             .borrow_mut()
             .insert(message_index, value.clone());
@@ -764,6 +766,25 @@ pub(super) fn assistant_response_footer_time(
     Some(completed_at.unwrap_or(message.created_at))
 }
 
+/// The assistant footer's stats line, split so the agent segment can carry
+/// the fixed Build/Plan mode color while the rest stays tertiary. Cached
+/// whole under the row-kinds fingerprint; theme changes resolve the color at
+/// render, never here.
+#[derive(Clone)]
+pub(super) struct AssistantTurnStats {
+    /// The titlecased agent name — always present: the session's interaction
+    /// mode stands in when the turn captured no agent.
+    pub agent: String,
+    /// Build/Plan when the agent is one of the two modes; custom agents
+    /// render uncolored.
+    pub agent_mode: Option<InteractionMode>,
+    /// The model/duration/throughput segments joined with " · ", when any
+    /// of them has something to say.
+    pub rest: Option<String>,
+    /// The whole line, for the truncation tooltip.
+    pub line: String,
+}
+
 /// Extract the turn's stats line inputs from the session and assemble the
 /// line. The duration comes from the turn's own timestamps — seconds, the
 /// only resolution the app records — widened to the milliseconds the TUI's
@@ -777,7 +798,7 @@ fn assistant_turn_stats(
     app: &Fintwind,
     session: &AgentSession,
     message_index: usize,
-) -> Option<String> {
+) -> Option<AssistantTurnStats> {
     if assistant_response_footer_index(session, message_index) != Some(message_index) {
         return None;
     }
@@ -789,9 +810,17 @@ fn assistant_turn_stats(
     if turn.is_none() || (stats.is_none() && turn.is_some_and(|turn| turn.completed_at.is_none())) {
         return None;
     }
-    let agent = stats
-        .and_then(|stats| stats.agent.clone())
-        .unwrap_or_else(|| session.interaction_mode.label());
+    let captured_agent = stats.and_then(|stats| stats.agent.as_deref());
+    let agent_mode = match captured_agent {
+        Some(agent) if agent.eq_ignore_ascii_case("build") => Some(InteractionMode::Build),
+        Some(agent) if agent.eq_ignore_ascii_case("plan") => Some(InteractionMode::Plan),
+        Some(_) => None,
+        None => Some(session.interaction_mode),
+    };
+    let agent = match captured_agent {
+        Some(agent) => titlecase_agent(agent),
+        None => session.interaction_mode.label(),
+    };
     let model_display = stats
         .and_then(|stats| stats.model.as_deref())
         .map(|key| app.model_display_name(Some(key)));
@@ -805,13 +834,17 @@ fn assistant_turn_stats(
     let (output_tokens, stream_ms) = stats
         .filter(|stats| stats.stream_verified)
         .map_or((0, 0), |stats| (stats.output_tokens, stats.stream_ms));
-    turn_stats_line(
-        Some(agent.as_str()),
-        model_display.as_deref(),
-        duration_ms,
-        output_tokens,
-        stream_ms,
-    )
+    let rest = turn_stats_rest(model_display.as_deref(), duration_ms, output_tokens, stream_ms);
+    let line = match &rest {
+        Some(rest) => format!("{agent} · {rest}"),
+        None => agent.clone(),
+    };
+    Some(AssistantTurnStats {
+        agent,
+        agent_mode,
+        rest,
+        line,
+    })
 }
 
 /// Assemble the footer's stats line from already-resolved segments:
@@ -824,10 +857,24 @@ pub(super) fn turn_stats_line(
     output_tokens: u64,
     stream_ms: u64,
 ) -> Option<String> {
-    let mut segments: Vec<String> = Vec::with_capacity(4);
-    if let Some(agent) = agent {
-        segments.push(titlecase_agent(agent));
+    let rest = turn_stats_rest(model, duration_ms, output_tokens, stream_ms);
+    match (agent.map(titlecase_agent), rest) {
+        (Some(agent), Some(rest)) => Some(format!("{agent} · {rest}")),
+        (Some(agent), None) => Some(agent),
+        (None, Some(rest)) => Some(rest),
+        (None, None) => None,
     }
+}
+
+/// The stats line's non-agent segments — model, duration, throughput — each
+/// dropping out when its input is missing.
+fn turn_stats_rest(
+    model: Option<&str>,
+    duration_ms: Option<u64>,
+    output_tokens: u64,
+    stream_ms: u64,
+) -> Option<String> {
+    let mut segments: Vec<String> = Vec::with_capacity(3);
     if let Some(model) = model {
         segments.push(model.to_owned());
     }
@@ -1107,6 +1154,10 @@ pub(super) fn transcript_rows_fingerprint_with_retry(
             .is_some_and(|state| state.status == CompactionStatus::Running) as u64,
     );
 
+    // The stats line's agent falls back to the session's interaction mode,
+    // in both label and color, so a mode switch moves the cached footers.
+    hash = mix(hash, session.interaction_mode as u64);
+
     hash = mix(hash, session.messages.len() as u64);
     for message in &session.messages {
         hash = mix(hash, message.role as u64);
@@ -1139,14 +1190,17 @@ pub(super) fn transcript_rows_fingerprint_with_retry(
         );
         // The stats line reads turn.stats, so its appearance has to move the
         // fingerprint too — a hydration or replay that changes nothing else
-        // would leave the cached line stale otherwise. Content only changes
-        // while the turn runs (which flips the status above), so presence is
-        // the whole story.
+        // would leave the cached line stale otherwise. The settled-stats
+        // reconciliation can backfill the agent/model text without moving any
+        // number, and the agent segment's color follows that text, so the
+        // labels fold in beside the throughput fields.
         hash = mix(hash, turn.stats.is_some() as u64);
         if let Some(stats) = &turn.stats {
             hash = mix(hash, stats.stream_verified as u64);
             hash = mix(hash, stats.output_tokens);
             hash = mix(hash, stats.stream_ms);
+            hash = mix_label(hash, stats.agent.as_deref());
+            hash = mix_label(hash, stats.model.as_deref());
         }
         hash = mix(
             hash,
@@ -1184,6 +1238,20 @@ fn mix_turn_id(hash: u64, turn_id: Option<Uuid>) -> u64 {
         Some(turn_id) => mix_uuid(hash, turn_id),
         None => mix(hash, u64::MAX),
     }
+}
+
+/// Fold a short optional label into the fingerprint without allocating. The
+/// labels are agent ids and model keys — a few dozen bytes at most — so the
+/// byte walk stays a per-turn constant on the frame path.
+fn mix_label(hash: u64, label: Option<&str>) -> u64 {
+    let Some(label) = label else {
+        return mix(hash, u64::MAX);
+    };
+    let mut value = label.len() as u64;
+    for byte in label.bytes() {
+        value = mix(value, byte as u64);
+    }
+    mix(hash, value)
 }
 
 /// A settled turn presents its answer — the trailing run of assistant text —

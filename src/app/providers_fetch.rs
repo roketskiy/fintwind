@@ -335,6 +335,7 @@ impl Fintwind {
                 context_window: custom_providers::parse_context_window(context),
                 input_modalities: draft.input_modalities.clone(),
                 output_modalities: draft.output_modalities.clone(),
+                reasoning_efforts: draft.reasoning_efforts.clone(),
                 ..Default::default()
             });
         }
@@ -469,11 +470,13 @@ impl Fintwind {
             // a fetch-plus-submit the user never toggled.
             let input_modalities = model.input_modalities.clone();
             let output_modalities = model.output_modalities.clone();
+            let reasoning_efforts = model.reasoning_efforts.clone();
             self.providers_form_models.push(ProviderFormModelDraft {
                 id,
                 context,
                 input_modalities,
                 output_modalities,
+                reasoning_efforts,
             });
         }
         cx.notify();

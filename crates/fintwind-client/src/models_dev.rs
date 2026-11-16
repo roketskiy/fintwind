@@ -688,6 +688,7 @@ pub fn merge_api_models(
             // model records none of its own until the user says so.
             input_modalities: Vec::new(),
             output_modalities: Vec::new(),
+            reasoning_efforts: Vec::new(),
         });
         outcome.added += 1;
     }

@@ -152,6 +152,7 @@ pub(super) struct ProviderFormModelDraft {
     pub(super) context: Entity<ComposerInput>,
     pub(super) input_modalities: Vec<String>,
     pub(super) output_modalities: Vec<String>,
+    pub(super) reasoning_efforts: Vec<String>,
 }
 
 pub(super) fn api_format_label(format: ProviderApiFormat) -> String {
@@ -255,6 +256,7 @@ impl Fintwind {
         self.providers_model_editor = None;
         self.providers_model_editor_modalities.clear();
         self.providers_model_editor_output_modalities.clear();
+        self.providers_model_editor_efforts.clear();
         // A catalog check describes one provider; another selection must
         // not receive its in-flight result.
         let catalog_id = id.strip_prefix(BUILTIN_SELECTION_PREFIX);
@@ -304,6 +306,7 @@ impl Fintwind {
         self.providers_model_editor = None;
         self.providers_model_editor_modalities.clear();
         self.providers_model_editor_output_modalities.clear();
+        self.providers_model_editor_efforts.clear();
         self.providers_form_models.clear();
         if let Some(id) = self.providers_selected.clone() {
             self.load_provider_fields(&id, cx);
@@ -374,6 +377,7 @@ impl Fintwind {
                             this.providers_model_editor = None;
                             this.providers_model_editor_modalities.clear();
                             this.providers_model_editor_output_modalities.clear();
+                            this.providers_model_editor_efforts.clear();
                             this.providers_delete_arming = None;
                         } else if page_reload && let Some(id) = this.providers_selected.clone() {
                             this.load_provider_fields(&id, cx);
@@ -599,6 +603,7 @@ impl Fintwind {
         self.providers_model_editor = None;
         self.providers_model_editor_modalities.clear();
         self.providers_model_editor_output_modalities.clear();
+        self.providers_model_editor_efforts.clear();
         self.providers_api_key_revealed = false;
         self.provider_form_api_key
             .update(cx, |input, cx| input.set_obscured(true, cx));
@@ -666,6 +671,7 @@ impl Fintwind {
                 output_limit: known.and_then(|model| model.output_limit),
                 input_modalities: draft.input_modalities.clone(),
                 output_modalities: draft.output_modalities.clone(),
+                reasoning_efforts: draft.reasoning_efforts.clone(),
             });
         }
 
@@ -805,7 +811,7 @@ impl Fintwind {
                 .and_then(|model| model.api_package.clone()),
             _ => None,
         };
-        let (id, context, modalities, output_modalities) =
+        let (id, context, modalities, output_modalities, efforts) =
             match (&editor, self.selected_custom_provider()) {
                 (ProvidersModelEditor::Edit(index), Some(provider)) => {
                     let Some(model) = provider.models.get(*index) else {
@@ -819,13 +825,21 @@ impl Fintwind {
                             .unwrap_or_default(),
                         self.effective_input_modalities(model),
                         self.effective_output_modalities(model),
+                        model.reasoning_efforts.clone(),
                     )
                 }
-                _ => (String::new(), String::new(), Vec::new(), Vec::new()),
+                _ => (
+                    String::new(),
+                    String::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                ),
             };
         self.providers_model_editor = Some(editor);
         self.providers_model_editor_modalities = modalities;
         self.providers_model_editor_output_modalities = output_modalities;
+        self.providers_model_editor_efforts = efforts;
         self.provider_model_id_input
             .update(cx, |input, cx| input.set_content(id, cx));
         self.provider_model_context_input
@@ -863,6 +877,7 @@ impl Fintwind {
         self.providers_model_editor = None;
         self.providers_model_editor_modalities.clear();
         self.providers_model_editor_output_modalities.clear();
+        self.providers_model_editor_efforts.clear();
         cx.notify();
     }
 
@@ -911,6 +926,7 @@ impl Fintwind {
             context_window,
             input_modalities: self.providers_model_editor_modalities.clone(),
             output_modalities: self.providers_model_editor_output_modalities.clone(),
+            reasoning_efforts: self.providers_model_editor_efforts.clone(),
             ..Default::default()
         };
         if let Some(provider) = self
@@ -937,6 +953,7 @@ impl Fintwind {
         self.providers_model_editor = None;
         self.providers_model_editor_modalities.clear();
         self.providers_model_editor_output_modalities.clear();
+        self.providers_model_editor_efforts.clear();
         self.commit_custom_providers(cx);
     }
 
@@ -965,6 +982,7 @@ impl Fintwind {
                 self.providers_model_editor = None;
                 self.providers_model_editor_modalities.clear();
                 self.providers_model_editor_output_modalities.clear();
+                self.providers_model_editor_efforts.clear();
             }
             // The editor points at a slot in a shrinking list: follow the
             // model it opened on rather than whatever shifts into the index.
@@ -992,6 +1010,7 @@ impl Fintwind {
             context,
             input_modalities: Vec::new(),
             output_modalities: Vec::new(),
+            reasoning_efforts: Vec::new(),
         });
         cx.notify();
     }
@@ -2533,6 +2552,10 @@ impl Fintwind {
             toggle_output_modality(&mut this.providers_model_editor_output_modalities, modality);
             cx.notify();
         };
+        let toggle_efforts = |this: &mut Self, effort: &str, cx: &mut Context<Self>| {
+            toggle_modality(&mut this.providers_model_editor_efforts, effort);
+            cx.notify();
+        };
 
         let selected_package = self.providers_model_editor_package.clone();
         let protocol_label = |package: &str| match package {
@@ -2693,7 +2716,7 @@ impl Fintwind {
                 tr!("providers.input_modalities_label"),
                 &custom_providers::INPUT_MODALITIES,
                 &self.providers_model_editor_modalities,
-                true,
+                Some(tr!("providers.input_modalities_hint")),
                 toggle,
             ))
             .child(
@@ -2716,8 +2739,18 @@ impl Fintwind {
                 tr!("providers.output_modalities_label"),
                 &custom_providers::OUTPUT_MODALITIES,
                 &self.providers_model_editor_output_modalities,
-                false,
+                None,
                 toggle_output,
+            ))
+            .child(self.render_modality_row(
+                theme,
+                cx,
+                "model-editor-efforts",
+                tr!("providers.reasoning_efforts_label"),
+                &custom_providers::REASONING_EFFORTS,
+                &self.providers_model_editor_efforts,
+                Some(tr!("providers.reasoning_efforts_hint")),
+                toggle_efforts,
             ))
             .into_any_element()
     }
@@ -2735,7 +2768,7 @@ impl Fintwind {
         label: String,
         options: &'static [&'static str],
         selected: &[String],
-        hint: bool,
+        hint: Option<String>,
         toggle: impl Fn(&mut Self, &str, &mut Context<Self>) + Copy + 'static,
     ) -> Div {
         let accent = providers_accent(theme);
@@ -2771,13 +2804,13 @@ impl Fintwind {
                 )),
             );
         }
-        if hint {
+        if let Some(hint) = hint {
             row = row.child(
                 div()
                     .ml(px(2.0))
                     .text_size(ui_px(10.0))
                     .text_color(theme.text_muted)
-                    .child(tr!("providers.input_modalities_hint")),
+                    .child(hint),
             );
         }
         row
@@ -3594,6 +3627,12 @@ impl Fintwind {
                 }
                 cx.notify();
             };
+            let toggle_efforts = move |this: &mut Self, effort: &str, cx: &mut Context<Self>| {
+                if let Some(draft) = this.providers_form_models.get_mut(index) {
+                    toggle_modality(&mut draft.reasoning_efforts, effort);
+                }
+                cx.notify();
+            };
             drafts = drafts.child(
                 div()
                     .py(px(8.0))
@@ -3655,7 +3694,7 @@ impl Fintwind {
                         tr!("providers.input_modalities_label"),
                         &custom_providers::INPUT_MODALITIES,
                         &draft.input_modalities,
-                        index == 0,
+                        (index == 0).then(|| tr!("providers.input_modalities_hint")),
                         toggle,
                     ))
                     .child(self.render_modality_row(
@@ -3665,8 +3704,18 @@ impl Fintwind {
                         tr!("providers.output_modalities_label"),
                         &custom_providers::OUTPUT_MODALITIES,
                         &draft.output_modalities,
-                        false,
+                        None,
                         toggle_output,
+                    ))
+                    .child(self.render_modality_row(
+                        theme,
+                        cx,
+                        &format!("form-model-efforts-{index}"),
+                        tr!("providers.reasoning_efforts_label"),
+                        &custom_providers::REASONING_EFFORTS,
+                        &draft.reasoning_efforts,
+                        (index == 0).then(|| tr!("providers.reasoning_efforts_hint")),
+                        toggle_efforts,
                     )),
             );
         }

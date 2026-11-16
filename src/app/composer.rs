@@ -3776,9 +3776,8 @@ fn is_image_attachment_path(path: &Path) -> bool {
 /// The text a submission sends. Attachments are not appended; an empty prompt
 /// is still sent when chips are staged, and `None` means there is nothing.
 pub(super) fn submission_text(prompt: &str, attachment_count: usize) -> Option<String> {
-    let prompt = prompt.trim();
-    if prompt.is_empty() && attachment_count == 0 {
-        None
+    if prompt.trim().is_empty() {
+        (attachment_count > 0).then(String::new)
     } else {
         Some(prompt.to_owned())
     }

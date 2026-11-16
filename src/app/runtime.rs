@@ -1764,8 +1764,7 @@ impl Fintwind {
         // Keyboard submission clears ComposerInput after emitting its event.
         // Use the event's captured value rather than rereading the field; the
         // button path enters here with its own pre-clear content as well.
-        let prompt = prompt.trim().to_owned();
-        if prompt.is_empty() && edit.attachments.is_empty() {
+        if prompt.trim().is_empty() && edit.attachments.is_empty() {
             self.show_toast(tr!("session.edited_message_empty"));
             cx.notify();
             return;
@@ -2542,11 +2541,10 @@ impl Fintwind {
     pub(super) fn enqueue_follow_up_submission(
         &mut self,
         session_id: Uuid,
-        mut submission: ComposerSubmission,
+        submission: ComposerSubmission,
         cx: &mut Context<Self>,
     ) {
-        submission.prompt = submission.prompt.trim().to_owned();
-        if submission.prompt.is_empty() && submission.attachments.is_empty() {
+        if submission.prompt.trim().is_empty() && submission.attachments.is_empty() {
             return;
         }
         if let Some(session) = self.state.session_mut(session_id) {

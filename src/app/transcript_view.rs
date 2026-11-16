@@ -975,7 +975,7 @@ pub(super) struct ActivityClusterContext {
     /// The block's index inside the owning transcript: its disclosure key and
     /// part of its control ids.
     pub(super) block_index: usize,
-    /// The owning turn is still streaming: the header names the newest activity.
+    /// The owning turn is still streaming.
     pub(super) live_turn: bool,
     /// This is the newest activity group. It stays open during a live turn,
     /// even after its activities finish, until another group appears.
@@ -2587,8 +2587,7 @@ impl Fintwind {
             ActivityClusterDisclosure::Recent
         };
         let control_id = context.control_id();
-        let header_title =
-            activity_header_title(activities, context.live_turn, context.live_reasoning_id);
+        let header_title = activity_header_title(activities);
         let header_focus = self.transcript_control_focus(control_id.clone(), cx);
         let click_surface = context.surface.clone();
         let key_surface = context.surface.clone();

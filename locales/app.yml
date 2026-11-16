@@ -1547,6 +1547,10 @@ activity.searches:
   en: searches
 activity.plan_step:
   en: plan step
+activity.step_count_one:
+  en: "%{count} step"
+activity.step_count:
+  en: "%{count} steps"
 activity.plan_steps:
   en: plan steps
 activity.tool_call:

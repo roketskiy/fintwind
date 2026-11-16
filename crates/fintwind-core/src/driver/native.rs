@@ -2629,6 +2629,18 @@ fn tool_item(part: &Value) -> ActivityItem {
         failed,
         true,
     );
+    // Native replay must use provider timestamps, never the time of loading
+    // the transcript. The legacy tool shape kept these under state.time.
+    item.started_at_ms = part
+        .pointer("/time/created")
+        .or_else(|| state.pointer("/time/start"))
+        .and_then(Value::as_u64)
+        .filter(|time| *time > 0);
+    item.finished_at_ms = part
+        .pointer("/time/completed")
+        .or_else(|| state.pointer("/time/end"))
+        .and_then(Value::as_u64)
+        .filter(|time| *time > 0);
     if item.display_target.is_none()
         && let Some(state_title) = state
             .get("title")

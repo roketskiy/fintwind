@@ -1386,47 +1386,37 @@ pub(super) fn fenced_code(content: &str) -> Option<String> {
     (!code_blocks.is_empty()).then(|| code_blocks.join("\n\n"))
 }
 
-pub(super) fn activity_summary(activities: &[ActivityItem]) -> String {
-    let mut counts: Vec<(crate::model::ActivityKind, usize)> = Vec::new();
-    for activity in activities {
-        if let Some(entry) = counts.iter_mut().find(|(kind, _)| *kind == activity.kind) {
-            entry.1 += 1;
+pub(super) fn activity_header_title(activities: &[ActivityItem]) -> String {
+    let now = unix_time_millis();
+    // Span, not a sum: parallel tools must not count the same time twice.
+    // Require timing for every item so old partial records do not undercount.
+    let span = activities.iter().try_fold(None, |span, activity| {
+        let (start, end) = if let Some(reasoning) = &activity.reasoning {
+            (reasoning.started_at_ms, Some(reasoning.finished_at_ms))
         } else {
-            counts.push((activity.kind, 1));
+            (activity.started_at_ms?, activity.finished_at_ms)
+        };
+        let end = if activity.complete { end? } else { now };
+        if start == 0 || end < start {
+            return None;
         }
-    }
-    let parts = counts
-        .into_iter()
-        .map(|(kind, count)| {
-            let (singular, plural) = activity_noun(kind);
-            tr!(
-                "activity.count",
-                count = count,
-                activity = if count == 1 { singular } else { plural }
-            )
-        })
-        .collect::<Vec<_>>();
-    let running = activities.iter().any(|activity| !activity.complete);
-    if running {
-        tr!("activity.running", activities = parts.join(" · "))
+        Some(Some(
+            span.map_or((start, end), |(first, last): (u64, u64)| {
+                (first.min(start), last.max(end))
+            }),
+        ))
+    });
+    let duration = span
+        .flatten()
+        .map(|(start, end)| format_worked_duration(end.saturating_sub(start).div_ceil(1000)))
+        .unwrap_or_else(|| "—".to_owned());
+    let count = activities.len();
+    let steps = if count == 1 {
+        tr!("activity.step_count_one", count = count)
     } else {
-        tr!("activity.ran", activities = parts.join(" · "))
-    }
-}
-
-pub(super) fn activity_header_title(
-    activities: &[ActivityItem],
-    live_turn: bool,
-    live_reasoning_id: Option<Uuid>,
-) -> String {
-    if live_turn && let Some(activity) = activities.last() {
-        return activity.reasoning.as_ref().map_or_else(
-            || activity_display_title(activity),
-            |reasoning| reasoning_activity_title(reasoning, live_reasoning_id == Some(activity.id)),
-        );
-    }
-
-    activity_summary(activities)
+        tr!("activity.step_count", count = count)
+    };
+    format!("{duration} · {steps}")
 }
 
 fn tool_name_leaf(name: &str) -> &str {
@@ -1448,6 +1438,7 @@ fn is_ask_user_question(activity: &ActivityItem) -> bool {
         )
 }
 
+#[cfg(test)]
 pub(super) fn activity_display_title(activity: &ActivityItem) -> String {
     if activity.kind == crate::model::ActivityKind::Reasoning {
         return activity.reasoning.as_ref().map_or_else(
@@ -2108,7 +2099,7 @@ mod message_time_tests {
     }
 
     #[test]
-    fn live_activity_header_tracks_the_latest_child_until_the_turn_settles() {
+    fn activity_header_describes_its_own_time_span_and_steps() {
         let reasoning = ActivityItem::from_reasoning(
             ReasoningBlock {
                 content: "Inspecting history".into(),
@@ -2128,20 +2119,14 @@ mod message_time_tests {
             serde_json::json!({"command": "git log --oneline -15"}).to_string(),
         ));
         let mut activities = vec![reasoning, command];
-
-        assert_eq!(
-            activity_header_title(&activities, true, None),
-            "bash git log --oneline -15"
-        );
+        activities[1].started_at_ms = Some(1_500);
+        activities[1].finished_at_ms = Some(3_000);
         activities[1].complete = true;
-        assert_eq!(
-            activity_header_title(&activities, true, None),
-            "bash git log --oneline -15"
-        );
-        assert_eq!(
-            activity_header_title(&activities, false, None),
-            "Ran 1 thought · 1 command"
-        );
+
+        assert_eq!(activity_header_title(&activities), "2 seconds · 2 steps");
+        activities[1].finished_at_ms = None;
+        assert_eq!(activity_header_title(&activities), "— · 2 steps");
+        assert_eq!(activity_header_title(&activities[..1]), "1 second · 1 step");
         assert_eq!(activity_action_label(&activities[1]), "bash");
         assert_eq!(
             activity_row_detail(&activities[1], false),

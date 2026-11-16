@@ -385,7 +385,7 @@ impl Fintwind {
         &mut self,
         session_id: Uuid,
         runtime: &mut SessionRuntime,
-        item: ActivityItem,
+        mut item: ActivityItem,
     ) {
         // A plan tool call owns the capsule's todo list; reparse it once the
         // update lands instead of holding a stale copy.
@@ -415,6 +415,9 @@ impl Fintwind {
                             && !activity.complete)
                 });
                 if let Some(activity) = matching {
+                    item.inherit_timing(activity);
+                    activity.started_at_ms = item.started_at_ms;
+                    activity.finished_at_ms = item.finished_at_ms;
                     let has_arguments = item.arguments.is_some();
                     let replaces_changes = !item.file_changes.is_empty();
                     let completion_changed = activity.complete != item.complete;
@@ -476,7 +479,7 @@ impl Fintwind {
         if let Some(session) = self.state.session_mut(session_id) {
             for block in &mut session.transcript_blocks {
                 for activity in &mut block.activities {
-                    activity.complete = true;
+                    activity.finish();
                 }
             }
         }

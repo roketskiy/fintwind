@@ -1,6 +1,6 @@
 use crate::{
     ActiveTooltip, AnyView, App, Bounds, DispatchPhase, Element, ElementId, GlobalElementId,
-    HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId,
+    HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Size, TextOverflow,
     TextRun, TextStyle, TooltipId, TruncateFrom, WhiteSpace, Window, WrappedLine,
     WrappedLineLayout, register_tooltip_mouse_handlers, set_tooltip_on_window,
@@ -1188,9 +1188,12 @@ impl Element for InteractiveText {
                         let clickable_ranges = mem::take(&mut self.clickable_ranges);
                         window.on_mouse_event(
                             move |event: &MouseUpEvent, phase, window: &mut Window, cx| {
-                                if phase == DispatchPhase::Bubble && hitbox.is_hovered(window) {
-                                    if let Ok(mouse_up_index) =
-                                        text_layout.index_for_position(event.position)
+                                if phase == DispatchPhase::Bubble
+                                    && event.button == MouseButton::Left
+                                {
+                                    if hitbox.is_hovered(window)
+                                        && let Ok(mouse_up_index) =
+                                            text_layout.index_for_position(event.position)
                                     {
                                         click_listener(
                                             &clickable_ranges,
@@ -1212,6 +1215,7 @@ impl Element for InteractiveText {
                         let hitbox = hitbox.clone();
                         window.on_mouse_event(move |event: &MouseDownEvent, phase, window, _| {
                             if phase == DispatchPhase::Bubble
+                                && event.button == MouseButton::Left
                                 && hitbox.is_hovered(window)
                                 && let Ok(mouse_down_index) =
                                     text_layout.index_for_position(event.position)

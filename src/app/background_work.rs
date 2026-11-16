@@ -183,6 +183,7 @@ impl BackgroundWorkRegistry {
             BackgroundWorkEvent::Transcript(event) => self.apply_transcript(event),
             BackgroundWorkEvent::ReconcileProcesses { items } => self.reconcile_processes(items),
             BackgroundWorkEvent::ReconcileLive { items } => self.reconcile_live(items),
+            BackgroundWorkEvent::ReconcileImages { items } => self.reconcile_images(items),
             BackgroundWorkEvent::StopRequested(key) => {
                 if let Some(item) = self.items.get_mut(&key) {
                     item.status = BackgroundWorkStatus::Stopping;
@@ -197,9 +198,9 @@ impl BackgroundWorkRegistry {
                 {
                     item.status = match item.key.kind {
                         BackgroundWorkKind::Monitor => BackgroundWorkStatus::Monitoring,
-                        BackgroundWorkKind::Process | BackgroundWorkKind::Subagent => {
-                            BackgroundWorkStatus::Running
-                        }
+                        BackgroundWorkKind::Process
+                        | BackgroundWorkKind::Subagent
+                        | BackgroundWorkKind::Image => BackgroundWorkStatus::Running,
                     };
                     item.detail = Some(message);
                     item.updated_at_ms = unix_time_millis();
@@ -301,6 +302,7 @@ impl BackgroundWorkRegistry {
     fn apply_transcript(&mut self, event: BackgroundWorkTranscriptEvent) {
         let key = match &event {
             BackgroundWorkTranscriptEvent::Started { key, .. }
+            | BackgroundWorkTranscriptEvent::Steered { key, .. }
             | BackgroundWorkTranscriptEvent::TextDelta { key, .. }
             | BackgroundWorkTranscriptEvent::ReasoningDelta { key, .. }
             | BackgroundWorkTranscriptEvent::Activity { key, .. }
@@ -381,6 +383,19 @@ impl BackgroundWorkRegistry {
             }
             BackgroundWorkTranscriptEvent::TextDelta { key, delta } => {
                 Self::append_background_text(self.transcripts.entry(key).or_default(), &delta);
+            }
+            BackgroundWorkTranscriptEvent::Steered { key, text } => {
+                if !text.trim().is_empty() {
+                    let transcript = self.transcripts.entry(key).or_default();
+                    Self::finish_live_background_message(transcript);
+                    Self::finish_live_background_reasoning(transcript);
+                    let message = transcript
+                        .turns
+                        .last()
+                        .map(|turn| Message::new_for_turn(MessageRole::User, &text, turn.id))
+                        .unwrap_or_else(|| Message::new(MessageRole::User, text));
+                    transcript.messages.push(message);
+                }
             }
             BackgroundWorkTranscriptEvent::ReasoningDelta { key, delta } => {
                 Self::append_background_reasoning(self.transcripts.entry(key).or_default(), &delta);
@@ -702,6 +717,27 @@ impl BackgroundWorkRegistry {
         }
     }
 
+    fn reconcile_images(&mut self, items: Vec<BackgroundWorkItem>) {
+        let present = items
+            .iter()
+            .map(|item| item.key.clone())
+            .collect::<HashSet<_>>();
+        // A consumed job disappears without reporting its outcome here. Its
+        // result belongs to the conversation, not to this transient roster.
+        let consumed = self
+            .items
+            .keys()
+            .filter(|key| key.kind == BackgroundWorkKind::Image && !present.contains(*key))
+            .cloned()
+            .collect::<Vec<_>>();
+        for key in consumed {
+            self.remove(&key);
+        }
+        for item in items {
+            self.upsert(item);
+        }
+    }
+
     fn remove(&mut self, key: &BackgroundWorkKey) {
         self.items.remove(key);
         self.transcripts.remove(key);
@@ -783,9 +819,9 @@ impl BackgroundWorkRegistry {
             .filter(|item| item.status.is_live())
             .fold((0, 0), |(processes, agents), item| match item.key.kind {
                 BackgroundWorkKind::Subagent => (processes, agents + 1),
-                BackgroundWorkKind::Process | BackgroundWorkKind::Monitor => {
-                    (processes + 1, agents)
-                }
+                BackgroundWorkKind::Process
+                | BackgroundWorkKind::Monitor
+                | BackgroundWorkKind::Image => (processes + 1, agents),
             })
     }
 
@@ -1051,6 +1087,7 @@ pub(super) fn work_kind_icon(kind: BackgroundWorkKind) -> &'static str {
     match kind {
         BackgroundWorkKind::Subagent => "icons/bot.svg",
         BackgroundWorkKind::Process | BackgroundWorkKind::Monitor => "icons/terminal-square.svg",
+        BackgroundWorkKind::Image => "icons/modality-image.svg",
     }
 }
 

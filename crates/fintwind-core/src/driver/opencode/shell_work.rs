@@ -485,14 +485,20 @@ pub(super) fn reconcile_shells(
             .unwrap_or_default(),
         Err(_) => return projected(),
     };
+    let belongs = |info: &&Value| {
+        shell_belongs_to(info, parent_id)
+            || info.get("id").and_then(Value::as_str).is_some_and(|id| {
+                restore_ids.contains(id) || tracker.is_tracked(id)
+            })
+    };
     let live = running
         .iter()
-        .filter(|info| shell_belongs_to(info, parent_id))
+        .filter(belongs)
         .filter_map(|info| info.get("id").and_then(Value::as_str).map(str::to_owned))
         .collect::<HashSet<_>>();
     for info in running
         .iter()
-        .filter(|info| shell_belongs_to(info, parent_id))
+        .filter(belongs)
     {
         if stale() {
             return projected();

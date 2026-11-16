@@ -58,6 +58,7 @@ use crate::opencode_session::{
     request_json_on_port_with_directory,
 };
 
+mod job_work;
 mod recovery;
 mod shell_work;
 
@@ -2257,19 +2258,38 @@ impl DriverControl for OpenCodeDriver {
             .name("fintwind-opencode-subagents-refresh".into())
             .spawn(move || {
                 let directory = opencode_location_directory(&cwd);
+                let jobs = job_work::list(port, &directory, &parent_id);
+                if generation_guard.load(Ordering::Acquire) != generation {
+                    return;
+                }
+                if let Some(jobs) = &jobs {
+                    let _ = events.send(DriverEvent::BackgroundWork(
+                        BackgroundWorkEvent::ReconcileImages {
+                            items: jobs.images.clone(),
+                        },
+                    ));
+                }
                 // A shell backgrounded before this driver attached lives only
                 // in the session's stored transcript: one bounded scan names
                 // them, and the reconcile below adopts the ones the server
                 // still runs. The scan itself publishes nothing, so a command
                 // that already finished before this driver attached never
                 // appears at all.
-                let restore_ids = if restore_attempted.swap(true, Ordering::AcqRel) {
+                let mut restore_ids = if restore_attempted.swap(true, Ordering::AcqRel) {
                     HashSet::new()
                 } else {
                     restore_backgrounded_shells(port, &parent_id)
                         .into_iter()
                         .collect::<HashSet<_>>()
                 };
+                if let Some(jobs) = &jobs {
+                    for item in &jobs.shells {
+                        restore_ids.insert(item.key.provider_id.clone());
+                        if !shells.is_tracked(&item.key.provider_id) {
+                            shells.track(item.clone());
+                        }
+                    }
+                }
                 // Background shells reconcile first: they depend only on the
                 // shell registry, so a session-roster read that fails must not
                 // also freeze their output. Exactly one reconcile is
@@ -2352,6 +2372,13 @@ impl DriverControl for OpenCodeDriver {
                 // the shells ride the process-scoped reconcile, which cannot
                 // retire a subagent row.
                 let Some(sessions) = sessions else {
+                    if let Some(jobs) = &jobs {
+                        for item in &jobs.children {
+                            let _ = events.send(DriverEvent::BackgroundWork(
+                                BackgroundWorkEvent::Upsert(item.clone()),
+                            ));
+                        }
+                    }
                     let _ = events.send(DriverEvent::BackgroundWork(
                         BackgroundWorkEvent::ReconcileProcesses { items: shell_items },
                     ));
@@ -2375,6 +2402,13 @@ impl DriverControl for OpenCodeDriver {
                     .and_then(|response| response.get("data"))
                     .and_then(Value::as_object)
                 else {
+                    if let Some(jobs) = &jobs {
+                        for item in &jobs.children {
+                            let _ = events.send(DriverEvent::BackgroundWork(
+                                BackgroundWorkEvent::Upsert(item.clone()),
+                            ));
+                        }
+                    }
                     let _ = events.send(DriverEvent::BackgroundWork(
                         BackgroundWorkEvent::ReconcileProcesses { items: shell_items },
                     ));
@@ -2383,7 +2417,7 @@ impl DriverControl for OpenCodeDriver {
                 if generation_guard.load(Ordering::Acquire) != generation {
                     return;
                 }
-                let child_items = sessions
+                let mut child_items = sessions
                     .into_iter()
                     .filter_map(|payload| {
                         let child_id = payload.get("id").and_then(Value::as_str)?;
@@ -2412,6 +2446,20 @@ impl DriverControl for OpenCodeDriver {
                         })
                     })
                     .collect::<Vec<_>>();
+                if let Some(jobs) = jobs {
+                    for job in jobs.children {
+                        if let Some(child) =
+                            child_items.iter_mut().find(|child| child.key == job.key)
+                        {
+                            if job.status.is_live() || !child.status.is_live() {
+                                child.status = job.status;
+                            }
+                            child.can_stop = child.status.is_stoppable();
+                        } else {
+                            child_items.push(job);
+                        }
+                    }
+                }
                 let child_ids = child_items
                     .iter()
                     .map(|item| item.key.provider_id.clone())
@@ -2547,6 +2595,7 @@ impl DriverControl for OpenCodeDriver {
                         }
                     });
             }
+            BackgroundWorkKind::Image => {}
         }
     }
 
@@ -2654,6 +2703,9 @@ struct OpenCodeStreamState {
     shells: Arc<ShellWorkTracker>,
     pending_subagents: VecDeque<PendingSubagent>,
     children: HashMap<String, OpenCodeChildSession>,
+    /// Inbox admissions precede delivery; only delivered inputs enter the transcript.
+    child_inbox: HashMap<String, VecDeque<(String, String)>>,
+    child_consumed_inputs: HashSet<(String, String)>,
     usage_metadata: Arc<OpenCodeUsageMetadata>,
     permissions: Arc<Mutex<OpenCodePermissionState>>,
     forms: Arc<Mutex<OpenCodeFormState>>,
@@ -3507,6 +3559,76 @@ fn dispatch_server_event(
     );
 
     if let Some(session) = session.filter(|session| *session != root) {
+        let known = state.children.contains_key(session)
+            || state
+                .pending_subagents
+                .iter()
+                .any(|pending| pending.target.as_deref() == Some(session));
+        let payload = event_payload(value);
+        if kind == "session.inbox.enqueued" && known {
+            if let (Some(id), Some("user"), Some(text)) = (
+                payload.get("inboxID").and_then(Value::as_str),
+                payload.pointer("/item/type").and_then(Value::as_str),
+                payload.pointer("/item/payload/text").and_then(Value::as_str),
+            ) {
+                let pending = state.child_inbox.entry(session.to_owned()).or_default();
+                if !state.child_consumed_inputs.contains(&(session.to_owned(), id.to_owned()))
+                    && !pending.iter().any(|(existing, _)| existing == id)
+                {
+                    pending.push_back((id.to_owned(), text.to_owned()));
+                }
+            }
+            return;
+        }
+        if matches!(kind, "session.inbox.delivered" | "session.inbox.cancelled") {
+            let Some(id) = payload.get("inboxID").and_then(Value::as_str) else {
+                return;
+            };
+            let pending = state.child_inbox.get_mut(session);
+            let text = pending.and_then(|pending| {
+                let index = pending.iter().position(|(candidate, _)| candidate == id)?;
+                pending.remove(index).map(|(_, text)| text)
+            });
+            if text.is_some() {
+                state
+                    .child_consumed_inputs
+                    .insert((session.to_owned(), id.to_owned()));
+            }
+            if kind == "session.inbox.delivered" && let Some(text) = text {
+                if !state.children.contains_key(session) {
+                    let mut child = OpenCodeChildSession::new(session, root, payload);
+                    child.item.title.clear();
+                    child.item.status = BackgroundWorkStatus::Running;
+                    if let Some(pending) =
+                        take_pending_subagent(&mut state.pending_subagents, session)
+                    {
+                        child.item.origin_activity_ids.push(pending.activity_id);
+                    }
+                    child_update(&mut child, events, None, None);
+                    state.children.insert(session.to_owned(), child);
+                    family.remember(session.to_owned());
+                }
+                let _ = events.send(DriverEvent::BackgroundWork(
+                    BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Steered {
+                        key: BackgroundWorkKey::new(BackgroundWorkKind::Subagent, session),
+                        text,
+                    }),
+                ));
+            }
+            return;
+        }
+        if kind == "session.execution.started"
+            && state.children.get(session).is_none_or(|child| {
+                child.execution_started_at_ms.is_none() || !child.item.status.is_live()
+            })
+            && let Some(pending) = state.child_inbox.get_mut(session)
+        {
+            // The first admission opens this execution and is already rendered
+            // by Started; later admissions are steers in the same execution.
+            if let Some((id, _)) = pending.pop_front() {
+                state.child_consumed_inputs.insert((session.to_owned(), id));
+            }
+        }
         // A resumed historical child has no new session.created. Only an
         // exact pending call plus its execution start can attach it here;
         // unrelated or replayed starts must not reopen historical work.
@@ -3613,6 +3735,10 @@ fn handle_child_event(
         _ => {}
     }
     if kind == "session.deleted" {
+        state.child_inbox.remove(&session_id);
+        state
+            .child_consumed_inputs
+            .retain(|(session, _)| session != &session_id);
         // Remove the entry before settling it: late deltas and a replayed
         // `execution.started` must not revive a deleted child.
         if let Some(mut child) = state.children.remove(&session_id) {

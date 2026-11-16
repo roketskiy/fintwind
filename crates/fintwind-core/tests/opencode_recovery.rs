@@ -350,6 +350,49 @@ fn opencode_real_turn_completion() {
         collected.finish_indices[0] > text_ended,
         "a stale terminal must not precede the answer"
     );
+
+    // Exercise the real daemon event stream with OpenCode's child inbox
+    // payloads: an admission is not visible until delivered, cancellation is
+    // not a message, and duplicate delivery must not duplicate the steer.
+    let fixture = build_fixture(&run, "child-steer", &json!({
+        "session_id": "ses_parent", "messages_status": 503,
+        "turns": [{"user_msg_id": "msg_parent", "created_ms": 1700000000000u64,
+            "sse": [
+                {"sleep_ms": 200}, {"inbox_delivered": true},
+                {"event": {"type": "session.created", "data": {"sessionID": "ses_child", "parentID": "ses_parent", "title": "Child"}}},
+                {"event": {"type": "session.inbox.enqueued", "data": {"sessionID": "ses_child", "inboxID": "msg_open", "item": {"type": "user", "payload": {"text": "Initial task"}, "delivery": "steer"}}}},
+                {"event": {"type": "session.execution.started", "data": {"sessionID": "ses_child"}}},
+                {"event": {"type": "session.inbox.delivered", "data": {"sessionID": "ses_child", "inboxID": "msg_open"}}},
+                {"event": {"type": "session.text.delta", "data": {"sessionID": "ses_child", "delta": "Before steer"}}},
+                {"event": {"type": "session.inbox.enqueued", "data": {"sessionID": "ses_child", "inboxID": "msg_steer", "item": {"type": "user", "payload": {"text": "Change direction"}, "delivery": "steer"}}}},
+                {"event": {"type": "session.inbox.delivered", "data": {"sessionID": "ses_child", "inboxID": "msg_steer"}}},
+                {"event": {"type": "session.inbox.enqueued", "data": {"sessionID": "ses_child", "inboxID": "msg_steer", "item": {"type": "user", "payload": {"text": "Change direction"}, "delivery": "steer"}}}},
+                {"event": {"type": "session.inbox.delivered", "data": {"sessionID": "ses_child", "inboxID": "msg_steer"}}},
+                {"event": {"type": "session.inbox.enqueued", "data": {"sessionID": "ses_child", "inboxID": "msg_cancel", "item": {"type": "user", "payload": {"text": "Cancelled instruction"}, "delivery": "steer"}}}},
+                {"event": {"type": "session.inbox.cancelled", "data": {"sessionID": "ses_child", "inboxID": "msg_cancel"}}},
+                {"event": {"type": "session.text.delta", "data": {"sessionID": "ses_child", "delta": "After steer"}}},
+                {"event": {"type": "session.execution.succeeded", "data": {"sessionID": "ses_parent"}}}
+            ]}]
+    }));
+    let (session, runtime) = (Uuid::new_v4(), Uuid::new_v4());
+    harness.client.request(session, runtime, Command::Start {
+        options: start_options(&fixture.bin, &workspace),
+    }).unwrap();
+    std::thread::sleep(Duration::from_millis(600));
+    let events = harness.client.subscribe(session, runtime);
+    harness.client.request(session, runtime, Command::Prompt {
+        prompt: "Run child".into(), files: vec![],
+    }).unwrap();
+    let mut collected = Collected::default();
+    observe(&events, Duration::from_secs(5), Duration::from_millis(200), &mut collected);
+    let serialized = serde_json::to_string_pretty(&collected.timeline).unwrap();
+    fs::write(run.root.join("child-steer-events.json"), &serialized).unwrap();
+    assert_eq!(serialized.matches("Change direction").count(), 1, "{serialized}");
+    assert!(!serialized.contains("Cancelled instruction"), "{serialized}");
+    let before = serialized.find("Before steer").expect("child output before steer");
+    let steer = serialized.find("Change direction").expect("delivered steer");
+    let after = serialized.find("After steer").expect("child output after steer");
+    assert!(before < steer && steer < after, "{serialized}");
 }
 
 /// Explicit skills must reach the provider as native attachments, not hints

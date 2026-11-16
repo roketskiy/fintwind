@@ -3471,8 +3471,9 @@ impl Fintwind {
                     }
                     let add_project = weak.clone();
                     items.push(
-                        MenuItem::new(tr!("project.new_project"), move |_, cx| {
-                            let _ = add_project.update(cx, |this, cx| this.add_project(cx));
+                        MenuItem::new(tr!("project.new_project"), move |window, cx| {
+                            let _ =
+                                add_project.update(cx, |this, cx| this.add_project(window, cx));
                         })
                         .icon("icons/folder-new.svg"),
                     );

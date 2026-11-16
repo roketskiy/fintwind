@@ -1502,6 +1502,7 @@ pub struct Fintwind {
     branch_operation_pending: bool,
     /// Window-modal Git commit/push UI. Its repository snapshot is filled
     /// off-thread; frames only read this in-memory value.
+    add_project_dialog: Option<add_project_dialog::AddProjectDialogState>,
     commit_dialog: Option<commit_dialog::CommitDialogState>,
     /// Commit-message generation and Git mutation outlive the modal that
     /// started them. Keeping the operation on the app also lets every
@@ -2373,6 +2374,7 @@ mod branches;
 mod browser_collaboration;
 mod btw;
 mod command_palette;
+mod add_project_dialog;
 mod commit_dialog;
 mod components;
 mod composer;
@@ -3855,6 +3857,7 @@ impl Fintwind {
                 history_details_scroll: ScrollHandle::new(),
                 history_highlight: None,
                 branch_operation_pending: false,
+                add_project_dialog: None,
                 commit_dialog: None,
                 commit_operation: None,
                 // Providers × workspaces; both scans are small, the cache

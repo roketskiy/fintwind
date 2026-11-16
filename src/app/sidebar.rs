@@ -710,12 +710,12 @@ impl Fintwind {
             cx,
         )
         .track_focus(&self.sidebar_add_project_focus)
-        .on_click(cx.listener(|this, _, _, cx| this.add_project(cx)))
-        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+        .on_click(cx.listener(|this, _, window, cx| this.add_project(window, cx)))
+        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
             if !event.keystroke.modifiers.modified()
                 && matches!(event.keystroke.key.as_str(), "enter" | "space")
             {
-                this.add_project(cx);
+                this.add_project(window, cx);
                 cx.stop_propagation();
             }
         }))
@@ -1862,10 +1862,12 @@ impl Fintwind {
                                 .hover(|element| element.opacity(0.9))
                                 .active(|element| element.opacity(0.8))
                                 .child(tr_cow!("onboarding.open_project_folder"))
-                                .on_click(cx.listener(|this, _, _, cx| this.add_project(cx)))
-                                .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.add_project(window, cx)
+                                }))
+                                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                                     if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                        this.add_project(cx);
+                                        this.add_project(window, cx);
                                         cx.stop_propagation();
                                     }
                                 })),
@@ -1956,8 +1958,9 @@ impl Fintwind {
                 }
                 let add_project_weak = weak.clone();
                 items.push(
-                    MenuItem::new(tr!("project.new_project"), move |_, cx| {
-                        let _ = add_project_weak.update(cx, |this, cx| this.add_project(cx));
+                    MenuItem::new(tr!("project.new_project"), move |window, cx| {
+                        let _ =
+                            add_project_weak.update(cx, |this, cx| this.add_project(window, cx));
                     })
                     .icon("icons/folder-new.svg"),
                 );

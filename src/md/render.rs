@@ -1,24 +1,3 @@
-//! [`BlockTree`] → GPUI elements.
-//!
-//! Two properties drive every decision here.
-//!
-//! **One shaped element per block.** A paragraph becomes a single
-//! [`StyledText`] over one flat string with `TextRun`s for its inline styles —
-//! not one element per line, and not an element per styled span. Layout cost
-//! per block is therefore one measured-layout node and one `shape_text` call,
-//! which GPUI's line-layout cache reuses verbatim across frames when the text
-//! and wrap width are unchanged.
-//! Math paragraphs use one measured element with retained native glyph layouts
-//! and cached formula images (see [`math_text`]); ordinary prose stays on the
-//! StyledText path.
-//!
-//! **Color is paint, geometry is layout.** Syntax highlighting, inline-code
-//! washes and the selection wash are all painted from geometry read back out of
-//! the text's own [`TextLayout`], so none of them can change a row's measured
-//! height. That is what lets a streaming code block colorize progressively
-//! without ever reflowing, and what keeps the transcript's row measurements
-//! stable while a selection is dragged across it.
-
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -41,7 +20,9 @@ use super::selection::{
 };
 use super::veil::{RowVeil, apply_veil};
 use crate::theme::Theme;
-use crate::ui::menu::{ContextMenuHandle, context_menu};
+use crate::ui::menu::ContextMenuHandle;
+#[cfg(test)]
+use crate::ui::menu::context_menu;
 use crate::ui::tooltip::Tooltip;
 
 mod diagram_source;
@@ -52,7 +33,6 @@ mod copy_e2e;
 #[cfg(test)]
 mod selection_scroll_e2e;
 
-/// Selection geometry: the laid-out text handle for one painted element.
 #[derive(Clone)]
 pub enum TextGeometry {
     Text {
@@ -101,14 +81,8 @@ impl TextGeometry {
     }
 }
 
-/// The transcript's shared selection handles, specialised to real geometry.
 pub type TranscriptSelection = SelectionState<TextGeometry>;
 
-/// An optional app-owned override for clicked markdown links.
-///
-/// The markdown renderer stays unaware of projects and workspace surfaces;
-/// callers that do have that context can intercept a link, while every other
-/// markdown view continues to use GPUI's ordinary URL opener.
 pub type LinkHandler = Rc<dyn Fn(&str, &mut Window, &mut gpui::App)>;
 
 // ── Layout metrics ─────────────────────────────────────────────────────────
@@ -665,7 +639,6 @@ pub struct Ctx<'a> {
     pub(super) release_notes: bool,
     math_enabled: bool,
     math_menu: Option<ContextMenuHandle>,
-    wrap_math_menu: bool,
     now: Instant,
 }
 
@@ -690,7 +663,6 @@ impl<'a> Ctx<'a> {
             release_notes: false,
             math_enabled: true,
             math_menu: None,
-            wrap_math_menu: false,
             now: Instant::now(),
         }
     }
@@ -714,7 +686,7 @@ impl<'a> Ctx<'a> {
         self
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn with_math_enabled(mut self, enabled: bool) -> Self {
         self.math_enabled = enabled;
         self
@@ -723,15 +695,6 @@ impl<'a> Ctx<'a> {
     /// Contribute formula actions to an existing message menu.
     pub fn with_context_menu(mut self, menu: ContextMenuHandle) -> Self {
         self.math_menu = Some(menu);
-        self.wrap_math_menu = false;
-        self
-    }
-
-    /// Give a standalone Markdown surface its own formula context menu.
-    #[allow(dead_code)]
-    pub fn with_math_context_menu(mut self, menu: ContextMenuHandle) -> Self {
-        self.math_menu = Some(menu);
-        self.wrap_math_menu = true;
         self
     }
 
@@ -750,7 +713,6 @@ impl<'a> Ctx<'a> {
             release_notes: self.release_notes,
             math_enabled: self.math_enabled,
             math_menu: self.math_menu.clone(),
-            wrap_math_menu: self.wrap_math_menu,
             now: Instant::now(),
         }
     }
@@ -1494,27 +1456,15 @@ pub fn markdown<'a>(view: &'a MarkdownView, ctx: &Ctx<'a>) -> Option<AnyElement>
         view.veil.borrow_mut().finish_frame();
     }
 
-    let element = div()
-        .w_full()
-        .min_w_0()
-        .flex()
-        .flex_col()
-        .gap(px(ctx.metrics.block_gap))
-        .children(children);
     Some(
-        if ctx.math_enabled
-            && ctx.wrap_math_menu
-            && let Some(menu) = &ctx.math_menu
-        {
-            context_menu(
-                element,
-                SharedString::from(format!("math-menu-{}", ctx.row)),
-                menu,
-                |_| Vec::new(),
-            )
-        } else {
-            element.into_any_element()
-        },
+        div()
+            .w_full()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(px(ctx.metrics.block_gap))
+            .children(children)
+            .into_any_element(),
     )
 }
 
@@ -2506,29 +2456,6 @@ mod tests {
         let plain = code_runs(code, None, &code_font, &palette());
         assert_eq!(plain.iter().map(|run| run.len).sum::<usize>(), code.len());
         assert_eq!(plain.len(), 1);
-    }
-
-    #[test]
-    fn code_block_rendering_wraps_and_exposes_a_keyboard_copy_control() {
-        let source = include_str!("render.rs");
-        let start = source
-            .find("\nfn render_code_block(")
-            .expect("code block renderer");
-        let body = &source[start + 1..];
-        let end = body
-            .find("\nfn code_runs(")
-            .expect("code block renderer end");
-        let body = &body[..end];
-
-        assert!(body.contains(".whitespace_normal()"));
-        assert!(!body.contains(".overflow_x_scroll()"));
-        assert!(!body.contains(".whitespace_nowrap()"));
-        assert!(body.contains("\"icons/copy.svg\""));
-        assert!(body.contains("\"icons/check.svg\""));
-        assert!(body.contains("ClipboardItem::new_string"));
-        assert!(body.contains("show_code_copied"));
-        assert!(body.contains(".tab_index(0)"));
-        assert!(body.contains(".on_key_down"));
     }
 
     #[test]

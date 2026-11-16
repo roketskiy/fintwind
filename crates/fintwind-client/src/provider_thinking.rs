@@ -11,14 +11,8 @@ use serde_json::{Map, Value, json};
 use crate::custom_providers::ProviderApiFormat;
 use crate::models_dev::{ModelsDevThinking, ModelsDevThinkingMode};
 
-/// The levels offered for a model whose catalog entry states no modes: the
-/// standard effort ladder, `none` spelled the way the wire mapping keys a
-/// disabled mode.
 const FALLBACK_MODES: [&str; 6] = ["nothinking", "low", "medium", "high", "xhigh", "max"];
 
-/// The thinking modes a user recorded on a custom model, in ladder order.
-/// `None` when nothing was recorded — the catalog (or the standard ladder)
-/// stays authoritative. `none` maps to the wire's disabled key.
 pub(crate) fn recorded_thinking(efforts: &[String]) -> Option<ModelsDevThinking> {
     if efforts.is_empty() {
         return None;
@@ -44,10 +38,7 @@ pub(crate) fn fill_model_variants(
     name: Option<&str>,
     format: ProviderApiFormat,
 ) {
-    // A catalog that could not be had says nothing: leave the spec alone
-    // rather than second-guess the levels an earlier write may have based
-    // on real data. A catalog that answers but lists no modes for the
-    // model is an authoritative silence — the ladder fills in.
+    // A missing catalog must not overwrite previously recorded options.
     let Some(thinking) = thinking else {
         return;
     };
@@ -74,7 +65,6 @@ pub(crate) fn fill_model_variants(
     // catalog still lists keep their values, hand-edits included.
     variants.retain(|key, _| modes.iter().any(|mode| mode.mode_key == *key));
     for mode in modes {
-        // Explicit user settings, including disabled variants, always win.
         variants
             .entry(mode.mode_key.clone())
             .or_insert_with(|| mode_options(mode, name, format));
@@ -240,7 +230,6 @@ mod tests {
         );
         assert_eq!(spec["options"]["reasoningEffort"], "medium");
 
-        // On Anthropic's wire the ladder levels carry bounded budgets.
         let mut anthropic = Map::new();
         fill_model_variants(
             &mut anthropic,
@@ -264,8 +253,6 @@ mod tests {
 
     #[test]
     fn google_format_keys_the_ladder_through_thinking_config() {
-        // On Google's wire an undescribed model keys the ladder through
-        // thinkingLevel rather than a budget, whatever the model is named.
         let mut google = Map::new();
         fill_model_variants(
             &mut google,

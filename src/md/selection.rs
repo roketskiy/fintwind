@@ -94,11 +94,6 @@ impl Selection {
         }]);
     }
 
-    /// The live drag's anchor offset, if `key` owns the drag.
-    pub fn drag_anchor(&self, key: &TextKey) -> Option<usize> {
-        (self.dragging && self.anchor.as_ref() == Some(key)).then_some(self.anchor_offset)
-    }
-
     pub fn anchor(&self) -> Option<&TextKey> {
         self.anchor.as_ref()
     }
@@ -559,8 +554,6 @@ mod tests {
         let anchor = TextKey::new("r1", 0);
 
         selection.begin(anchor.clone(), 6);
-        assert_eq!(selection.drag_anchor(&anchor), Some(6));
-        assert_eq!(selection.drag_anchor(&TextKey::new("r1", 1)), None);
 
         let spans = registry.resolve((0, 6), (1, 6));
         assert!(selection.set_spans(spans.clone()));

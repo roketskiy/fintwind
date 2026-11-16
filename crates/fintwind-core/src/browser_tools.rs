@@ -37,27 +37,19 @@ struct Connection {
 }
 
 struct Server {
-    activated: bool,
     token: String,
 }
 
-/// Held while a driver owns a native OpenCode session. The lease is only
-/// a lifetime guard: it carries no session binding.
 pub struct BrowserToolBinding {
     _server: Arc<BrowserToolServer>,
 }
 
-/// One registry per daemon. It is never written to a database or shared with
-/// the GUI; only the backend and its owned OpenCode processes issue mappings.
 #[derive(Default)]
 pub struct BrowserTools {
-    /// Off until the settings say otherwise: browser tools cost model
-    /// context, so enabling them is an explicit act.
     enabled: AtomicBool,
     state: Mutex<State>,
 }
 
-/// A private process owns this capability for exactly its lifetime.
 pub struct BrowserToolServer {
     registry: Arc<BrowserTools>,
     id: Uuid,
@@ -65,7 +57,6 @@ pub struct BrowserToolServer {
     token: String,
 }
 
-/// Driver-local context; unlike cwd this names the actual Fintwind runtime.
 #[derive(Clone)]
 pub struct BrowserToolRuntime {
     pub registry: Arc<BrowserTools>,
@@ -89,10 +80,6 @@ impl BrowserTools {
         state.broker = Arc::downgrade(broker);
     }
 
-    /// Apply the browser-tools setting and push the new state to every
-    /// connected plugin. A dead sender is dropped lazily here; a connection
-    /// between its hello and its registration is covered by the initial
-    /// state [`Self::register_outgoing`] sends.
     pub fn set_enabled(&self, enabled: bool) {
         self.enabled.store(enabled, Ordering::Release);
         let mut state = self.state.lock();
@@ -103,10 +90,6 @@ impl BrowserTools {
         });
     }
 
-    /// Hand the transport's reply channel for one connection to the registry
-    /// so setting changes can be pushed to the plugin. The current state is
-    /// stated on the same lock that serializes [`Self::set_enabled`] pushes,
-    /// so the plugin can never observe the two reordered.
     pub(crate) fn register_outgoing(&self, connection: u64, sender: Sender<BrowserToolReply>) {
         let enabled = self.enabled.load(Ordering::Acquire);
         let mut state = self.state.lock();
@@ -134,7 +117,6 @@ impl BrowserTools {
         state.servers.insert(
             id,
             Server {
-                activated: false,
                 token: token.clone(),
             },
         );
@@ -165,11 +147,6 @@ impl BrowserTools {
         // Registry -> broker is the only lock order. Revocation uses the same
         // order, so it cannot race registration into an orphan live caller.
         broker.register_connection(id);
-        state
-            .servers
-            .get_mut(&server_id)
-            .expect("matched live server")
-            .activated = true;
         state.connections.insert(id, Connection { server_id });
         Ok(id)
     }
@@ -253,8 +230,6 @@ impl BrowserTools {
         )
     }
 
-    /// Open a new tab through the global launcher. There is no session
-    /// binding: any tool connection may open.
     pub(crate) fn open(&self, connection: u64, request_id: Uuid, url: &str) -> BrowserResult {
         if let Err(error) = self.ensure_enabled() {
             return BrowserResult::error(error.to_string());
@@ -280,17 +255,6 @@ impl BrowserTools {
 }
 
 impl BrowserToolServer {
-    pub(crate) fn is_activated(&self) -> bool {
-        self.registry
-            .state
-            .lock()
-            .servers
-            .get(&self.id)
-            .is_some_and(|server| server.activated)
-    }
-    pub(crate) fn belongs_to(&self, registry: &Arc<BrowserTools>) -> bool {
-        Arc::ptr_eq(&self.registry, registry)
-    }
     pub fn address(&self) -> &str {
         &self.address
     }
@@ -298,8 +262,6 @@ impl BrowserToolServer {
         &self.token
     }
 
-    /// Called by the private process owner even if runtime binding guards
-    /// still hold references to this capability after the process exits.
     pub fn revoke(&self) {
         let mut state = self.registry.state.lock();
         state.servers.remove(&self.id);

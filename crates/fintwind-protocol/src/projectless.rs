@@ -5,6 +5,8 @@ use std::sync::{OnceLock, RwLock};
 
 struct WorkspacePaths {
     root: Option<PathBuf>,
+    // Older releases stored projectless workspaces directly in ~/.fintwind.
+    // Keep recognizing those paths so existing sessions can be migrated.
     legacy_root: Option<PathBuf>,
 }
 

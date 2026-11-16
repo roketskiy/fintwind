@@ -786,10 +786,10 @@ impl Fintwind {
     pub(super) fn new_project_action(
         &mut self,
         _: &NewProject,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.add_project(cx);
+        self.add_project(window, cx);
     }
 
     pub(super) fn open_settings_action(
@@ -1906,35 +1906,13 @@ impl Fintwind {
         cx.notify();
     }
 
-    pub(super) fn add_project(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn add_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.daemon.is_remote() {
             self.show_toast(tr!("errors.remote_project_picker"));
             cx.notify();
             return;
         }
-        let receiver = cx.prompt_for_paths(PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some(tr!("project.add_project").into()),
-        });
-        cx.spawn(async move |this, cx| {
-            if let Ok(Ok(Some(paths))) = receiver.await
-                && let Some(path) = paths.into_iter().next()
-            {
-                let _ = this.update(cx, |this, cx| {
-                    if let Some(existing) = this.state.projects.iter().find(|p| p.path == path) {
-                        this.select_project(existing.id, cx);
-                        return;
-                    }
-                    let project = Project::from_path(path);
-                    let project_id = project.id;
-                    this.state.projects.push(project);
-                    this.create_session_for(project_id, cx);
-                });
-            }
-        })
-        .detach();
+        self.open_add_project_dialog(window, cx);
     }
 
     pub(super) fn create_projectless_session(&mut self, cx: &mut Context<Self>) {

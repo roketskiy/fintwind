@@ -302,6 +302,7 @@ impl Render for Fintwind {
         let commit_dialog = self.render_commit_dialog(cx);
         let discard_dialog = self.render_source_control_discard_dialog(cx);
         let review_commit_dialog = self.render_source_control_commit_dialog(cx);
+        let add_project_dialog = self.render_add_project_dialog(cx);
         let toast = self.render_active_toast(cx);
 
         // The main area: the session view, the settings page body, or the
@@ -682,6 +683,7 @@ impl Render for Fintwind {
             .children(changelog)
             .children(discard_dialog)
             .children(review_commit_dialog)
+            .children(add_project_dialog)
             .children(image_preview)
             .children(diagram_preview)
             .child(crate::ui::menu::context_menu(

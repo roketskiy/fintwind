@@ -1915,6 +1915,20 @@ terminal.starting:
 
 project.add_project:
   en: Add project
+project.location_label:
+  en: File location
+project.location_local:
+  en: This PC
+project.folder_label:
+  en: Source folder
+project.folder_pick:
+  en: Click to choose a folder
+project.name_label:
+  en: Project name
+project.name_placeholder:
+  en: Enter a name…
+project.add_confirm:
+  en: Add
 errors.remote_project_picker:
   en: Adding a daemon-host project needs a remote path picker, which is not available yet
 

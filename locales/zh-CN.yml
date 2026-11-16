@@ -940,6 +940,13 @@ workspace.workspace: 工作区
 workspace.worktree: 工作树
 terminal.starting: 正在启动终端…
 project.add_project: 添加项目
+project.location_label: 文件所在位置
+project.location_local: 此电脑
+project.folder_label: 源文件夹
+project.folder_pick: 点击选择文件夹
+project.name_label: 项目名称
+project.name_placeholder: 输入名称…
+project.add_confirm: 添加
 errors.remote_project_picker: 添加守护进程主机上的项目需要远程路径选择器，但该功能尚不可用
 session.stopped: 已停止
 session.turn_completed: 本轮已完成

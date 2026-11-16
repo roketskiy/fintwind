@@ -958,6 +958,13 @@ workspace.worktree: ワークツリー
 terminal.starting: ターミナルを起動中…
 
 project.add_project: プロジェクトを追加
+project.location_label: ファイルの場所
+project.location_local: この PC
+project.folder_label: ソースフォルダー
+project.folder_pick: クリックしてフォルダーを選択
+project.name_label: プロジェクト名
+project.name_placeholder: 名前を入力…
+project.add_confirm: 追加
 errors.remote_project_picker: デーモンホスト上のプロジェクトを追加するにはリモートパス選択が必要ですが、まだ利用できません
 
 session.stopped: 停止しました

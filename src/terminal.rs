@@ -30,7 +30,6 @@ use gpui::{
 };
 use parking_lot::Mutex;
 
-use crate::persistence::DEFAULT_RIGHT_PANEL_WIDTH;
 use crate::theme::Theme;
 use crate::ui::scrollbar::{self, ScrollbarState};
 
@@ -53,7 +52,7 @@ const TERMINAL_PADDING_X: f32 = 10.0;
 const TERMINAL_PADDING_Y: f32 = 8.0;
 const TERMINAL_TOOLBAR_HEIGHT: f32 = 34.0;
 const TERMINAL_MIN_COLUMNS: usize = 20;
-const TERMINAL_MIN_ROWS: usize = 8;
+const TERMINAL_MIN_ROWS: usize = 1;
 const TERMINAL_SCROLLBACK_LINES: usize = 10_000;
 const TERMINAL_CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(500);
 const TERMINAL_CURSOR_BLINK_PAUSE: Duration = Duration::from_millis(300);
@@ -628,7 +627,6 @@ pub struct TerminalView {
     title: String,
     exited: bool,
     scroll_accumulator: f32,
-    panel_width: f32,
     /// Advance width of one grid cell, measured from the terminal font on
     /// first render so grid math matches what `StyledText` actually lays out.
     measured_cell_width: Option<f32>,
@@ -693,7 +691,6 @@ impl TerminalView {
             working_directory,
             exited: false,
             scroll_accumulator: 0.0,
-            panel_width: DEFAULT_RIGHT_PANEL_WIDTH,
             measured_cell_width: None,
             measured_font_family: None,
             scrollbar_state: ScrollbarState::new(),
@@ -709,10 +706,6 @@ impl TerminalView {
 
     pub fn working_directory(&self) -> &Path {
         &self.working_directory
-    }
-
-    pub fn set_panel_width(&mut self, width: f32) {
-        self.panel_width = width;
     }
 
     pub fn refresh_localized_text(&mut self, cx: &mut Context<Self>) {
@@ -768,25 +761,25 @@ impl TerminalView {
             return;
         }
 
-        let Some(session) = &self.session else {
-            return;
-        };
         if terminal_clipboard_modifier_pressed(&keystroke.modifiers)
             && keystroke.key.eq_ignore_ascii_case("v")
         {
             if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                session.term.lock().selection = None;
-                let bytes = bracketed_paste(text, session.mode());
-                session.write(bytes);
-                session.dirty.store(true, Ordering::Release);
+                self.paste(text, window, cx);
                 window.prevent_default();
                 cx.stop_propagation();
             }
             return;
         }
 
+        let Some(session) = &self.session else {
+            return;
+        };
         if let Some(bytes) = terminal_key_bytes(keystroke, session.mode()) {
-            session.term.lock().selection = None;
+            let mut term = session.term.lock();
+            term.selection = None;
+            term.scroll_display(Scroll::Bottom);
+            drop(term);
             session.write(bytes);
             session.dirty.store(true, Ordering::Release);
             window.prevent_default();
@@ -968,14 +961,18 @@ impl TerminalView {
         }
     }
 
-    fn paste(&mut self, text: String, cx: &mut Context<Self>) {
+    fn paste(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
         self.pause_cursor_blink(cx);
         let Some(session) = &self.session else {
             return;
         };
-        session.term.lock().selection = None;
+        let mut term = session.term.lock();
+        term.selection = None;
+        term.scroll_display(Scroll::Bottom);
+        drop(term);
         session.write(bracketed_paste(text, session.mode()));
         session.dirty.store(true, Ordering::Release);
+        window.focus(&self.focus_handle, cx);
         cx.notify();
     }
 
@@ -1065,9 +1062,6 @@ impl Render for TerminalView {
         self.ensure_cursor_focus_tracking(window, cx);
         let theme = Theme::current(cx);
         let selection_color = theme.selection;
-        let viewport = window.viewport_size();
-        let panel_width = self.panel_width;
-        let body_height = (f32::from(viewport.height) - 48.0 - TERMINAL_TOOLBAR_HEIGHT).max(120.0);
         // The rows are laid out by `StyledText` at the font's own advance, so
         // the grid must be sized from that same measured advance or the text
         // wraps short of (or past) the panel edge.
@@ -1083,17 +1077,12 @@ impl Render for TerminalView {
                 .advance(font_id, px(TERMINAL_FONT_SIZE), 'm')
                 .map_or(TERMINAL_CELL_WIDTH, |advance| f32::from(advance.width))
         });
-        let columns = ((panel_width - TERMINAL_PADDING_X * 2.0) / cell_width)
-            .floor()
-            .max(TERMINAL_MIN_COLUMNS as f32) as usize;
-        let rows = ((body_height - TERMINAL_PADDING_Y * 2.0) / TERMINAL_CELL_HEIGHT)
-            .floor()
-            .max(TERMINAL_MIN_ROWS as f32) as usize;
-
         let terminal_focused = window.is_window_active() && self.focus_handle.is_focused(window);
         let cursor_style =
             terminal_cursor_style(terminal_focused, self.cursor_blink.read(cx).visible());
-        if let Some(session) = self.session.as_mut() {
+        if let (Some(session), Some(bounds)) = (self.session.as_mut(), self.grid_bounds.get()) {
+            let columns = (f32::from(bounds.size.width) / cell_width).floor() as usize;
+            let rows = (f32::from(bounds.size.height) / TERMINAL_CELL_HEIGHT).floor() as usize;
             session.resize(columns, rows, cell_width);
         }
         if self.selecting {
@@ -1218,9 +1207,18 @@ impl Render for TerminalView {
         }
 
         let grid_bounds = self.grid_bounds.clone();
+        let terminal = cx.entity().downgrade();
         screen = screen.child(
             canvas(
-                move |bounds, _, _| grid_bounds.set(Some(bounds)),
+                move |bounds, window, _| {
+                    let previous = grid_bounds.replace(Some(bounds));
+                    if previous.is_none_or(|previous| previous.size != bounds.size) {
+                        let terminal = terminal.clone();
+                        window.on_next_frame(move |_, cx| {
+                            let _ = terminal.update(cx, |_, cx| cx.notify());
+                        });
+                    }
+                },
                 |_, _, _, _| {},
             )
             .absolute()
@@ -1229,7 +1227,7 @@ impl Render for TerminalView {
 
         let context_terminal = cx.entity();
         let screen = context_menu(
-            div().size_full().child(screen),
+            div().size_full().min_h_0().flex().flex_col().child(screen),
             "terminal-context-menu",
             &self.context_menu,
             move |cx| {
@@ -1251,12 +1249,14 @@ impl Render for TerminalView {
                         }
                     })
                     .disabled(!has_selection),
-                    MenuItem::new(tr!("menu.paste"), move |_, cx| {
+                    MenuItem::new(tr!("menu.paste"), move |window, cx| {
                         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text())
                         else {
                             return;
                         };
-                        paste_terminal.update(cx, |terminal, cx| terminal.paste(text, cx));
+                        paste_terminal.update(cx, |terminal, cx| {
+                            terminal.paste(text, window, cx);
+                        });
                     })
                     .disabled(!can_paste),
                     MenuItem::Separator,

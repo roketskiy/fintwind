@@ -129,11 +129,8 @@ fn next_subscriber_id() -> u64 {
 
 /// Subscribes to the server-wide event stream on `port`.
 ///
-/// The first subscriber for a port opens the single SSE connection; later
-/// ones join it. The connection attempt happens on the hub's reader thread,
-/// so this returns before the stream is live and `recv` blocks until the
-/// first event or the stream's end. Callers must already be off the UI
-/// thread.
+/// The first subscriber opens the connection on the hub's reader thread;
+/// later subscribers share it. Callers must already be off the UI thread.
 pub(crate) fn subscribe(port: u16) -> anyhow::Result<EventFeed> {
     let hub = hubs()
         .lock()
@@ -195,17 +192,7 @@ pub(crate) struct EventFeed {
 }
 
 impl EventFeed {
-    /// Receives the next parsed JSON event.
-    ///
-    /// Blocks across transport failures — the hub reconnects in the
-    /// background while any subscriber remains — so an error means the
-    /// subscription itself is over: the last feed was cancelled or dropped,
-    /// or the hub's reader stopped for good.
-    ///
-    /// Callers that need to watch anything else while waiting use
-    /// `recv_timeout`; this blocking form stays part of the module's
-    /// surface for callers that own their own wait, and the tests pin it.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn recv(&self) -> anyhow::Result<Value> {
         self.rx
             .recv()

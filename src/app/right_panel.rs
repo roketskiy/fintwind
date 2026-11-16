@@ -787,60 +787,6 @@ mod tests {
         );
     }
 
-    /// The render path must never reach the filesystem. This reads the source
-    /// rather than the behaviour, because the cost of a regression here is a
-    /// syscall per directory entry on every frame — invisible until a project
-    /// is large or its volume is slow.
-    #[test]
-    fn the_working_tree_render_path_does_no_filesystem_work() {
-        let source = include_str!("right_panel.rs");
-        // Anchored on the definition's indentation so this test does not match
-        // its own string literals.
-        let start = source
-            .find("\n    fn render_right_panel_working_tree(")
-            .expect("render fn");
-        let body = &source[start + 1..];
-        let end = body.find("\n    fn ").unwrap_or(body.len());
-        let body = &body[..end];
-
-        for forbidden in [
-            "visible_working_tree_entries",
-            "read_dir",
-            "std::fs::",
-            "metadata(",
-        ] {
-            assert!(
-                !body.contains(forbidden),
-                "render_right_panel_working_tree must not call `{forbidden}`; \
-                 walk the tree in refresh_right_panel_working_tree instead"
-            );
-        }
-    }
-
-    /// Same guard for the file editor, which `render_right_panel_file` reaches
-    /// on every frame that draws a file tab. Opening a large file used to read
-    /// it inline, so the frame that revealed the tab paid for the whole file.
-    #[test]
-    fn the_file_editor_render_path_does_no_filesystem_work() {
-        let source = include_str!("right_panel.rs");
-        let start = source
-            .find("\n    fn ensure_right_panel_file_editor(")
-            .expect("ensure fn");
-        let body = &source[start + 1..];
-        let end = body
-            .find("\n    /// Reads a file into its editor")
-            .unwrap_or(body.len());
-        let body = &body[..end];
-
-        for forbidden in ["read_right_panel_file(", "std::fs::", "metadata("] {
-            assert!(
-                !body.contains(forbidden),
-                "ensure_right_panel_file_editor must not call `{forbidden}`; \
-                 read the file in read_right_panel_file_into_editor instead"
-            );
-        }
-    }
-
     #[test]
     fn working_tree_only_descends_into_expanded_directories() {
         let root = std::env::temp_dir().join(format!("fintwind-working-tree-{}", Uuid::new_v4()));

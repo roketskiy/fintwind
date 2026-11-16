@@ -1,8 +1,3 @@
-//! The agent's own task list, read from the latest plan tool call in a
-//! session. OpenCode's `todowrite` sends the complete list as
-//! `{ "todos": [{ "content", "status" }] }` with every call, so the newest
-//! plan activity is the whole state; older calls only preserve history.
-
 use fintwind_protocol::model::{ActivityKind, AgentSession};
 use serde_json::Value;
 
@@ -35,9 +30,7 @@ pub(in crate::app) struct TodoItem {
 #[derive(Clone, Debug)]
 pub(in crate::app) struct TodoSnapshot {
     pub items: Vec<TodoItem>,
-    /// Finished items, out of the total.
     pub completed: usize,
-    /// Items still waiting or running; cancelled work is not outstanding.
     pub open: usize,
 }
 
@@ -59,7 +52,6 @@ impl TodoSnapshot {
     }
 }
 
-/// The newest plan tool call in the loaded transcript, if it carries a list.
 pub(in crate::app) fn latest_snapshot(session: &AgentSession) -> Option<TodoSnapshot> {
     for block in session.transcript_blocks.iter().rev() {
         for activity in block.activities.iter().rev() {

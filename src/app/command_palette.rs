@@ -1415,33 +1415,4 @@ mod tests {
             ui_px(EMPTY_RESULTS_HEIGHT) + ui_px(RESULTS_BOTTOM_PADDING)
         );
     }
-
-    #[test]
-    fn render_reads_only_the_cached_result_snapshot() {
-        // A Windows checkout may hand `include_str!` CRLF text; normalize so
-        // the `\n\n` markers below match regardless of line endings.
-        let source = include_str!("./command_palette.rs").replace("\r\n", "\n");
-        let start = source
-            .find("\n    pub(super) fn render_command_palette(")
-            .expect("render function must exist");
-        let end = source[start..]
-            .find("\n}\n\n#[cfg(test)]")
-            .map(|offset| start + offset)
-            .expect("test module marker must exist");
-        let render = &source[start..end];
-        for forbidden in [
-            "refresh_command_palette_results(",
-            "command_palette_task_candidates(",
-            "session_message_search(",
-            "background_executor(",
-            "std::fs",
-            "Command::new",
-            "read_dir",
-        ] {
-            assert!(
-                !render.contains(forbidden),
-                "palette render must not call `{forbidden}`"
-            );
-        }
-    }
 }

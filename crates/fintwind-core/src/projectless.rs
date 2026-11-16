@@ -1,6 +1,3 @@
-//! One shared working directory for tasks not attached to a user project.
-//! The daemon prepares it at startup; historical session directories stay put.
-
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};

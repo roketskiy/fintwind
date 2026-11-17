@@ -13,11 +13,10 @@ use fintwind_protocol::provider_quota::{
 use super::*;
 use ely_gpui_component::{
     buttons::IconButton,
-    data_display::Badge,
     feedback::InlineMessage,
     primitives::{IconName, Severity},
     theme::ControlSize,
-    typography::{Caption, Label, Title, tabular},
+    typography::{Caption, Label, tabular},
 };
 
 /// Board display order: local agents first, then coding plans, then
@@ -203,9 +202,7 @@ impl Fintwind {
                 }
                 if this.provider_workspace() != requested_workspace {
                     this.invalidate_subscriptions();
-                    if this.mode == WorkspaceMode::Usage
-                        && this.usage_tab == usage_page::UsageTab::Subscriptions
-                    {
+                    if this.mode == WorkspaceMode::Usage {
                         this.load_subscriptions(false, cx);
                     }
                     cx.notify();
@@ -281,136 +278,7 @@ impl Fintwind {
             .unwrap_or_else(|| provider.to_owned())
     }
 
-    /// One subscription card: service, account, plan (only when the vendor
-    /// told one), windows with resets, balances, and an explicit state line
-    /// whenever the reading is not fresh. Numbers are tabular; status never
-    /// rides on color alone.
-    pub(super) fn render_subscription_card(
-        &self,
-        provider: &str,
-        loading: bool,
-        reading: Option<&ProviderQuota>,
-        slots: (usize, usize),
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let title = self.subscription_display_name(provider);
-        let refresh = self.subscription_refresh_button(provider, loading, cx);
-        let (balance_only, _) = subscription_layout(provider, reading);
-        let has_data = reading.is_some_and(|q| !q.windows.is_empty() || !q.balances.is_empty());
-        let account = reading
-            .and_then(|q| q.account.as_ref())
-            .filter(|s| !s.is_empty());
-        let plan = reading
-            .and_then(|q| q.plan.as_ref())
-            .filter(|s| !s.is_empty());
-        let identity = div()
-            .min_w_0()
-            .flex_none()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .min_w_0()
-                    .child(crate::ui::model_mark_element(
-                        crate::ui::provider_mark(provider, theme.is_dark),
-                        22.0,
-                        theme.text,
-                    ))
-                    .child(Title::new(title).flex_1().min_w_0().truncate())
-                    .child(refresh),
-            )
-            .when(!balance_only || account.is_some(), |identity| {
-                identity.child(
-                    div()
-                        .h_5()
-                        .children(account.map(|account| Caption::new(account.clone()).truncate())),
-                )
-            })
-            .when(!balance_only || plan.is_some(), |identity| {
-                identity.child(
-                    div()
-                        .h_6()
-                        .flex()
-                        .items_start()
-                        .children(plan.map(|plan| Badge::new(plan.clone()))),
-                )
-            });
-        // Only window-based peers reserve matching meter slots. Balance-only
-        // peers size to their real data, without empty identity or meter lanes.
-        let mut body = div()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .when(balance_only, |body| body.min_h(gpui::rems(4.5)))
-            .when(!balance_only, |body| {
-                body.flex_1()
-                    .min_h(gpui::rems(slots.0 as f32 * 4.5 + slots.1 as f32 * 2.0))
-            });
-        let mut status = div().flex_1().min_w_0();
-        if loading {
-            status = status.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(crate::ui::motion::spin_slow(crate::ui::icon(
-                        "icons/loader-circle.svg",
-                        12.0,
-                        theme.text_tertiary,
-                    )))
-                    .child(Caption::new(tr!("providers.quota_loading"))),
-            );
-        } else if let Some(state) = subscription_state_line(
-            reading.map(|q| &q.status).unwrap_or(&QuotaStatus::NoData),
-            theme,
-        ) {
-            status = status.child(state);
-        }
-        let mut footer = div()
-            .min_h(gpui::rems(1.75))
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap_2()
-            .child(status);
-        if loading && !has_data {
-            body = body.child(subscription_loading_body(balance_only, slots, *theme));
-        }
-        if let Some(q) = reading {
-            for balance in &q.balances {
-                body = body.child(quota_balance_row(balance, balance_only));
-            }
-            for window in &q.windows {
-                body = body.child(quota_window(window, theme));
-            }
-            if let Some(at) = q.measured_at.and_then(|at| DateTime::from_timestamp(at, 0)) {
-                let time = quota_time(at.with_timezone(&Local));
-                let measured = if q.status != QuotaStatus::Ready {
-                    tr!("providers.quota_cached_measured", time = time)
-                } else {
-                    tr!("providers.quota_measured", time = time)
-                };
-                footer = footer.child(tabular(Caption::new(measured)).flex_none().text_right());
-            }
-        }
-        super::usage_page::usage_card(theme)
-            .id(SharedString::from(format!("subscription-card-{provider}")))
-            .h_full()
-            .p_5()
-            .gap_4()
-            .child(identity)
-            .child(body)
-            .child(footer)
-            .into_any_element()
-    }
-
-    /// Compact carousel presentation of the same provider snapshot used by
-    /// the detailed subscription board.
+    /// Compact carousel presentation of the provider snapshot.
     pub(super) fn render_subscription_slide(
         &self,
         provider: &str,
@@ -441,19 +309,8 @@ impl Fintwind {
         ) {
             footer = footer.child(status);
         }
-        if let Some(quota) = reading
-            && let Some(at) = quota.measured_at.and_then(|at| DateTime::from_timestamp(at, 0))
-        {
-            let time = quota_time(at.with_timezone(&Local));
-            footer = footer.child(Caption::new(if quota.status == QuotaStatus::Ready {
-                tr!("providers.quota_measured", time = time)
-            } else {
-                tr!("providers.quota_cached_measured", time = time)
-            }));
-        }
         div().id(SharedString::from(format!("subscription-slide-{provider}")))
-            .min_h(px(216.0)).bg(theme.composer).border_1().border_color(theme.border)
-            .rounded(px(6.0)).p_3().flex().flex_col().gap_2()
+            .min_h(px(216.0)).p_3().flex().flex_col().gap_2()
             .child(div().flex().items_center().gap_2().border_b_1().border_color(theme.border).pb_2()
                 .child(div().flex_1().min_w_0().text_size(ui_px(15.0)).font_weight(FontWeight::MEDIUM)
                     .truncate().child(self.subscription_display_name(provider)))
@@ -582,47 +439,6 @@ fn subscription_loading_body(
     })
     .every(3)
     .into_any_element()
-}
-
-pub(super) fn subscription_loading_card(balance_only: bool, theme: &Theme) -> AnyElement {
-    let block = || div().rounded(px(3.0)).bg(theme.overlay_strong);
-    let identity = div()
-        .flex_none()
-        .flex()
-        .flex_col()
-        .gap_2()
-        .child(
-            div()
-                .h_7()
-                .flex()
-                .items_center()
-                .gap_3()
-                .child(block().size(px(22.0)))
-                .child(block().w(gpui::rems(10.0)).h_5()),
-        )
-        .when(!balance_only, |identity| {
-            identity.child(div().h_5()).child(div().h_6())
-        });
-    super::usage_page::usage_card(theme)
-        .h_full()
-        .p_5()
-        .gap_4()
-        .child(identity)
-        .child(
-            div()
-                .flex_1()
-                .min_h(gpui::rems(if balance_only { 4.5 } else { 13.5 }))
-                .child(subscription_loading_body(balance_only, (3, 0), *theme)),
-        )
-        .child(
-            div()
-                .h_7()
-                .flex()
-                .justify_end()
-                .items_center()
-                .child(block().w(gpui::rems(8.0)).h_3()),
-        )
-        .into_any_element()
 }
 
 /// A state line with an icon and words: status is never color-only.

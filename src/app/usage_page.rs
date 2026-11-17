@@ -20,10 +20,8 @@ use ely_gpui_component::{
     buttons::{Button, ButtonVariant, IconButton, SegmentedControl},
     charts::CalendarHeatmap,
     feedback::{Alert, EmptyState},
-    forms::Choice,
     layout::CardHeader,
     lists::{List, ListItem},
-    navigation::Tabs,
     primitives::{IconName, Severity},
     theme::ControlSize,
     typography::{Caption, Label, tabular},
@@ -50,13 +48,7 @@ const STALE_AFTER: Duration = Duration::from_secs(60);
 /// that is actively streaming lands within half a minute of its next hop.
 /// Model rows drawn before the rest collapse into the header's model count.
 const MAX_MODEL_ROWS: usize = 8;
-
-#[derive(Clone, Copy, Default, Eq, PartialEq)]
-pub(super) enum UsageTab {
-    Subscriptions,
-    #[default]
-    Statistics,
-}
+const MAX_RANK_ROWS: usize = 5;
 
 /// What the KPI cards, timelines, and model ranking aggregate over. The
 /// heatmap keeps its own fixed week window, like GitHub's, so a short range
@@ -95,7 +87,7 @@ impl UsageRange {
             Self::All => "usage_page.range_all",
             Self::Days30 => "usage_page.range_30d",
             Self::Days7 => "usage_page.range_7d",
-            Self::Day(_) => "usage_page.range_today",
+            Self::Day(_) => "usage_page.range_day",
         })
     }
 
@@ -364,9 +356,7 @@ impl Fintwind {
                     this.usage_price_table = Some(table);
                     this.usage_stats_loaded_at = None;
                     if this.mode == WorkspaceMode::Usage {
-                        if this.usage_tab == UsageTab::Statistics {
-                            this.ensure_usage_stats(false, cx);
-                        }
+                        this.ensure_usage_stats(false, cx);
                     }
                 }
             });
@@ -478,7 +468,6 @@ impl Fintwind {
                         this.usage_stats_error = stats.refresh_error.clone();
                         this.usage_stats_loaded_at = Some(Instant::now());
                         if !stats.refreshing && stats.refresh_error.is_none() {
-                            this.usage_loaded_label = Some(clock_label());
                         }
                         this.usage_stats = Some(Arc::new(stats));
                         this.rebuild_usage_views(cx);
@@ -523,9 +512,7 @@ impl Fintwind {
                             this.usage_refresh_running = false;
                             return false;
                         }
-                        if this.usage_tab == UsageTab::Statistics {
-                            this.ensure_usage_stats(false, cx);
-                        }
+                        this.ensure_usage_stats(false, cx);
                         true
                     })
                     .unwrap_or(false);
@@ -537,30 +524,13 @@ impl Fintwind {
         .detach();
     }
 
-    /// The toolbar's freshness reading: the wall-clock time the stored scan
-    /// landed, or nothing before the first one.
-    pub(super) fn usage_freshness_label(&self) -> Option<SharedString> {
-        self.usage_loaded_label
-            .as_deref()
-            .map(|label| SharedString::from(tr!("usage_page.updated_at", time = label)))
-    }
-
     pub(super) fn set_usage_range(&mut self, range: UsageRange, cx: &mut Context<Self>) {
         if self.usage_range == range {
             return;
         }
         self.usage_range = range;
         self.usage_flow_selection = None;
-        self.usage_ranking_page = 0;
-        self.usage_project_page = 0;
         self.rebuild_usage_views(cx);
-    }
-
-    fn shift_usage_day(&mut self, delta: i64, cx: &mut Context<Self>) {
-        if let UsageRange::Day(offset) = self.usage_range {
-            let next = (i64::from(offset) + delta).clamp(0, DAY_WINDOW - 1) as u8;
-            self.set_usage_range(UsageRange::Day(next), cx);
-        }
     }
 
     fn rebuild_usage_views(&mut self, cx: &mut Context<Self>) {
@@ -577,9 +547,6 @@ impl Fintwind {
                 if this.usage_views_generation == generation {
                     this.usage_views = views;
                     this.usage_flow_selection = None;
-                    let count = if this.usage_ranking_provider { this.usage_views.provider_count } else { this.usage_views.model_count };
-                    this.usage_ranking_page = this.usage_ranking_page.min(count.saturating_sub(1) / MAX_MODEL_ROWS);
-                    this.usage_project_page = this.usage_project_page.min(this.usage_views.project_count.saturating_sub(1) / MAX_MODEL_ROWS);
                     cx.notify();
                 }
             });
@@ -601,30 +568,6 @@ impl Fintwind {
             self.native_binary_path().is_none() || self.state.selected_project.is_none();
 
         let mut column = div().flex().flex_col().gap_6().min_w_0().w_full();
-
-        if self.usage_tab == UsageTab::Subscriptions {
-            if self.subscriptions_connection_error() {
-                column = column.child(Alert::new(
-                    "usage-connections-error",
-                    Severity::Warning,
-                    tr!("usage_page.connections_failed"),
-                ));
-            }
-            if let Some(board) = self.render_usage_subscriptions(window, &theme, cx) {
-                column = column.child(board);
-            } else if self.subscriptions_loading() {
-                column = column.child(self.render_usage_subscriptions_loading(window, &theme));
-            } else if self.subscriptions_connection_error() {
-                // The alert above owns this state; a failed snapshot is not empty.
-            } else {
-                column = column.child(EmptyState::new(
-                    "usage-subscriptions-empty",
-                    IconName::Gauge,
-                    tr!("usage_page.subscriptions_empty"),
-                ));
-            }
-            return column.into_any_element();
-        }
 
         if let Some(error) = &self.usage_stats_error {
             column = column.child(
@@ -707,12 +650,7 @@ impl Fintwind {
                 };
                 let projects = self.render_usage_projects(views, &theme, false, cx);
                 history = history.child(self.usage_grid(window, 22.0, [trend.into_any_element(), ranking.into_any_element(), projects.into_any_element()]));
-                if !matches!(self.usage_range, UsageRange::Day(_)) {
-                    history = history.child(Button::new("usage-heatmap-toggle", tr!("usage_page.heatmap_title"))
-                        .size(ControlSize::Sm).variant(ButtonVariant::Ghost)
-                        .on_click(cx.listener(|this, _, _, cx| {this.usage_heatmap_expanded = !this.usage_heatmap_expanded;cx.notify();})));
-                    if self.usage_heatmap_expanded { history = history.child(self.render_usage_heatmap(views, &theme)); }
-                }
+                history = history.child(self.render_usage_heatmap(views, &theme));
                 column = column.child(history);
             }
         }
@@ -727,7 +665,7 @@ impl Fintwind {
     /// subscription page available for refresh/status and overflow cases.
     fn render_usage_quota_compact(&self, theme: &Theme, compact: bool, cx: &mut Context<Self>) -> Div {
         let cards = self.subscription_cards();
-        let width = if compact { (f32::from(self.usage_content_width) - 24.0).max(240.0) } else { 280.0 };
+        let width = if compact { (f32::from(self.usage_content_width) - 24.0).max(0.0) } else { 276.0 };
         let current = self.usage_quota_index.min(cards.len().saturating_sub(1));
         let slots = cards.iter().map(|(provider, _, reading)| {
             let (_, windows) = providers_quota::subscription_layout(provider, reading.as_ref());
@@ -764,7 +702,10 @@ impl Fintwind {
             let position = (i as f32 - current as f32) * width + offset;
             let content = self.render_subscription_slide(provider, *loading, reading.as_ref(), slots, theme, cx);
             let child = div().id(SharedString::from(format!("usage-quota-slide-{provider}")))
-                .absolute().left(px(position)).top_0().w(px(width)).h_full().overflow_y_scroll().child(content);
+                .absolute().left(px(position)).top_0().w(px(width)).h_full()
+                .bg(theme.composer).border_1().border_color(theme.border).rounded(px(6.0)).overflow_hidden()
+                .child(div().id(SharedString::from(format!("usage-quota-content-{provider}")))
+                    .size_full().overflow_y_scroll().child(content));
             let child = if self.usage_quota_drag.is_none() {
                 if let Some((from, generation)) = self.usage_quota_snap {
                     child.with_animation(
@@ -776,7 +717,7 @@ impl Fintwind {
             } else { child.into_any_element() };
             strip = strip.child(child);
         }
-        let mut positions = div().flex().items_center().justify_center().gap_1().h(px(28.0));
+        let mut positions = div().flex_none().flex().items_center().justify_center().gap_1().h(px(28.0));
         let count = self.subscription_cards().len();
         for i in 0..count {
             let active = i == current;
@@ -844,139 +785,21 @@ impl Fintwind {
         cx.notify();
     }
 
-    /// Connected subscriptions are independent of the history's workspace
-    /// and time filter. Hide an empty board without leaving a header.
-    fn render_usage_subscriptions(
-        &self,
-        window: &Window,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let cards = self.subscription_cards();
-        if cards.is_empty() {
-            return None;
-        }
-        let mut section = div().flex().flex_col().gap_4();
-        let mut grid_cards = Vec::new();
-        let mut balance_cards = Vec::new();
-        let slots = cards
-            .iter()
-            .map(|(provider, _, reading)| {
-                let (_, windows) = providers_quota::subscription_layout(provider, reading.as_ref());
-                (
-                    windows,
-                    reading
-                        .as_ref()
-                        .filter(|q| !q.windows.is_empty())
-                        .map_or(0, |q| q.balances.len()),
-                )
-            })
-            .fold((1, 0), |(windows, balances), next| {
-                (windows.max(next.0), balances.max(next.1))
-            });
-        for (provider, loading, reading) in &cards {
-            let (balance_only, _) =
-                providers_quota::subscription_layout(provider, reading.as_ref());
-            let card = self.render_subscription_card(
-                provider,
-                *loading,
-                reading.as_ref(),
-                slots,
-                theme,
-                cx,
-            );
-            if balance_only {
-                balance_cards.push(card);
-            } else {
-                grid_cards.push(card);
-            }
-        }
-        if !grid_cards.is_empty() {
-            section = section.child(self.usage_grid(window, 22.0, grid_cards));
-        }
-        // Balance-only cards form a compact peer group, rather than borrowing
-        // the height of services with several reset windows.
-        if !balance_cards.is_empty() {
-            let single_balance = balance_cards.len() == 1;
-            section = section.child(
-                self.usage_grid(window, 22.0, balance_cards)
-                    .when(single_balance, |grid| {
-                        grid.max_w(gpui::rems(32.0)).self_center()
-                    }),
-            );
-        }
-        Some(section.into_any_element())
-    }
-
-    fn render_usage_subscriptions_loading(&self, window: &Window, theme: &Theme) -> Div {
-        // Generic shapes, not guessed provider connections or quota values.
-        div()
-            .flex()
-            .flex_col()
-            .gap_4()
-            .child(self.usage_grid(
-                window,
-                22.0,
-                [
-                    providers_quota::subscription_loading_card(false, theme),
-                    providers_quota::subscription_loading_card(false, theme),
-                ],
-            ))
-            .child(
-                self.usage_grid(
-                    window,
-                    22.0,
-                    [providers_quota::subscription_loading_card(true, theme)],
-                )
-                .max_w(gpui::rems(32.0))
-                .self_center(),
-            )
-    }
-
     pub(super) fn render_usage_toolbar(&self, _theme: &Theme, cx: &mut Context<Self>) -> Div {
-        let tabs = Tabs::new(
-            "usage-pages",
-            [
-                Choice::new("statistics", tr!("usage_page.statistics_title")),
-                Choice::new("subscriptions", tr!("usage_page.subscriptions_title")),
-            ],
-            match self.usage_tab {
-                UsageTab::Subscriptions => "subscriptions",
-                UsageTab::Statistics => "statistics",
-            },
-        )
-        .on_change(cx.listener(|this, value: &SharedString, _, cx| {
-            this.usage_tab = if value.as_ref() == "statistics" {
-                UsageTab::Statistics
-            } else {
-                UsageTab::Subscriptions
-            };
-            this.settings_scroll.set_offset(point(px(0.0), px(0.0)));
-            if this.usage_tab == UsageTab::Statistics {
-                this.ensure_usage_stats(false, cx);
-            } else {
-                this.load_subscriptions(false, cx);
-            }
-            cx.notify();
-        }));
-        let pending = match self.usage_tab {
-            UsageTab::Statistics => self.usage_stats_pending,
-            UsageTab::Subscriptions => self.subscriptions_loading(),
-        };
         let refresh = IconButton::new("usage-refresh", IconName::RefreshCw)
             .size(ControlSize::Sm)
-            .disabled(pending)
+            .disabled(self.usage_stats_pending)
             .tooltip(tr!("usage_page.refresh"))
-            .on_click(cx.listener(|this, _, _, cx| match this.usage_tab {
-                UsageTab::Subscriptions => this.load_subscriptions(true, cx),
-                UsageTab::Statistics => this.ensure_usage_stats(true, cx),
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.ensure_usage_stats(true, cx);
+                this.load_subscriptions(true, cx);
             }));
         div()
             .flex()
             .items_center()
             .h_8()
             .gap_3()
-            .child(div().flex_none().child(tabs))
+            .child(div().text_size(ui_px(16.0)).font_weight(FontWeight::MEDIUM).child(tr!("usage_page.statistics_title")))
             .child(div().flex_1().min_w_0())
             .child(refresh)
     }
@@ -985,7 +808,7 @@ impl Fintwind {
     fn render_usage_history_filter(
         &self,
         window: &Window,
-        theme: &Theme,
+        _theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Div {
         let mut selector =
@@ -997,30 +820,22 @@ impl Fintwind {
             this.set_usage_range(UsageRange::from_key(value), cx);
         }));
         let day_navigation = if let UsageRange::Day(offset) = self.usage_range {
-            let date = Local::now().date_naive() - ChronoDuration::days(i64::from(offset));
-            Some(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(usage_day_button(
-                        "usage-day-previous",
-                        "icons/chevron-left.svg",
-                        offset < (DAY_WINDOW - 1) as u8,
-                        1,
-                        theme,
-                        cx,
-                    ))
-                    .child(tabular(Label::new(date.format("%Y-%m-%d").to_string())))
-                    .child(usage_day_button(
-                        "usage-day-next",
-                        "icons/chevron-right.svg",
-                        offset > 0,
-                        -1,
-                        theme,
-                        cx,
-                    )),
-            )
+            let today = Local::now().date_naive();
+            let date = today - ChronoDuration::days(i64::from(offset));
+            let earliest = today - ChronoDuration::days(DAY_WINDOW - 1);
+            let weak = cx.entity().downgrade();
+            Some(ely_gpui_component::forms::DatePicker::new(
+                "usage-day-picker", date.to_string().parse().ok(),
+            ).range(earliest.to_string().parse().ok(), today.to_string().parse().ok())
+                .on_change(move |date, _, cx| {
+                    let selected = date.strftime("%Y-%m-%d").to_string();
+                    if let Ok(selected) = NaiveDate::parse_from_str(&selected, "%Y-%m-%d") {
+                        let offset = (Local::now().date_naive() - selected).num_days();
+                        let _ = weak.update(cx, |this, cx| {
+                            this.set_usage_range(UsageRange::Day(offset.clamp(0, DAY_WINDOW - 1) as u8), cx);
+                        });
+                    }
+                }))
         } else {
             None
         };
@@ -1028,30 +843,11 @@ impl Fintwind {
             && self.usage_content_width < gpui::rems(36.0).to_pixels(window.rem_size());
         div()
             .flex()
-            .flex_col()
+            .items_center()
             .gap_2()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_4()
-                    .when(stacked, |row| row.flex_col().items_start())
-                    .child(div().flex_none().child(selector))
-                    .child(div().flex_1().min_w_0())
-                    // Keep the same date lane even outside the single-day range.
-                    .child(
-                        div()
-                            .w(gpui::rems(11.0))
-                            .h_6()
-                            .flex_none()
-                            .children(day_navigation),
-                    ),
-            )
-            .child(
-                div()
-                    .h_4()
-                    .children(self.usage_freshness_label().map(Caption::new)),
-            )
+            .when(stacked, |row| row.flex_wrap())
+            .child(div().flex_none().child(selector))
+            .children(day_navigation)
     }
 
     fn render_usage_kpis(&self, views: &UsageViews, _window: &Window, theme: &Theme) -> Div {
@@ -1196,7 +992,7 @@ impl Fintwind {
         let rows = views
             .models
             .iter()
-            .enumerate().skip(self.usage_ranking_page * MAX_MODEL_ROWS).take(MAX_MODEL_ROWS).map(|(index, row)| {
+            .enumerate().take(MAX_RANK_ROWS).map(|(index, row)| {
                 // The tile carries the model id; the tooltip carries the
                 // whole `provider/model`, because two providers can serve the
                 // same id and the bare one cannot tell them apart.
@@ -1224,9 +1020,6 @@ impl Fintwind {
             theme,
             ranking_row_count(views),
             views.totals.total(),
-            self.usage_ranking_page,
-            views.model_count,
-            false,
             Some(usage_ranking_selector(self.usage_ranking_provider, cx)),
             cx,
         )
@@ -1239,7 +1032,7 @@ impl Fintwind {
         let rows: Vec<UsageRankRow> = views
             .providers
             .iter()
-            .enumerate().skip(self.usage_ranking_page * MAX_MODEL_ROWS).take(MAX_MODEL_ROWS).map(|(index, row)| UsageRankRow {
+            .enumerate().take(MAX_RANK_ROWS).map(|(index, row)| UsageRankRow {
                 id: format!("usage-provider-{}", row.provider),
                 tooltip: row.provider.clone(),
                 display: row.provider.clone(),
@@ -1255,9 +1048,6 @@ impl Fintwind {
             theme,
             ranking_row_count(views),
             views.totals.total(),
-            self.usage_ranking_page,
-            views.provider_count,
-            false,
             Some(usage_ranking_selector(self.usage_ranking_provider, cx)),
             cx,
         )
@@ -1269,7 +1059,7 @@ impl Fintwind {
         let rows: Vec<UsageRankRow> = views
             .projects
             .iter()
-            .enumerate().skip(self.usage_project_page * MAX_MODEL_ROWS).take(MAX_MODEL_ROWS).map(|(index, row)| UsageRankRow {
+            .enumerate().take(MAX_RANK_ROWS).map(|(index, row)| UsageRankRow {
                 id: format!("usage-project-{}", row.directory),
                 tooltip: row.directory.clone(),
                 display: project_display_name(&row.directory),
@@ -1285,42 +1075,10 @@ impl Fintwind {
             theme,
             ranking_row_count(views),
             views.totals.total(),
-            self.usage_project_page,
-            views.project_count,
-            true,
             None,
             cx,
         )
     }
-}
-
-fn usage_day_button(
-    id: &'static str,
-    _icon_path: &'static str,
-    enabled: bool,
-    delta: i64,
-    _theme: &Theme,
-    cx: &mut Context<Fintwind>,
-) -> IconButton {
-    IconButton::new(
-        id,
-        if delta > 0 {
-            IconName::ChevronLeft
-        } else {
-            IconName::ChevronRight
-        },
-    )
-    .size(ControlSize::Sm)
-    .disabled(!enabled)
-    .tooltip(tr!(match delta {
-        1 => "usage_page.previous_day",
-        _ => "usage_page.next_day",
-    }))
-    .on_click(cx.listener(move |this, _, _, cx| {
-        if enabled {
-            this.shift_usage_day(delta, cx);
-        }
-    }))
 }
 
 #[derive(Clone)]
@@ -1363,7 +1121,6 @@ fn usage_ranking_selector(provider: bool, cx: &mut Context<Fintwind>) -> AnyElem
         .segment("provider", tr!("usage_page.providers_title"), None)
         .on_change(cx.listener(|this, value: &SharedString, _, cx| {
             this.usage_ranking_provider = value.as_ref() == "provider";
-            this.usage_ranking_page = 0;
             cx.notify();
         }))
         .into_any_element()
@@ -1379,9 +1136,6 @@ fn usage_ranking_card(
     theme: &Theme,
     row_count: usize,
     total: u64,
-    page: usize,
-    count: usize,
-    project: bool,
     selector: Option<AnyElement>,
     cx: &mut Context<Fintwind>,
 ) -> Div {
@@ -1434,21 +1188,6 @@ fn usage_ranking_card(
                 ),
             )
     }));
-    let pages = count.div_ceil(MAX_MODEL_ROWS).max(1);
-    let pagination = div().flex().items_center().justify_end().gap_2()
-        .child(Button::new(if project {"usage-project-prev"} else {"usage-rank-prev"}, "‹")
-            .size(ControlSize::Sm).disabled(page == 0)
-            .on_click(cx.listener(move |this, _, _, cx| {
-                let page = if project { &mut this.usage_project_page } else { &mut this.usage_ranking_page };
-                *page = page.saturating_sub(1); cx.notify();
-            })))
-        .child(Caption::new(format!("{} / {}", page + 1, pages)))
-        .child(Button::new(if project {"usage-project-next"} else {"usage-rank-next"}, "›")
-            .size(ControlSize::Sm).disabled(page + 1 >= pages)
-            .on_click(cx.listener(move |this, _, _, cx| {
-                let page = if project { &mut this.usage_project_page } else { &mut this.usage_ranking_page };
-                *page = (*page + 1).min(pages - 1); cx.notify();
-            })));
     usage_card(theme)
         .h_full()
         .p_3()
@@ -1458,7 +1197,6 @@ fn usage_ranking_card(
             .children(selector))
         .child(div().bg(theme.composer).border_1().border_color(theme.border).rounded(px(6.0))
             .min_h(gpui::rems(2.0 * row_count as f32)).child(list))
-        .when(pages > 1, |card| card.child(pagination))
 }
 
 fn ranking_row_count(views: &UsageViews) -> usize {
@@ -1467,7 +1205,7 @@ fn ranking_row_count(views: &UsageViews) -> usize {
         .len()
         .max(views.providers.len())
         .max(views.projects.len())
-        .min(MAX_MODEL_ROWS)
+        .min(MAX_RANK_ROWS)
         .max(1)
 }
 
@@ -1524,10 +1262,6 @@ fn local_date(timestamp: u64) -> Option<NaiveDate> {
 }
 
 /// `HH:MM` in the local zone, for the toolbar's freshness reading.
-fn clock_label() -> String {
-    Local::now().format("%H:%M").to_string()
-}
-
 /// Session message-day shares, or one last-touched share when unsplit.
 /// Older scans lacking sub-agent day shares receive only their unallocated
 /// remainder here; current scans place child usage on the child's date.

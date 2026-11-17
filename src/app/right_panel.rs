@@ -1567,6 +1567,9 @@ impl Fintwind {
             .border_l_1()
             .border_color(theme.border_strong)
             .bg(theme.surface)
+            // Flush with the card top while the tab band exists; the rounded
+            // corner keeps the surface out of the card's corner cutout.
+            .rounded_tr(px(super::render::WORKSPACE_CORNER_RADIUS))
             .relative()
             .child(self.render_right_panel_header(cx))
             .child(body)

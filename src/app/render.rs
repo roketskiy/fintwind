@@ -2,7 +2,7 @@ use crate::theme::ui_px;
 
 use super::*;
 
-const WORKSPACE_CORNER_RADIUS: f32 = 10.0;
+pub(super) const WORKSPACE_CORNER_RADIUS: f32 = 10.0;
 
 fn should_render_empty_state(session: Option<&AgentSession>) -> bool {
     session
@@ -401,6 +401,9 @@ impl Render for Fintwind {
                     .flex()
                     .flex_col()
                     .bg(theme.surface)
+                    // With the tab band flush at the card top, the column's
+                    // own surface must round away from the corner cutout too.
+                    .rounded_tl(px(WORKSPACE_CORNER_RADIUS))
                     // External-path drops bubble from descendants, so handle
                     // them once on the chat column rather than also on the
                     // composer card. The same column is the drop group the
@@ -645,14 +648,25 @@ impl Render for Fintwind {
                             .bg(theme.surface)
                             // The card floats in the rail-colored frame: the
                             // bottom and right edge gaps expose it, and all
-                            // four corners round away from it. The vertical
+                            // four corners round away from it. The bottom
                             // padding matches the radius so no child paints
-                            // over the corner cutouts.
+                            // over the corner cutouts; the top padding drops
+                            // while the Chrome-style tab band sits flush
+                            // against the card's top edge.
                             .rounded_tl(px(WORKSPACE_CORNER_RADIUS))
                             .rounded_tr(px(WORKSPACE_CORNER_RADIUS))
                             .rounded_bl(px(WORKSPACE_CORNER_RADIUS))
                             .rounded_br(px(WORKSPACE_CORNER_RADIUS))
-                            .py(px(WORKSPACE_CORNER_RADIUS))
+                            .pt(px(
+                                if self.mode == WorkspaceMode::Sessions
+                                    && !self.open_tabs.is_empty()
+                                {
+                                    0.0
+                                } else {
+                                    WORKSPACE_CORNER_RADIUS
+                                },
+                            ))
+                            .pb(px(WORKSPACE_CORNER_RADIUS))
                             .shadow(theme.workspace_shadow())
                             .child(main_area)
                             // The right panel belongs to the session mode only;

@@ -16,9 +16,11 @@ pub(super) struct SessionTabDrag {
 /// Pointer travel before a press starts reordering tabs, so a jittery click
 /// never shuffles the strip.
 const SESSION_TAB_DRAG_THRESHOLD: f32 = 4.0;
-const SESSION_TAB_HEIGHT: f32 = 30.0;
+pub(super) const SESSION_TAB_HEIGHT: f32 = 34.0;
 const SESSION_TAB_WIDTH: f32 = 190.0;
 const SESSION_TAB_FADE_WIDTH: f32 = 16.0;
+/// Chrome-style tab corner: the top radius and the concave foot flare.
+const SESSION_TAB_FOOT: f32 = 8.0;
 
 /// Which tab a drag lands on, given every tab's `(left, right)` span in the
 /// strip and the pointer's x.
@@ -127,11 +129,8 @@ impl Fintwind {
             .w(px(28.0))
             .h(px(28.0))
             .flex_none()
-            .mr(px(4.0))
-            .rounded(px(7.0))
-            // A resting wash makes the button a visible target beside the
-            // tabs; hover and press climb the same neutral layers the tabs use.
-            .bg(theme.overlay)
+            .ml(px(2.0))
+            .rounded_full()
             .flex()
             .items_center()
             .justify_center()
@@ -169,14 +168,22 @@ impl Fintwind {
             .min_w_0()
             .flex()
             .items_center()
-            .gap(px(2.0))
+            // A breath before the first tab, as in Chrome; it also keeps the
+            // first tab clear of the card's rounded top-left corner.
+            .pl(px(SESSION_TAB_FOOT))
             .overflow_x_scroll()
             .track_scroll(&self.session_tabs_scroll_handle);
         let session_ids = self.open_tabs.clone();
-        for session_id in session_ids.into_iter() {
+        let tab_count = session_ids.len();
+        for (index, session_id) in session_ids.iter().enumerate() {
+            let next_active = session_ids
+                .get(index + 1)
+                .is_some_and(|next| active_tab == Some(*next));
             strip = strip.child(self.render_session_tab(
-                session_id,
-                active_tab == Some(session_id),
+                *session_id,
+                active_tab == Some(*session_id),
+                next_active,
+                index + 1 == tab_count,
                 cx,
             ));
         }
@@ -233,12 +240,12 @@ impl Fintwind {
             .child(tab_fade(
                 self.session_tabs_scroll_handle.clone(),
                 TabFadeSide::Left,
-                theme.surface,
+                theme.rail,
             ))
             .child(tab_fade(
                 self.session_tabs_scroll_handle.clone(),
                 TabFadeSide::Right,
-                theme.surface,
+                theme.rail,
             ));
         let drag_filler = self.window_drag_region(
             div()
@@ -253,8 +260,8 @@ impl Fintwind {
             .flex()
             .items_center()
             .min_w_0()
-            .child(new_tab_button)
             .child(strip_host)
+            .child(new_tab_button)
             .child(drag_filler)
             .into_any_element()
     }
@@ -263,6 +270,8 @@ impl Fintwind {
         &self,
         session_id: Uuid,
         active: bool,
+        next_active: bool,
+        is_last: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = Theme::current(cx);
@@ -320,26 +329,43 @@ impl Fintwind {
             .entry(session_id)
             .or_insert_with(|| cx.focus_handle())
             .clone();
+        // Chrome-style silhouette: a rounded-top body whose bottom corners
+        // flare out through concave feet into the strip. Each foot is a
+        // square of tab color with a strip-colored circle carved out of its
+        // outer top corner, so the flare reads as one continuous curve.
+        let group = SharedString::from(format!("session-tab-group-{session_id}"));
+        let foot = |left: bool| {
+            div()
+                .absolute()
+                .bottom_0()
+                .when(left, |element| element.left_0())
+                .when(!left, |element| element.right_0())
+                .size(px(SESSION_TAB_FOOT))
+                .overflow_hidden()
+                .when(active, |element| element.bg(theme.surface))
+                .group_hover(group.clone(), |element| element.bg(theme.overlay))
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(-SESSION_TAB_FOOT))
+                        .when(left, |element| element.left(px(-SESSION_TAB_FOOT)))
+                        .when(!left, |element| element.right(px(-SESSION_TAB_FOOT)))
+                        .size(px(SESSION_TAB_FOOT * 2.0))
+                        .rounded_full()
+                        .bg(theme.rail),
+                )
+        };
         let tab = div()
             .id(SharedString::from(format!("session-tab-{session_id}")))
+            .group(group.clone())
             .h(px(SESSION_TAB_HEIGHT))
             .w(px(SESSION_TAB_WIDTH))
-            .px(px(8.0))
-            .rounded(px(7.0))
             .flex_none()
-            .flex()
-            .items_center()
-            .gap(px(6.0))
+            .relative()
             .cursor_default()
             .track_focus(&focus)
             .tab_index(0)
             .focus_visible(|style| style.border_1().border_color(theme.accent))
-            .when(active, |element| element.bg(theme.overlay_strong))
-            .when(!active, |element| {
-                element
-                    .hover(|element| element.bg(theme.overlay))
-                    .active(|element| element.bg(theme.overlay_strong))
-            })
             // A tab activates on press, like a browser tab; the same press
             // arms the drag that may reorder the strip.
             .on_mouse_down(
@@ -382,82 +408,114 @@ impl Fintwind {
                     _ => {}
                 }
             }))
-            .when(busy, |element| {
-                // A live turn in this session — foreground or background. The
-                // spinner rides the pulse clock inside this island, so its
-                // ticks never rebuild the rest of the window.
-                element.child(div().flex_none().child(motion::spin(icon(
-                    "icons/loader-circle.svg",
-                    12.0,
-                    theme.accent,
-                ))))
-            })
-            .when_some(attention, |element, (kind, path, color, label)| {
-                element.child(
-                    div()
-                        .id(SharedString::from(format!("tab-{kind}-{session_id}")))
-                        .size(px(12.0))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(icon(path, 12.0, color))
-                        .tooltip(Tooltip::text(label)),
-                )
-            })
-            .when(unread, |element| {
-                element.child(
-                    div()
-                        .id(SharedString::from(format!("tab-unread-{session_id}")))
-                        .size(px(7.0))
-                        .flex_none()
-                        .rounded_full()
-                        .bg(theme.accent)
-                        .tooltip(Tooltip::text(tr!("tabs.unread"))),
-                )
-            })
+            .child(foot(true))
+            .child(foot(false))
             .child(
                 div()
-                    .id(SharedString::from(format!(
-                        "session-tab-title-{session_id}"
-                    )))
-                    .min_w_0()
-                    .flex_1()
-                    .truncate()
-                    .tooltip(Tooltip::text(title.clone()))
-                    .text_size(ui_px(12.0))
-                    .text_color(if active {
-                        theme.text
-                    } else {
-                        theme.text_secondary
-                    })
-                    .child(SharedString::from(title)),
-            )
-            .child(
-                div()
-                    .id(SharedString::from(format!(
-                        "close-session-tab-{session_id}"
-                    )))
-                    .w(px(18.0))
-                    .h(px(18.0))
-                    .mx(px(-2.0))
-                    .flex_none()
-                    .rounded(px(5.0))
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px(SESSION_TAB_FOOT))
+                    .right(px(SESSION_TAB_FOOT))
+                    .rounded_t(px(SESSION_TAB_FOOT))
                     .flex()
                     .items_center()
-                    .justify_center()
-                    .hover(|element| element.bg(theme.overlay_strong))
-                    .active(|element| element.opacity(0.7))
-                    .tooltip(Tooltip::text(tr!("tabs.close")))
-                    .child(icon("icons/x.svg", 10.0, theme.text_tertiary))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                        cx.stop_propagation();
+                    .gap(px(6.0))
+                    .px(px(10.0))
+                    .when(active, |element| element.bg(theme.surface))
+                    .group_hover(group.clone(), |element| element.bg(theme.overlay))
+                    .when(busy, |element| {
+                        // A live turn in this session — foreground or background. The
+                        // spinner rides the pulse clock inside this island, so its
+                        // ticks never rebuild the rest of the window.
+                        element.child(div().flex_none().child(motion::spin(icon(
+                            "icons/loader-circle.svg",
+                            12.0,
+                            theme.accent,
+                        ))))
                     })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.close_session_tab(session_id, cx);
-                    })),
-            );
+                    .when_some(attention, |element, (kind, path, color, label)| {
+                        element.child(
+                            div()
+                                .id(SharedString::from(format!("tab-{kind}-{session_id}")))
+                                .size(px(12.0))
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(icon(path, 12.0, color))
+                                .tooltip(Tooltip::text(label)),
+                        )
+                    })
+                    .when(unread, |element| {
+                        element.child(
+                            div()
+                                .id(SharedString::from(format!("tab-unread-{session_id}")))
+                                .size(px(7.0))
+                                .flex_none()
+                                .rounded_full()
+                                .bg(theme.accent)
+                                .tooltip(Tooltip::text(tr!("tabs.unread"))),
+                        )
+                    })
+                    .child(
+                        div()
+                            .id(SharedString::from(format!(
+                                "session-tab-title-{session_id}"
+                            )))
+                            .min_w_0()
+                            .flex_1()
+                            .truncate()
+                            .tooltip(Tooltip::text(title.clone()))
+                            .text_size(ui_px(12.0))
+                            .text_color(if active {
+                                theme.text
+                            } else {
+                                theme.text_secondary
+                            })
+                            .child(SharedString::from(title)),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!(
+                                "close-session-tab-{session_id}"
+                            )))
+                            .w(px(18.0))
+                            .h(px(18.0))
+                            .mx(px(-2.0))
+                            .flex_none()
+                            .rounded(px(5.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .hover(|element| element.bg(theme.overlay_strong))
+                            .active(|element| element.opacity(0.7))
+                            .tooltip(Tooltip::text(tr!("tabs.close")))
+                            .child(icon("icons/x.svg", 10.0, theme.text_tertiary))
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                cx.stop_propagation();
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.close_session_tab(session_id, cx);
+                            })),
+                    ),
+            )
+            // A hairline between resting tabs, as in Chrome; it disappears
+            // beside the active tab and under the pointer.
+            .when(!is_last, |element| {
+                element.child(
+                    div()
+                        .absolute()
+                        .right_0()
+                        .top(px((SESSION_TAB_HEIGHT - 16.0) / 2.0))
+                        .h(px(16.0))
+                        .w(px(1.0))
+                        .bg(theme.border_strong)
+                        .when(active || next_active, |element| element.opacity(0.0))
+                        .group_hover(group, |element| element.opacity(0.0)),
+                )
+            });
         tab.into_any_element()
     }
 

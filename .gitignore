@@ -19,6 +19,7 @@ mobile/dist/
 temp/
 
 # Local resources, not part of the source tree
+/personal-development.local.md
 .agents/
 gpui-component-main/
 

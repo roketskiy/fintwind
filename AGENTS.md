@@ -1,5 +1,8 @@
 # Fintwind 开发指南
 
+## 个人开发配置
+- 开始工作时，若仓库根目录的 `personal-development.local.md` 存在，读取并遵循其中的个人开发配置；不存在时跳过。
+
 ## 语言
 - 使用中文交流
 
@@ -13,9 +16,15 @@
 - Tautological tests considered harmful.  
 - Change-detector tests considered harmful.  
 - Do not create regression tests for bug fixes without a genuine gap in behavior testing.
+- 在已经有明确指示和文档支持的情况下，不要做任何行动前检查。
+
 
 ## UI
 - 对于新 UI 首先复用 Ely 组件
+
+## 特性
+- 开发过程中不做任何多余的防御性设计。尤其是关于安全、校验方面的东西。
+
 
 ### 图标
 - 新增图标优先从 [Lucide Icons](https://lucide.dev/icons/) 获取对应 SVG，不添加 Lucide 依赖或运行时图标包。

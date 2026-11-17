@@ -646,7 +646,6 @@ impl Fintwind {
             },
         );
         let image_generate = self.image_generate.clone();
-        let image_generate_enabled = image_generate.as_ref().is_some_and(|config| config.enabled);
         let image_generate_model = image_generate
             .as_ref()
             .and_then(|config| config.model.clone());
@@ -679,7 +678,7 @@ impl Fintwind {
                 .disabled(
                     self.image_generate_busy
                         || self.image_models_loading
-                        || !image_generate_enabled,
+                        || image_generate.is_none(),
                 ),
             "image-generate-model-menu",
             &image_handle,
@@ -912,38 +911,13 @@ impl Fintwind {
                     .child(settings_separator(theme))
                     .child(
                         settings_row(
-                            "icons/modality-image.svg",
-                            tr!("settings.image_generation"),
-                            Some(tr!("settings.image_generation_description")),
+                            "icons/sparkle.svg",
+                            tr!("settings.image_generation_model"),
+                            Some(tr!("settings.image_generation_model_description")),
                             theme,
                         )
-                        .child(toggle_switch(
-                            "image-generation-toggle",
-                            image_generate_enabled,
-                            self.image_generate.is_none() || self.image_generate_busy,
-                            theme,
-                            window,
-                            cx,
-                            move |this: &mut Self, _, cx| {
-                                let enabled = this
-                                    .image_generate
-                                    .as_ref()
-                                    .is_some_and(|config| config.enabled);
-                                this.set_image_generate_enabled(!enabled, cx);
-                            },
-                        )),
+                        .child(image_model_selector),
                     )
-                    .when(image_generate_enabled, |group| {
-                        group.child(settings_separator(theme)).child(
-                            settings_row(
-                                "icons/sparkle.svg",
-                                tr!("settings.image_generation_model"),
-                                Some(tr!("settings.image_generation_model_description")),
-                                theme,
-                            )
-                            .child(image_model_selector),
-                        )
-                    })
                     .child(settings_separator(theme))
                     .child(
                         settings_row(
@@ -1921,7 +1895,7 @@ impl Fintwind {
         .detach();
     }
 
-    /// Read OpenCode's experimental image generation switch off-thread. The
+    /// Read OpenCode's default image generation model off-thread. The
     /// control renders from the stored copy and stays inert until it lands.
     fn load_image_generate(&mut self, cx: &mut Context<Self>) {
         if self.image_generate_busy {
@@ -2062,20 +2036,6 @@ impl Fintwind {
         .detach();
     }
 
-    fn set_image_generate_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        if self.image_generate_busy {
-            return;
-        }
-        let Some(mut config) = self.image_generate.clone() else {
-            return;
-        };
-        if config.enabled == enabled {
-            return;
-        }
-        config.enabled = enabled;
-        self.commit_image_generate(config, cx);
-    }
-
     fn set_image_generate_model(&mut self, model: Option<String>, cx: &mut Context<Self>) {
         if self.image_generate_busy || self.image_models_loading {
             return;
@@ -2089,10 +2049,11 @@ impl Fintwind {
         let Some(mut config) = self.image_generate.clone() else {
             return;
         };
-        if config.model == model {
+        if config.model == model && !config.legacy_boolean {
             return;
         }
         config.model = model;
+        config.legacy_boolean = false;
         self.commit_image_generate(config, cx);
     }
 

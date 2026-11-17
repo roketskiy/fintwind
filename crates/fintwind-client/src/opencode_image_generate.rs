@@ -1,6 +1,5 @@
-//! OpenCode's experimental image generation switch
-//! (`experimental.image_generate`). The key accepts `true` or an object with
-//! a default `model`; the UI stores `false` while off. File access follows
+//! OpenCode's default image generation model (`experimental.image_generate`).
+//! File access follows
 //! [`crate::opencode_shell`]: JSONC wins over JSON, and writes keep comments
 //! and unrelated formatting.
 use std::{
@@ -15,22 +14,15 @@ use jsonc_parser::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// The switch and its optional default model, as OpenCode reads them.
+/// The optional default model, as OpenCode reads it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImageGenerateConfig {
-    pub enabled: bool,
     /// `provider/model`, optionally with `#variant`. `None` lets OpenCode
     /// choose an available image model per request.
     pub model: Option<String>,
-}
-
-impl ImageGenerateConfig {
-    pub fn enabled(model: Option<String>) -> Self {
-        Self {
-            enabled: true,
-            model: model.filter(|model| !model.trim().is_empty()),
-        }
-    }
+    /// A legacy boolean written by older versions of Fintwind. Selecting
+    /// automatic removes it rather than writing another boolean.
+    pub legacy_boolean: bool,
 }
 
 pub fn config_path() -> PathBuf {
@@ -59,14 +51,13 @@ pub fn save_at(path: &Path, config: &ImageGenerateConfig) -> io::Result<()> {
     while let Some(property) = experimental.get("image_generate") {
         property.remove();
     }
-    let value = match config.model.as_deref().map(str::trim) {
-        Some(model) if config.enabled && !model.is_empty() => CstInputValue::Object(vec![(
+    if let Some(model) = config.model.as_deref().map(str::trim).filter(|model| !model.is_empty()) {
+        let value = CstInputValue::Object(vec![(
             "model".into(),
             CstInputValue::String(model.to_owned()),
-        )]),
-        _ => CstInputValue::Bool(config.enabled),
-    };
-    experimental.append("image_generate", value);
+        )]);
+        experimental.append("image_generate", value);
+    }
     write_document(path, &root)
 }
 
@@ -78,14 +69,15 @@ fn parse_setting(document: Option<&Value>) -> ImageGenerateConfig {
         return ImageGenerateConfig::default();
     };
     match entry {
-        Value::Bool(true) => ImageGenerateConfig::enabled(None),
-        Value::Object(object) => ImageGenerateConfig::enabled(
-            object
+        Value::Bool(_) => ImageGenerateConfig { model: None, legacy_boolean: true },
+        Value::Object(object) => ImageGenerateConfig {
+            model: object
                 .get("model")
                 .and_then(Value::as_str)
+                .filter(|model| !model.trim().is_empty())
                 .map(str::to_owned),
-        ),
-        // `false`, `null`, and anything OpenCode would not accept read as off.
+            legacy_boolean: false,
+        },
         _ => ImageGenerateConfig::default(),
     }
 }

@@ -100,6 +100,11 @@ const FILE_TREE_MAX_WIDTH: f32 = 360.0;
 const FILE_EDITOR_MIN_WIDTH: f32 = 140.0;
 const FILE_EDITOR_INITIAL_WIDTH: f32 = 500.0;
 const MAIN_PANEL_MIN_WIDTH: f32 = 360.0;
+/// The rail-colored gap the workspace card floats in: the card pulls away
+/// from the window's bottom and right edges by this much, so the navigation
+/// frame reads as a layer beneath it. The sidebar card keeps the same bottom
+/// gap so the two cards' bottom edges stay aligned.
+const WORKSPACE_EDGE_GAP: f32 = 6.0;
 const FOLLOWUP_TURN_TOP_GAP: f32 = 48.0;
 const NAVIGATION_RAIL_WIDTH: f32 = 44.0;
 const NAVIGATION_RAIL_LEFT: f32 = 16.0;

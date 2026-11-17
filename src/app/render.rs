@@ -157,10 +157,13 @@ impl Fintwind {
 
     /// Width left for the chat column once the panels take theirs — the
     /// widths they are painted at this frame, so a transcript measured
-    /// mid-slide matches the column it is laid out in.
+    /// mid-slide matches the column it is laid out in. The workspace card's
+    /// right edge gap comes off the top: the column ends at the card's edge,
+    /// not the window's.
     pub(super) fn chat_viewport_width(&self, window: &Window) -> f32 {
         f32::from(window.viewport_size().width)
             - MODE_RAIL_WIDTH
+            - WORKSPACE_EDGE_GAP
             - self.sidebar_rendered_width
             - self.right_panel_rendered_width
     }
@@ -307,7 +310,7 @@ impl Render for Fintwind {
 
         // The main area: the session view, the settings page body, or the
         // source-control review page. All three fill the space between the
-        // second column and the window's right edge.
+        // second column and the workspace card's right edge.
         let main_area = match self.mode {
             WorkspaceMode::Sessions => {
                 let centered = empty && self.selected_project().is_some();
@@ -584,9 +587,10 @@ impl Render for Fintwind {
             // right. Exactly one set of window controls exists — here.
             .child(self.render_top_bar(window, cx))
             // Below the bar: the fixed first column, the mode's second
-            // column, the main area, and the session mode's right panel.
-            // The first column shares the bar's background, so the two read
-            // as one L-shaped frame; the vertical separators start below it.
+            // column, and the workspace card (the main area plus the session
+            // mode's right panel). The first column shares the bar's
+            // background, so the two read as one L-shaped frame; the cards
+            // float in it, inset from the bottom and right edges.
             .child(
                 div()
                     .flex_1()
@@ -605,7 +609,7 @@ impl Render for Fintwind {
                     .when(panels.sidebar > 0.0, |row| {
                         row.child(
                             div()
-                                .h_full()
+                                .mb(px(WORKSPACE_EDGE_GAP))
                                 .flex_none()
                                 .w(px(panels.sidebar))
                                 .bg(theme.sidebar)
@@ -614,7 +618,8 @@ impl Render for Fintwind {
                                 // The sidebar's right edge faces the workspace
                                 // card, which rounds its own left corners. The
                                 // sidebar rounds this side too, so the two
-                                // cards read as a matched pair.
+                                // cards read as a matched pair. The shared
+                                // bottom gap keeps their bottom edges aligned.
                                 .rounded_tr(px(WORKSPACE_CORNER_RADIUS))
                                 .rounded_br(px(WORKSPACE_CORNER_RADIUS))
                                 .py(px(WORKSPACE_CORNER_RADIUS))
@@ -634,46 +639,56 @@ impl Render for Fintwind {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .h_full()
+                            .mb(px(WORKSPACE_EDGE_GAP))
+                            .mr(px(WORKSPACE_EDGE_GAP))
                             .flex()
                             .bg(theme.surface)
+                            // The card floats in the rail-colored frame: the
+                            // bottom and right edge gaps expose it, and all
+                            // four corners round away from it. The vertical
+                            // padding matches the radius so no child paints
+                            // over the corner cutouts.
                             .rounded_tl(px(WORKSPACE_CORNER_RADIUS))
+                            .rounded_tr(px(WORKSPACE_CORNER_RADIUS))
                             .rounded_bl(px(WORKSPACE_CORNER_RADIUS))
+                            .rounded_br(px(WORKSPACE_CORNER_RADIUS))
                             .py(px(WORKSPACE_CORNER_RADIUS))
                             .shadow(theme.workspace_shadow())
-                            .child(main_area),
-                    )
-                    // The right panel belongs to the session mode only; the
-                    // other modes hide it without dropping its tabs or
-                    // background state.
-                    .when(
-                        self.mode == WorkspaceMode::Sessions && panels.right_panel > 0.0,
-                        |row| {
-                            row.child(
-                                div()
-                                    .h_full()
-                                    .flex_none()
-                                    .w(px(panels.right_panel))
-                                    .flex()
-                                    .relative()
-                                    .when(panels.right_panel_sliding, |element| {
-                                        element.overflow_hidden()
-                                    })
-                                    // Pinned to the window's right edge, so the
-                                    // panel is uncovered from that edge inward
-                                    // rather than dragged across the screen.
-                                    .child(
-                                        self.right_panel_pane.clone().cached(
-                                            StyleRefinement::default()
-                                                .absolute()
-                                                .top_0()
-                                                .right_0()
-                                                .w(px(panels.right_panel_content))
-                                                .h_full(),
-                                        ),
-                                    ),
-                            )
-                        },
+                            .child(main_area)
+                            // The right panel belongs to the session mode only;
+                            // the other modes hide it without dropping its tabs
+                            // or background state. It lives inside the card so
+                            // the whole workspace reads as one rounded panel.
+                            .when(
+                                self.mode == WorkspaceMode::Sessions && panels.right_panel > 0.0,
+                                |card| {
+                                    card.child(
+                                        div()
+                                            .h_full()
+                                            .flex_none()
+                                            .w(px(panels.right_panel))
+                                            .flex()
+                                            .relative()
+                                            .when(panels.right_panel_sliding, |element| {
+                                                element.overflow_hidden()
+                                            })
+                                            // Pinned to the card's right edge, so
+                                            // the panel is uncovered from that
+                                            // edge inward rather than dragged
+                                            // across the screen.
+                                            .child(
+                                                self.right_panel_pane.clone().cached(
+                                                    StyleRefinement::default()
+                                                        .absolute()
+                                                        .top_0()
+                                                        .right_0()
+                                                        .w(px(panels.right_panel_content))
+                                                        .h_full(),
+                                                ),
+                                            ),
+                                    )
+                                },
+                            ),
                     ),
             )
             .children(update_card)

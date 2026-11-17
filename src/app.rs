@@ -2000,7 +2000,7 @@ pub struct Fintwind {
     models_dev_fetching: bool,
     /// The Providers page's page-open catalog load is in flight.
     models_dev_loading: bool,
-    /// OpenCode's experimental image generation switch, read from its config.
+    /// OpenCode's default image generation model, read from its config.
     /// `None` until the first load lands; the control stays inert until then.
     image_generate: Option<fintwind_client::opencode_image_generate::ImageGenerateConfig>,
     /// A config write is in flight.

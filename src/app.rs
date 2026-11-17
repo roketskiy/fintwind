@@ -2169,26 +2169,18 @@ pub struct Fintwind {
     usage_price_pending: bool,
     usage_price_checked_at: Option<Instant>,
     usage_stats_loaded_at: Option<Instant>,
-    /// Wall-clock reading of when the last successful scan landed, shown in
-    /// the toolbar so a silent refresh is visible as an update rather than a
-    /// page that never changes. `None` before the first scan.
-    usage_loaded_label: Option<String>,
     /// Guards the page's auto-refresh loop: one at a time, so leaving and
     /// reopening the page quickly cannot stack several.
     usage_refresh_running: bool,
     /// What the Usage page's KPIs, daily bars, and model ranking aggregate
     /// over. The heatmap keeps its own fixed week window.
     usage_range: usage_page::UsageRange,
-    usage_tab: usage_page::UsageTab,
     usage_flow_selection: Option<usage_page::UsageFlowSelection>,
     usage_quota_index: usize,
     usage_quota_drag: Option<(gpui::Point<Pixels>, Pixels)>,
     usage_quota_snap: Option<(f32, u64)>,
     usage_quota_animation_generation: u64,
     usage_ranking_provider: bool,
-    usage_ranking_page: usize,
-    usage_project_page: usize,
-    usage_heatmap_expanded: bool,
     usage_trend_io: bool,
     /// Measured content width, shared by every usage-page grid.
     usage_content_width: Pixels,
@@ -4176,19 +4168,14 @@ impl Fintwind {
                 usage_price_pending: false,
                 usage_price_checked_at: None,
                 usage_stats_loaded_at: None,
-                usage_loaded_label: None,
                 usage_refresh_running: false,
                 usage_range: Default::default(),
-                usage_tab: Default::default(),
                 usage_flow_selection: None,
                 usage_quota_index: 0,
                 usage_quota_drag: None,
                 usage_quota_snap: None,
                 usage_quota_animation_generation: 0,
                 usage_ranking_provider: false,
-                usage_ranking_page: 0,
-                usage_project_page: 0,
-                usage_heatmap_expanded: false,
                 usage_trend_io: false,
                 usage_content_width: px(0.0),
                 usage_views: Default::default(),

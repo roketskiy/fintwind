@@ -1732,8 +1732,37 @@ impl Fintwind {
             .gap(px(4.0))
             .overflow_x_scroll()
             .track_scroll(&self.right_panel_tabs_scroll_handle);
+        // Chrome-style silhouette shared with the session tab strip: the
+        // active tab grows out of the header band into the surface below.
+        let foot = |left: bool, active: bool| {
+            div()
+                .absolute()
+                .bottom_0()
+                .when(left, |element| element.left_0())
+                .when(!left, |element| element.right_0())
+                .size(px(super::tabs::SESSION_TAB_FOOT))
+                .overflow_hidden()
+                .when(active, |element| element.bg(theme.surface))
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(-super::tabs::SESSION_TAB_FOOT))
+                        .when(left, |element| {
+                            element.left(px(-super::tabs::SESSION_TAB_FOOT))
+                        })
+                        .when(!left, |element| {
+                            element.right(px(-super::tabs::SESSION_TAB_FOOT))
+                        })
+                        .size(px(super::tabs::SESSION_TAB_FOOT * 2.0))
+                        .rounded_full()
+                        .bg(theme.tab_strip),
+                )
+        };
+        let surface_count = self.right_panel_surfaces.len();
         for (index, surface) in self.right_panel_surfaces.iter().cloned().enumerate() {
             let active = active_surface == Some(index);
+            let next_active = active_surface == Some(index + 1);
+            let is_last = index + 1 == surface_count;
             let dirty = self.right_panel_surface_is_dirty(&surface);
             let label = SharedString::from(match &surface {
                 // Browser tabs read like browser tabs: the page title once
@@ -1768,15 +1797,11 @@ impl Fintwind {
             tabs = tabs.child(
                 div()
                     .id(SharedString::from(format!("right-panel-tab-{index}")))
-                    .h(px(28.0))
+                    .h(px(super::tabs::SESSION_TAB_HEIGHT))
                     .min_w(px(100.0))
                     .max_w(px(176.0))
-                    .px(px(8.0))
-                    .rounded(px(6.0))
                     .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
+                    .relative()
                     .cursor_default()
                     .when_some(tab_focus, |element, focus| {
                         element
@@ -1787,13 +1812,22 @@ impl Fintwind {
                     .on_mouse_down(MouseButton::Left, |_, _, cx| {
                         cx.stop_propagation();
                     })
-                    .when(active, |element| element.bg(theme.overlay_strong))
-                    .when(!active, |element| {
-                        element
-                            .hover(|element| element.bg(theme.overlay))
-                            .active(|element| element.bg(theme.overlay_strong))
-                    })
-                    .child(if uses_file_icon {
+                    .child(foot(true, active))
+                    .child(foot(false, active))
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .left(px(super::tabs::SESSION_TAB_FOOT))
+                            .right(px(super::tabs::SESSION_TAB_FOOT))
+                            .rounded_t(px(super::tabs::SESSION_TAB_FOOT))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .px(px(10.0))
+                            .when(active, |element| element.bg(theme.surface))
+                            .child(if uses_file_icon {
                         file_icon(icon_path, 13.0).into_any_element()
                     } else {
                         icon(icon_path, 13.0, theme.text_secondary).into_any_element()
@@ -1881,6 +1915,19 @@ impl Fintwind {
                                 ))
                             }),
                     )
+                    )
+                    .when(!is_last, |element| {
+                        element.child(
+                            div()
+                                .absolute()
+                                .right_0()
+                                .top(px((super::tabs::SESSION_TAB_HEIGHT - 16.0) / 2.0))
+                                .h(px(16.0))
+                                .w(px(1.0))
+                                .bg(theme.border_strong)
+                                .when(active || next_active, |element| element.opacity(0.0)),
+                        )
+                    })
                     .on_click(move |_, window, cx| {
                         let _ = activate_weak.update(cx, |this, cx| {
                             this.right_panel_active_surface = Some(index);
@@ -1917,12 +1964,14 @@ impl Fintwind {
 
         let mut header = div()
             .id("right-panel-header")
-            .h(px(48.0))
+            .h(px(super::tabs::SESSION_TAB_HEIGHT))
             .flex_none()
             .flex()
             .items_center()
             .gap(px(6.0))
-            .pl(px(10.0))
+            .bg(theme.tab_strip)
+            .rounded_tr(px(super::render::WORKSPACE_CORNER_RADIUS))
+            .pl(px(super::tabs::SESSION_TAB_FOOT))
             // Caption buttons sit on the window edge; Win11 chrome has no inset.
             .pr(px(0.0))
             .child(
@@ -1943,12 +1992,12 @@ impl Fintwind {
                     .child(tab_scroll_fade(
                         self.right_panel_tabs_scroll_handle.clone(),
                         TabScrollFadeSide::Left,
-                        theme.surface,
+                        theme.tab_strip,
                     ))
                     .child(tab_scroll_fade(
                         self.right_panel_tabs_scroll_handle.clone(),
                         TabScrollFadeSide::Right,
-                        theme.surface,
+                        theme.tab_strip,
                     )),
             );
 

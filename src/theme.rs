@@ -269,6 +269,19 @@ fn resolves_to_dark(preference: ThemePreference) -> bool {
     }
 }
 
+/// The tab band steps below the content surface so the active tab reads as
+/// growing out of it, in every family and both appearances. Light palettes
+/// use a smaller step, where small deltas stay visible.
+fn strip_from(canvas: Hsla, is_dark: bool) -> Hsla {
+    let mut strip = canvas;
+    strip.l = if is_dark {
+        (strip.l - 0.05).max(0.0)
+    } else {
+        (strip.l - 0.031).max(0.0)
+    };
+    strip
+}
+
 /// Fintwind's visual language: graphite in dark, cool paper-white in light —
 /// color is reserved for meaning. On macOS the sidebar's semantic tint is
 /// installed as a native layer above Sidebar vibrancy; keeping this GPUI
@@ -290,6 +303,9 @@ pub struct Theme {
     pub raised: Hsla,
     pub composer: Hsla,
     pub inset: Hsla,
+    /// Chrome-style tab band: one step below the content surface in both
+    /// appearances, hue following the family. Derived in `for_scheme`.
+    pub tab_strip: Hsla,
     /// Terminal screen surface: paper-white in light mode, near-black in dark.
     pub terminal: Hsla,
     pub overlay: Hsla,
@@ -449,6 +465,7 @@ impl Theme {
             raised: rgb(0x2B2B2B).into(),
             composer: rgb(0x282828).into(),
             inset: rgb(0x151515).into(),
+            tab_strip: rgb(0x151515).into(),
             terminal: rgb(0x151515).into(),
             overlay: hsla(220.0 / 360.0, 0.10, 0.90, 0.05),
             overlay_strong: hsla(220.0 / 360.0, 0.10, 0.90, 0.09),
@@ -514,6 +531,7 @@ impl Theme {
             raised: rgb(0xF4F4F4).into(),
             composer: rgb(0xFAFAFA).into(),
             inset: rgb(0xEFEFEF).into(),
+            tab_strip: rgb(0xEFEFEF).into(),
             terminal: rgb(0xFFFFFF).into(),
             overlay: hsla(0.0, 0.0, 0.12, 0.05),
             overlay_strong: hsla(0.0, 0.0, 0.12, 0.09),
@@ -567,7 +585,7 @@ impl Theme {
     /// New families use a light/dark base and override the semantics they
     /// restyle; the original presets remain explicit (see `palettes`).
     pub fn for_scheme(scheme: ThemeScheme, is_dark: bool) -> Self {
-        let theme = match scheme {
+        let mut theme = match scheme {
             ThemeScheme::Default => {
                 if is_dark {
                     Self::base_dark()
@@ -595,7 +613,6 @@ impl Theme {
         ) {
             // These palettes specify their final 21st colors and accessible
             // foregrounds directly, including the primary button pair.
-            let mut theme = theme;
             theme.inverse = theme.accent_fill;
             theme.on_inverse = theme.on_accent;
             if scheme == ThemeScheme::VsCode {
@@ -604,10 +621,11 @@ impl Theme {
                 theme.inverse = theme.accent;
                 theme.on_inverse = rgb(0xFFFFFF).into();
             }
-            theme
         } else {
-            theme.with_muted_accents().with_stronger_foregrounds()
+            theme = theme.with_muted_accents().with_stronger_foregrounds();
         }
+        theme.tab_strip = strip_from(theme.canvas, theme.is_dark);
+        theme
     }
 
     /// Strengthen the shared text/icon ramp after each family's overrides,

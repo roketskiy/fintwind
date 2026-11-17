@@ -3433,19 +3433,18 @@ impl Fintwind {
                 self.background_work_reconcile_is_unread(session_id, items, false)
             }
             DriverEvent::BackgroundWork(event) => {
+                // Intermediate output is not an outcome: log chunks and the
+                // child's streaming transcript must not re-light the dot
+                // while the work is still running. Settlement already marks
+                // unread through the Upsert and reconcile arms above; only a
+                // finished child execution or a failed stop still reads as
+                // news here.
                 self.session_has_live_background_work(session_id)
                     && matches!(
                         event,
-                        BackgroundWorkEvent::OutputDelta { .. }
-                            | BackgroundWorkEvent::Transcript(
-                                BackgroundWorkTranscriptEvent::Started { .. }
-                                    | BackgroundWorkTranscriptEvent::Steered { .. }
-                                    | BackgroundWorkTranscriptEvent::TextDelta { .. }
-                                    | BackgroundWorkTranscriptEvent::ReasoningDelta { .. }
-                                    | BackgroundWorkTranscriptEvent::Activity { .. }
-                                    | BackgroundWorkTranscriptEvent::Finished { .. }
-                            )
-                            | BackgroundWorkEvent::StopFailed { .. }
+                        BackgroundWorkEvent::Transcript(
+                            BackgroundWorkTranscriptEvent::Finished { .. }
+                        ) | BackgroundWorkEvent::StopFailed { .. }
                     )
             }
             DriverEvent::RuntimeEventCursorAdvanced(_)

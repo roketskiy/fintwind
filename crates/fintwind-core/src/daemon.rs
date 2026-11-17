@@ -38,6 +38,7 @@ pub struct FintwindBackend {
     sessions: Arc<Mutex<HashMap<Uuid, (Uuid, DriverHandle)>>>,
     terminals: Mutex<HashMap<Uuid, (Uuid, crate::terminal::DaemonTerminal)>>,
     settings: DaemonSettingsStore,
+    watchdog_enabled: Arc<AtomicBool>,
     settings_update_gate: Mutex<()>,
     opencode_management_gate: Mutex<()>,
     task_store: Arc<StateStore>,
@@ -136,6 +137,7 @@ impl FintwindBackend {
             settings.get().network_proxy_url().map(str::to_owned),
         );
         Ok(Self {
+            watchdog_enabled: Arc::new(AtomicBool::new(settings.get().watchdog_enabled())),
             scheduled_tools,
             browser_mcp,
             sessions: Arc::new(Mutex::new(HashMap::new())),
@@ -1535,6 +1537,7 @@ impl Backend for FintwindBackend {
                     crate::projectless::configured_workspace_root(&settings, data_directory)?
                 };
                 self.settings.replace(settings)?;
+                self.watchdog_enabled.store(self.settings.get().watchdog_enabled(), Ordering::Release);
                 crate::projectless::set_workspace_root(Some(root));
                 // Persisting alone keeps the MCP host on its previous state;
                 // apply it so the change reaches models on the next request.
@@ -2537,6 +2540,7 @@ impl Backend for FintwindBackend {
                         session_id,
                         runtime_id,
                     },
+                    self.watchdog_enabled.clone(),
                 )?;
                 let supports_steer = handle.supports_steer();
                 let task_state = self.task_state.clone();

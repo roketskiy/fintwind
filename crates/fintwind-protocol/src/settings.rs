@@ -95,6 +95,13 @@ impl DaemonSettings {
             .unwrap_or(true)
     }
 
+    pub fn watchdog_enabled(&self) -> bool {
+        self.extra
+            .get(WATCHDOG_ENABLED_KEY)
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+    }
+
     /// Live context tokens at which the client requests a compaction, for
     /// the foreground session and every live subagent alike. Absolute, not a
     /// percentage: windows smaller than this never reach it and stay on the
@@ -120,6 +127,7 @@ pub const GENERAL_WORKSPACE_PATH_KEY: &str = "general_workspace_path";
 pub const BROWSER_TOOLS_ENABLED_KEY: &str = "browser_tools_enabled";
 pub const NETWORK_PROXY_URL_KEY: &str = "network_proxy_url";
 pub const AUTO_COMPACT_ENABLED_KEY: &str = "auto_compact_enabled";
+pub const WATCHDOG_ENABLED_KEY: &str = "watchdog_enabled";
 pub const AUTO_COMPACT_THRESHOLD_TOKENS_KEY: &str = "auto_compact_threshold_tokens";
 /// Default trigger: half of a 1M window. Smaller windows never reach it and
 /// stay on the provider's own near-limit auto compaction, which Fintwind

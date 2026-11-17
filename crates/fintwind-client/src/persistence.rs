@@ -637,6 +637,20 @@ impl PersistedState {
         self.daemon_settings_extra = settings.extra;
     }
 
+    pub fn watchdog_enabled(&self) -> bool {
+        self.daemon_settings_extra
+            .get(fintwind_protocol::settings::WATCHDOG_ENABLED_KEY)
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true)
+    }
+
+    pub fn set_watchdog_enabled(&mut self, enabled: bool) {
+        self.daemon_settings_extra.insert(
+            fintwind_protocol::settings::WATCHDOG_ENABLED_KEY.to_owned(),
+            serde_json::Value::Bool(enabled),
+        );
+    }
+
     pub fn opencode_binary_path(&self) -> Option<&str> {
         self.daemon_settings_extra
             .get(fintwind_protocol::settings::OPENCODE_BINARY_PATH_KEY)

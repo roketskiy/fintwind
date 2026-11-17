@@ -1839,3 +1839,6 @@ usage.composition_partial: 計測できない内容を含む
 settings.busy_send_mode: 実行中の送信
 settings.busy_send_queue: キューに追加
 composer.queued_messages: "送信待ち · %{count}"
+settings.watchdog: 繰り返し出力の保護
+settings.watchdog_description: モデルの返信またはツール呼び出しと結果が10回連続で同じ場合、タスクを停止します。
+errors.watchdog_repeat: 同じ出力が10回連続したため、タスクを停止しています。

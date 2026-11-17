@@ -245,6 +245,7 @@ pub(crate) fn start_local(
     browser: crate::browser_mcp::Runtime,
     blobs: Arc<crate::blob_store::BlobStore>,
     scheduled: crate::scheduled::tools::Runtime,
+    watchdog_enabled: Arc<std::sync::atomic::AtomicBool>,
 ) -> anyhow::Result<DriverHandle> {
     let inner: Arc<dyn DriverControl> = Arc::new(opencode::OpenCodeDriver::start_with_tools(
         options,
@@ -252,6 +253,7 @@ pub(crate) fn start_local(
         Some(browser),
         Some(blobs),
         Some(scheduled),
+        watchdog_enabled,
     )?);
     Ok(DriverHandle { inner })
 }

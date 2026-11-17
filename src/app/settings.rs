@@ -960,6 +960,54 @@ impl Fintwind {
                                 this.set_keep_screen_awake(!this.state.keep_screen_awake, cx);
                             },
                         )),
+                    )
+                    .child(settings_separator(theme))
+                    .child(
+                        settings_row(
+                            "icons/alert.svg",
+                            tr!("settings.watchdog"),
+                            None,
+                            theme,
+                        )
+                        .child(
+                            div()
+                                .id("watchdog-info")
+                                .tab_index(0)
+                                .size(px(28.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
+                                .tooltip(Tooltip::text(tr!("settings.watchdog_description")))
+                                .child(icon("icons/alert.svg", 15.0, theme.text_secondary))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.show_toast(tr!("settings.watchdog_description"));
+                                    cx.notify();
+                                }))
+                                .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                                    if !event.keystroke.modifiers.modified()
+                                        && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                    {
+                                        this.show_toast(tr!("settings.watchdog_description"));
+                                        cx.notify();
+                                        cx.stop_propagation();
+                                    }
+                                })),
+                        )
+                        .child(toggle_switch(
+                            "watchdog-toggle",
+                            self.state.watchdog_enabled(),
+                            false,
+                            theme,
+                            window,
+                            cx,
+                            move |this: &mut Self, _, cx| {
+                                let enabled = !this.state.watchdog_enabled();
+                                this.state.set_watchdog_enabled(enabled);
+                                this.save();
+                                cx.notify();
+                            },
+                        )),
                     ),
             )
             .child(settings_group_title(tr!("settings.group_context"), theme))
@@ -2066,7 +2114,6 @@ impl Fintwind {
     ) {
         self.image_generate_generation += 1;
         let previous = self.image_generate.clone();
-        let enabled = config.enabled;
         self.image_generate = Some(config.clone());
         self.image_generate_busy = true;
         cx.notify();
@@ -2079,19 +2126,10 @@ impl Fintwind {
                 this.image_generate_busy = false;
                 match result {
                     Ok(()) => {
-                        let name = tr!("settings.image_generation");
-                        let toggled = previous
-                            .as_ref()
-                            .is_some_and(|previous| previous.enabled != enabled);
-                        this.show_success_toast(if toggled {
-                            if enabled {
-                                tr!("settings.toggle_on", name = name)
-                            } else {
-                                tr!("settings.toggle_off", name = name)
-                            }
-                        } else {
-                            tr!("settings.option_updated", name = name)
-                        });
+                        this.show_success_toast(tr!(
+                            "settings.option_updated",
+                            name = tr!("settings.image_generation_model")
+                        ));
                     }
                     Err(error) => {
                         this.image_generate = previous;

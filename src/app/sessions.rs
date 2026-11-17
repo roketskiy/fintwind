@@ -927,7 +927,7 @@ impl Fintwind {
     /// [`Fintwind::sidebar_rendered_width`] / [`Fintwind::right_panel_rendered_width`].
     pub(super) fn effective_panel_widths(&self, window: &Window) -> (f32, f32) {
         fitted_panel_widths(
-            f32::from(window.viewport_size().width) - MODE_RAIL_WIDTH,
+            f32::from(window.viewport_size().width) - MODE_RAIL_WIDTH - WORKSPACE_EDGE_GAP,
             (self.sidebar_visible && self.has_secondary_column()) || self.sidebar_slide.is_some(),
             self.right_panel_visible || self.right_panel_slide.is_some(),
             self.secondary_width(),

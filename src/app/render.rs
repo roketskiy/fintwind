@@ -402,8 +402,9 @@ impl Render for Fintwind {
                     .flex_col()
                     .bg(theme.surface)
                     // With the tab band flush at the card top, the column's
-                    // own surface must round away from the corner cutout too.
+                    // own surface must round away from both corner cutouts.
                     .rounded_tl(px(WORKSPACE_CORNER_RADIUS))
+                    .rounded_tr(px(WORKSPACE_CORNER_RADIUS))
                     // External-path drops bubble from descendants, so handle
                     // them once on the chat column rather than also on the
                     // composer card. The same column is the drop group the

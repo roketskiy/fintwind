@@ -1796,7 +1796,7 @@ impl Fintwind {
             .flex_none()
             .flex()
             .items_center()
-            .bg(theme.rail)
+            .bg(theme.tab_strip)
             .rounded_tl(px(super::render::WORKSPACE_CORNER_RADIUS))
             .when(!self.right_panel_visible, |element| {
                 element.rounded_tr(px(super::render::WORKSPACE_CORNER_RADIUS))

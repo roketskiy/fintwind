@@ -20,7 +20,7 @@ pub(super) const SESSION_TAB_HEIGHT: f32 = 34.0;
 const SESSION_TAB_WIDTH: f32 = 190.0;
 const SESSION_TAB_FADE_WIDTH: f32 = 16.0;
 /// Chrome-style tab corner: the top radius and the concave foot flare.
-const SESSION_TAB_FOOT: f32 = 8.0;
+pub(super) const SESSION_TAB_FOOT: f32 = 8.0;
 
 /// Which tab a drag lands on, given every tab's `(left, right)` span in the
 /// strip and the pointer's x.
@@ -129,7 +129,7 @@ impl Fintwind {
             .w(px(28.0))
             .h(px(28.0))
             .flex_none()
-            .ml(px(2.0))
+            .ml(px(4.0))
             .rounded_full()
             .flex()
             .items_center()
@@ -187,8 +187,6 @@ impl Fintwind {
                 cx,
             ));
         }
-        // Keeps the last tab clear of the right fade, as in the right panel.
-        strip = strip.child(div().w(px(SESSION_TAB_FADE_WIDTH)).h(px(1.0)).flex_none());
         let reveal_pending = self.pending_session_tab_reveal;
         let scroll_handle = self.session_tabs_scroll_handle.clone();
         let reveal_fintwind = cx.entity().downgrade();
@@ -240,12 +238,12 @@ impl Fintwind {
             .child(tab_fade(
                 self.session_tabs_scroll_handle.clone(),
                 TabFadeSide::Left,
-                theme.rail,
+                theme.tab_strip,
             ))
             .child(tab_fade(
                 self.session_tabs_scroll_handle.clone(),
                 TabFadeSide::Right,
-                theme.rail,
+                theme.tab_strip,
             ));
         let drag_filler = self.window_drag_region(
             div()
@@ -333,7 +331,6 @@ impl Fintwind {
         // flare out through concave feet into the strip. Each foot is a
         // square of tab color with a strip-colored circle carved out of its
         // outer top corner, so the flare reads as one continuous curve.
-        let group = SharedString::from(format!("session-tab-group-{session_id}"));
         let foot = |left: bool| {
             div()
                 .absolute()
@@ -343,7 +340,6 @@ impl Fintwind {
                 .size(px(SESSION_TAB_FOOT))
                 .overflow_hidden()
                 .when(active, |element| element.bg(theme.surface))
-                .group_hover(group.clone(), |element| element.bg(theme.overlay))
                 .child(
                     div()
                         .absolute()
@@ -352,12 +348,11 @@ impl Fintwind {
                         .when(!left, |element| element.right(px(-SESSION_TAB_FOOT)))
                         .size(px(SESSION_TAB_FOOT * 2.0))
                         .rounded_full()
-                        .bg(theme.rail),
+                        .bg(theme.tab_strip),
                 )
         };
         let tab = div()
             .id(SharedString::from(format!("session-tab-{session_id}")))
-            .group(group.clone())
             .h(px(SESSION_TAB_HEIGHT))
             .w(px(SESSION_TAB_WIDTH))
             .flex_none()
@@ -423,7 +418,6 @@ impl Fintwind {
                     .gap(px(6.0))
                     .px(px(10.0))
                     .when(active, |element| element.bg(theme.surface))
-                    .group_hover(group.clone(), |element| element.bg(theme.overlay))
                     .when(busy, |element| {
                         // A live turn in this session — foreground or background. The
                         // spinner rides the pulse clock inside this island, so its
@@ -502,7 +496,7 @@ impl Fintwind {
                     ),
             )
             // A hairline between resting tabs, as in Chrome; it disappears
-            // beside the active tab and under the pointer.
+            // beside the active tab.
             .when(!is_last, |element| {
                 element.child(
                     div()
@@ -512,8 +506,7 @@ impl Fintwind {
                         .h(px(16.0))
                         .w(px(1.0))
                         .bg(theme.border_strong)
-                        .when(active || next_active, |element| element.opacity(0.0))
-                        .group_hover(group, |element| element.opacity(0.0)),
+                        .when(active || next_active, |element| element.opacity(0.0)),
                 )
             });
         tab.into_any_element()

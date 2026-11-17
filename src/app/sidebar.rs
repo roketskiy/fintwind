@@ -1778,23 +1778,29 @@ impl Fintwind {
             .child(row)
             .into_any_element()
     }
-    /// The session tab row beneath the unified top bar. Window controls,
-    /// layout toggles, history, and the reveal-folder action moved up into
-    /// the top bar; this row keeps only the tabs — at their existing height,
-    /// scroll, and cached-isolation behavior — and only when tabs exist, so
-    /// a single-task window keeps a clean column under the bar.
+    /// The session tab band beneath the unified top bar, Chrome-style: a
+    /// rail-colored strip flush with the card top, out of which the active
+    /// tab grows into the workspace surface below. Window controls, layout
+    /// toggles, history, and the reveal-folder action live in the top bar;
+    /// the band renders only when tabs exist, so a single-task window keeps
+    /// a clean column under the bar.
     pub(super) fn render_session_tabs_row(
         &mut self,
         _window: &Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let theme = Theme::current(cx);
         div()
             .id("session-tabs-row")
-            .h(px(36.0))
+            .h(px(super::tabs::SESSION_TAB_HEIGHT))
             .flex_none()
             .flex()
             .items_center()
-            .gap(px(8.0))
+            .bg(theme.rail)
+            .rounded_tl(px(super::render::WORKSPACE_CORNER_RADIUS))
+            .when(!self.right_panel_visible, |element| {
+                element.rounded_tr(px(super::render::WORKSPACE_CORNER_RADIUS))
+            })
             // The tab strip is a cached island of its own, so the working
             // spinners inside it never price a pulse tick at the window.
             .child(

@@ -1622,6 +1622,16 @@ usage_page.provider_models: "%{count} 个模型"
 usage_page.truncated_notice: "已扫描 %{sessions} 个会话就达到了扫描上限，更早的会话未计入下列统计。"
 usage_page.updated_at: "更新于 %{time}"
 usage_page.subscriptions_title: 订阅额度
+usage_page.flow_title: 用量流向
+usage_page.range_today: 今天
+usage_page.flow_clear: 清除选择
+usage_page.flow_other: 其他
+usage_page.flow_reasoning: 推理
+usage_page.flow_total: 总量
+usage_page.flow_composition: 全量构成
+usage_page.flow_share: 占全量
+usage_page.flow_scope: 统计范围
+usage_page.flow_input_generated: 输入 / 生成
 usage_page.statistics_title: 用量统计
 usage_page.cache_title: 缓存读写
 usage_page.subscriptions_empty: 暂无可查询额度的已连接服务

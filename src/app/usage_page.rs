@@ -18,7 +18,7 @@ use fintwind_client::models_dev::{self, ModelsDevTable};
 use super::*;
 use ely_gpui_component::{
     buttons::{Button, ButtonVariant, IconButton, SegmentedControl},
-    charts::{CalendarHeatmap, LineChart, Series},
+    charts::CalendarHeatmap,
     feedback::{Alert, EmptyState},
     forms::Choice,
     layout::CardHeader,
@@ -29,6 +29,7 @@ use ely_gpui_component::{
     typography::{Caption, Label, tabular},
 };
 use fintwind_client::provider_session::{UsageDayShare, UsageEntry, UsageStats};
+mod usage_flow;
 
 #[cfg(test)]
 use fintwind_client::provider_session::UsageModelLane;
@@ -70,8 +71,20 @@ pub(super) enum UsageRange {
 
 impl Default for UsageRange {
     fn default() -> Self {
-        Self::Day(0)
+        Self::Days7
     }
+}
+
+/// Selection is scoped to the currently aggregated snapshot. It is cleared
+/// whenever a replacement snapshot or time range lands.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum UsageFlowSelection {
+    Model(usize),
+    Lane(usize),
+    Day(usize),
+    Hour(usize),
+    Provider(usize),
+    Project(usize),
 }
 
 impl UsageRange {
@@ -82,7 +95,7 @@ impl UsageRange {
             Self::All => "usage_page.range_all",
             Self::Days30 => "usage_page.range_30d",
             Self::Days7 => "usage_page.range_7d",
-            Self::Day(_) => "usage_page.range_day",
+            Self::Day(_) => "usage_page.range_today",
         })
     }
 
@@ -245,7 +258,6 @@ pub(super) struct UsageViews {
     /// Contiguous days ending today (or the selected day), oldest first.
     pub daily: Vec<UsageDay>,
     pub hourly: Vec<UsageHour>,
-    #[cfg(test)]
     pub hourly_estimated: bool,
     /// Week columns of seven cells, Monday first; `None` past today.
     pub weeks: Vec<Vec<Option<UsageHeatCell>>>,
@@ -538,6 +550,9 @@ impl Fintwind {
             return;
         }
         self.usage_range = range;
+        self.usage_flow_selection = None;
+        self.usage_ranking_page = 0;
+        self.usage_project_page = 0;
         self.rebuild_usage_views(cx);
     }
 
@@ -561,6 +576,10 @@ impl Fintwind {
             let _ = this.update(cx, |this, cx| {
                 if this.usage_views_generation == generation {
                     this.usage_views = views;
+                    this.usage_flow_selection = None;
+                    let count = if this.usage_ranking_provider { this.usage_views.provider_count } else { this.usage_views.model_count };
+                    this.usage_ranking_page = this.usage_ranking_page.min(count.saturating_sub(1) / MAX_MODEL_ROWS);
+                    this.usage_project_page = this.usage_project_page.min(this.usage_views.project_count.saturating_sub(1) / MAX_MODEL_ROWS);
                     cx.notify();
                 }
             });
@@ -627,6 +646,7 @@ impl Fintwind {
             column = column.child(Caption::new(tr!("usage_page.loading")));
         }
 
+        let mut quota_rendered = false;
         if no_workspace {
             column = column.child(usage_empty_card(
                 &theme,
@@ -669,28 +689,159 @@ impl Fintwind {
                     .gap_4()
                     .child(self.render_usage_history_filter(window, &theme, cx))
                     .child(self.render_usage_kpis(views, window, &theme));
-                let show_heat = !matches!(self.usage_range, UsageRange::Day(_));
-                let trend = self.render_usage_daily(views, &theme);
-                history = history.child(if show_heat {
-                    self.usage_grid(
-                        window,
-                        28.0,
-                        [trend, self.render_usage_heatmap(views, &theme)],
-                    )
+                let compact = self.usage_content_width > px(0.0)
+                    && self.usage_content_width < px(900.0);
+                let flow = self.render_usage_flow(views, window, &theme, cx);
+                let quota = self.render_usage_quota_compact(&theme, compact, cx);
+                quota_rendered = true;
+                history = history.child(
+                    div().flex().gap_3().min_w_0()
+                        .when(compact, |row| row.flex_col())
+                        .child(flow).child(quota),
+                );
+                let trend = self.render_usage_daily(views, &theme, cx);
+                let ranking = if self.usage_ranking_provider {
+                    self.render_usage_providers(views, &theme, false, cx)
                 } else {
-                    trend
-                });
-                let rankings = [
-                    self.render_usage_models(window, cx, views, &theme),
-                    self.render_usage_providers(views, &theme, false),
-                    self.render_usage_projects(views, &theme, false),
-                ];
-                history = history.child(self.usage_grid(window, 22.0, rankings));
+                    self.render_usage_models(window, cx, views, &theme)
+                };
+                let projects = self.render_usage_projects(views, &theme, false, cx);
+                history = history.child(self.usage_grid(window, 22.0, [trend.into_any_element(), ranking.into_any_element(), projects.into_any_element()]));
+                if !matches!(self.usage_range, UsageRange::Day(_)) {
+                    history = history.child(Button::new("usage-heatmap-toggle", tr!("usage_page.heatmap_title"))
+                        .size(ControlSize::Sm).variant(ButtonVariant::Ghost)
+                        .on_click(cx.listener(|this, _, _, cx| {this.usage_heatmap_expanded = !this.usage_heatmap_expanded;cx.notify();})));
+                    if self.usage_heatmap_expanded { history = history.child(self.render_usage_heatmap(views, &theme)); }
+                }
                 column = column.child(history);
             }
         }
 
+        if !quota_rendered {
+            column = column.child(self.render_usage_quota_compact(&theme, true, cx));
+        }
         column.into_any_element()
+    }
+
+    /// A compact view of the real subscription snapshots. Keep the detailed
+    /// subscription page available for refresh/status and overflow cases.
+    fn render_usage_quota_compact(&self, theme: &Theme, compact: bool, cx: &mut Context<Self>) -> Div {
+        let cards = self.subscription_cards();
+        let width = if compact { (f32::from(self.usage_content_width) - 24.0).max(240.0) } else { 280.0 };
+        let current = self.usage_quota_index.min(cards.len().saturating_sub(1));
+        let slots = cards.iter().map(|(provider, _, reading)| {
+            let (_, windows) = providers_quota::subscription_layout(provider, reading.as_ref());
+            (windows, reading.as_ref().map_or(0, |q| q.balances.len()))
+        }).fold((1, 0), |a, b| (a.0.max(b.0), a.1.max(b.1)));
+        let offset = self.usage_quota_drag.map_or(0.0, |(_, delta)| f32::from(delta));
+        let mut strip = div().id("usage-quota-drag").relative().w_full().h(px(300.0)).overflow_hidden()
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _, _| {
+                this.usage_quota_drag = Some((event.position, px(0.0)));
+                this.usage_quota_snap = None;
+            }))
+            .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
+                if event.pressed_button != Some(MouseButton::Left) { return; }
+                if let Some((start, delta)) = &mut this.usage_quota_drag {
+                    let mut next = event.position.x - start.x;
+                    let vertical = event.position.y - start.y;
+                    if f32::from(vertical).abs() > f32::from(next).abs() {
+                        next = px(0.0);
+                    }
+                    if (current == 0 && next > px(0.0)) || (current + 1 == cards.len() && next < px(0.0)) { next *= 0.25; }
+                    next = px(f32::from(next).clamp(-width, width));
+                    if *delta != next { *delta = next; cx.notify(); }
+                }
+            }))
+            .on_mouse_up(MouseButton::Left, cx.listener(move |this, _: &MouseUpEvent, _, cx| {
+                this.finish_usage_quota_drag(width, cx);
+            }))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(move |this, _: &MouseUpEvent, _, cx| {
+                this.finish_usage_quota_drag(width, cx);
+            }));
+        for (i, (provider, loading, reading)) in self.subscription_cards().iter().enumerate() {
+            if i.abs_diff(current) > 1 { continue; }
+            if i != current && self.usage_quota_drag.is_none() && self.usage_quota_snap.is_none() { continue; }
+            let position = (i as f32 - current as f32) * width + offset;
+            let content = self.render_subscription_slide(provider, *loading, reading.as_ref(), slots, theme, cx);
+            let child = div().id(SharedString::from(format!("usage-quota-slide-{provider}")))
+                .absolute().left(px(position)).top_0().w(px(width)).h_full().overflow_y_scroll().child(content);
+            let child = if self.usage_quota_drag.is_none() {
+                if let Some((from, generation)) = self.usage_quota_snap {
+                    child.with_animation(
+                        SharedString::from(format!("usage-quota-snap-{generation}-{i}")),
+                        Animation::new(Duration::from_millis(200)).with_easing(ease_out_quint()),
+                        move |element, progress| element.left(px(position + from * (1.0 - progress))),
+                    ).into_any_element()
+                } else { child.into_any_element() }
+            } else { child.into_any_element() };
+            strip = strip.child(child);
+        }
+        let mut positions = div().flex().items_center().justify_center().gap_1().h(px(28.0));
+        let count = self.subscription_cards().len();
+        for i in 0..count {
+            let active = i == current;
+            let provider = self.subscription_cards()[i].0.clone();
+            positions = positions.child(div().id(SharedString::from(format!("usage-quota-position-{i}")))
+                .tab_index(0).w(px(28.0)).h(px(24.0)).flex().items_center().justify_center()
+                .tooltip(Tooltip::text(self.subscription_display_name(&provider)))
+                .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
+                .child(div().w(px(20.0)).h(px(3.0)).rounded(px(2.0)).bg(if active { theme.accent } else { theme.border_strong }))
+                .on_click(cx.listener(move |this, _, _, cx| { this.usage_quota_index = i; this.usage_quota_snap = None; cx.notify(); }))
+                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                    let target = match event.keystroke.key.as_str() {
+                        "enter" | "space" => Some(i),
+                        "left" => Some(this.usage_quota_index.saturating_sub(1)),
+                        "right" => Some((this.usage_quota_index + 1).min(count - 1)),
+                        "home" => Some(0),
+                        "end" => Some(count - 1),
+                        _ => None,
+                    };
+                    if let Some(target) = target {
+                        this.usage_quota_index = target; this.usage_quota_snap = None; cx.notify(); cx.stop_propagation();
+                    }
+                })));
+        }
+        let mut inner = div().flex().flex_col().child(strip).child(positions);
+        if count == 0 {
+            inner = div().p_3().child(if self.subscriptions_connection_error() {
+                tr!("usage_page.connections_failed")
+            } else if self.subscriptions_loading() {
+                tr!("providers.quota_loading")
+            } else {
+                tr!("usage_page.subscriptions_empty")
+            });
+        }
+        usage_card(theme).min_w_0().flex_none().when(compact, |card| card.w_full()).when(!compact, |card| card.w(px(300.0)))
+            .p_3().flex().flex_col().gap_2()
+            .child(div().text_size(ui_px(13.0)).font_weight(FontWeight::MEDIUM).child(tr!("usage_page.subscriptions_title")))
+            .child(inner)
+    }
+
+    fn finish_usage_quota_drag(&mut self, width: f32, cx: &mut Context<Self>) {
+        let Some((_, offset)) = self.usage_quota_drag.take() else { return; };
+        let offset = f32::from(offset);
+        let count = self.subscription_cards().len();
+        let previous = self.usage_quota_index.min(count.saturating_sub(1));
+        let next = if offset < -36.0 { (previous + 1).min(count.saturating_sub(1)) }
+            else if offset > 36.0 { previous.saturating_sub(1) } else { previous };
+        self.usage_quota_index = next;
+        self.usage_quota_animation_generation = self.usage_quota_animation_generation.wrapping_add(1);
+        let generation = self.usage_quota_animation_generation;
+        self.usage_quota_snap = if cx.reduce_motion() { None } else {
+            Some((offset + (next as f32 - previous as f32) * width, generation))
+        };
+        if self.usage_quota_snap.is_some() {
+            cx.spawn(async move |this, cx| {
+                smol::Timer::after(Duration::from_millis(210)).await;
+                let _ = this.update(cx, |this, cx| {
+                    if this.usage_quota_snap.is_some_and(|(_, current)| current == generation) {
+                        this.usage_quota_snap = None;
+                        cx.notify();
+                    }
+                });
+            }).detach();
+        }
+        cx.notify();
     }
 
     /// Connected subscriptions are independent of the history's workspace
@@ -903,7 +1054,7 @@ impl Fintwind {
             )
     }
 
-    fn render_usage_kpis(&self, views: &UsageViews, window: &Window, theme: &Theme) -> Div {
+    fn render_usage_kpis(&self, views: &UsageViews, _window: &Window, theme: &Theme) -> Div {
         let totals = &views.totals;
         let hit = cache_hit_percent(
             totals.cache_read,
@@ -913,40 +1064,21 @@ impl Fintwind {
                 .saturating_add(totals.cache_write),
         );
         let metrics = [
-            usage_metric(
-                theme,
-                tr!("usage_page.kpi_total_tokens"),
-                format_tokens(totals.total()),
-                format!(
-                    "{} {}",
-                    tr!("usage_page.tokens_input"),
-                    format_tokens(totals.input)
-                ),
-            ),
-            usage_metric(
-                theme,
-                tr!("usage_page.kpi_generated_tokens"),
-                format_tokens(totals.generated()),
-                tr!("usage_page.incl_reasoning"),
-            ),
-            usage_metric(
-                theme,
-                tr!("usage_page.kpi_sessions"),
-                totals.sessions.to_string(),
-                tr!("usage_page.active_days_value", count = totals.active_days),
-            ),
-            usage_metric(
-                theme,
-                tr!("usage_page.kpi_cache_hit"),
-                hit.map(|value| format!("{value:.1}%"))
-                    .unwrap_or_else(|| "—".into()),
-                tr!(
-                    "usage_page.cache_read_tokens",
-                    tokens = format_tokens(totals.cache_read)
-                ),
-            ),
+            (tr!("usage_page.kpi_total_tokens"), format_tokens(totals.total()), String::new()),
+            (tr!("usage_page.tokens_input"), format_tokens(totals.input), String::new()),
+            (tr!("usage_page.kpi_generated_tokens"), format_tokens(totals.generated()), if matches!(self.usage_range, UsageRange::All) { format!("{} {} · {} {}", tr!("usage_page.tokens_output"), format_tokens(totals.output), tr!("usage_page.flow_reasoning"), format_tokens(totals.reasoning)) } else { tr!("usage_page.incl_reasoning") }),
+            (tr!("usage_page.plot_cache_read"), format_tokens(totals.cache_read), format!("{} {}", tr!("usage_page.plot_cache_write"), format_tokens(totals.cache_write))),
+            (tr!("usage_page.kpi_cache_hit"), hit.map(|value| format!("{value:.1}%")).unwrap_or_else(|| "—".into()), String::new()),
+            (tr!("usage_page.kpi_sessions"), totals.sessions.to_string(), tr!("usage_page.active_days_value", count = totals.active_days)),
         ];
-        self.usage_grid(window, 13.0, metrics)
+        div().flex().flex_wrap().w_full().border_y_1().border_color(theme.border).py_3().children(
+            metrics.into_iter().map(|(label, value, caption)| {
+                div().flex_1().min_w(px(120.0)).px_3().flex().flex_col().gap_1()
+                    .child(Caption::new(label))
+                    .child(tabular(Label::new(value)).text_size(ui_px(22.0)).font_weight(FontWeight::MEDIUM))
+                    .child(Caption::new(caption))
+            })
+        )
     }
 
     fn render_usage_heatmap(&self, views: &UsageViews, theme: &Theme) -> Div {
@@ -975,7 +1107,7 @@ impl Fintwind {
         )
     }
 
-    fn render_usage_daily(&self, views: &UsageViews, theme: &Theme) -> Div {
+    fn render_usage_daily(&self, views: &UsageViews, theme: &Theme, cx: &mut Context<Self>) -> Div {
         let single_day = matches!(self.usage_range, UsageRange::Day(_));
         let points: Vec<UsagePlotPoint> = if single_day {
             views
@@ -998,43 +1130,73 @@ impl Fintwind {
                 })
                 .collect()
         };
-        let labels: Vec<_> = points.iter().map(|point| point.label.clone()).collect();
-        let chart = LineChart::new("usage-token-trend", labels)
-            .h_64()
-            .smooth()
-            .series(Series::new(
-                tr!("usage_page.plot_input"),
-                points.iter().map(|p| p.input as f64),
-            ))
-            .series(Series::new(
-                tr!("usage_page.kpi_generated_tokens"),
-                points.iter().map(|p| p.output as f64),
-            ))
-            .format(|value| format_tokens(value.max(0.0) as u64));
+        let use_io = single_day || self.usage_trend_io;
+        let values: Vec<u64> = points.iter().enumerate().map(|(i, point)| {
+            if use_io { point.input.saturating_add(point.output) }
+            else { views.daily.get(i).map_or(0, |day| day.total) }
+        }).collect();
+        let max = values.iter().copied().max().unwrap_or(0).max(1);
+        let mut chart = div().flex().items_end().gap(px(3.0)).w_full().h(px(160.0));
+        for (i, (point, value)) in points.iter().zip(values.iter()).enumerate() {
+            if matches!(self.usage_range, UsageRange::Day(0)) && i > Local::now().hour() as usize {
+                chart = chart.child(div().flex_1().min_w_0().h_full().bg(theme.overlay));
+                continue;
+            }
+            let selection = if single_day { UsageFlowSelection::Hour(i) } else { UsageFlowSelection::Day(i) };
+            let selected = self.usage_flow_selection.as_ref() == Some(&selection);
+            let click_selection = selection.clone();
+            let key_selection = selection;
+            let value_height = ((*value as f64 / max as f64) * 112.0) as f32;
+            let label = if points.len() > 12 && i % 5 != 0 { String::new() } else { point.label.clone() };
+            let colors = plot_colors(theme);
+            let mut bar = div().w_full().h(px(value_height)).flex().flex_col().justify_end();
+            if use_io && *value > 0 {
+                bar = bar.child(div().w_full().h(gpui::relative(point.output as f32 / *value as f32)).bg(colors[1].opacity(0.7)))
+                    .child(div().w_full().h(gpui::relative(point.input as f32 / *value as f32)).bg(colors[0].opacity(0.7)));
+            } else {
+                bar = bar.bg(theme.accent.opacity(0.75));
+            }
+            chart = chart.child(div().id(SharedString::from(format!("usage-trend-bar-{i}"))).tab_index(0)
+                .flex_1().min_w_0().h_full().rounded(px(4.0)).border_1()
+                .border_color(if selected { theme.accent_focus } else { gpui::transparent_black() })
+                .focus_visible(|style| style.border_color(theme.accent_focus))
+                .hover(|style| style.bg(theme.overlay))
+                .flex().flex_col().justify_end().items_center().gap_1()
+                .when(points.len() <= 12, |element| element.child(div().text_size(ui_px(10.0)).text_color(theme.text_tertiary).child(format_tokens(*value))))
+                .child(bar)
+                .child(div().h(px(16.0)).text_size(ui_px(10.0)).text_color(theme.text_tertiary).child(label))
+                .on_click(cx.listener(move |this, _, _, cx| {this.usage_flow_selection = Some(click_selection.clone());cx.notify();}))
+                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {this.usage_flow_selection = Some(key_selection.clone());cx.notify();cx.stop_propagation();}
+                })));
+        }
+        let selector = SegmentedControl::new("usage-trend-kind", if self.usage_trend_io {"io"} else {"total"})
+            .size(ControlSize::Sm).segment("total", tr!("usage_page.flow_total"), None)
+            .segment("io", tr!("usage_page.flow_input_generated"), None)
+            .on_change(cx.listener(|this, value: &SharedString, _, cx| { this.usage_trend_io = value.as_ref() == "io";cx.notify(); }));
         usage_card(theme)
             .h_full()
-            .p_5()
-            .gap_4()
-            .child(CardHeader::new(if single_day {
-                tr!("usage_page.hourly_title")
-            } else {
-                tr!("usage_page.daily_title")
-            }))
-            .child(chart)
+            .p_3().gap_2()
+            .child(div().flex().items_center().justify_between()
+                .child(div().text_size(ui_px(13.0)).font_weight(FontWeight::MEDIUM).child(if single_day {tr!("usage_page.hourly_title")} else {tr!("usage_page.daily_title")}))
+                .when(!single_day, |header| header.child(selector)))
+            .child(div().bg(theme.composer).border_1().border_color(theme.border).rounded(px(6.0)).p_3()
+                .child(chart)
+                .when(single_day && views.hourly_estimated, |body| body.child(Caption::new(tr!("usage_page.hourly_estimated")))))
     }
 
     /// Readable model comparisons even when only one or two models were used.
     fn render_usage_models(
         &self,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
         views: &UsageViews,
         theme: &Theme,
     ) -> Div {
         let rows = views
             .models
             .iter()
-            .map(|row| {
+            .enumerate().skip(self.usage_ranking_page * MAX_MODEL_ROWS).take(MAX_MODEL_ROWS).map(|(index, row)| {
                 // The tile carries the model id; the tooltip carries the
                 // whole `provider/model`, because two providers can serve the
                 // same id and the bare one cannot tell them apart.
@@ -1051,6 +1213,7 @@ impl Fintwind {
                     tooltip: qualified,
                     count_label: tr!("usage_page.model_sessions", count = row.sessions),
                     total: row.total,
+                    selection: UsageFlowSelection::Model(index),
                 }
             })
             .collect();
@@ -1061,22 +1224,28 @@ impl Fintwind {
             theme,
             ranking_row_count(views),
             views.totals.total(),
+            self.usage_ranking_page,
+            views.model_count,
+            false,
+            Some(usage_ranking_selector(self.usage_ranking_provider, cx)),
+            cx,
         )
     }
 
     /// The per-provider ranking: where the store's usage actually went.
     /// Derived from the model strings the scan already carries, so it costs
     /// no extra request and no extra protocol field.
-    fn render_usage_providers(&self, views: &UsageViews, theme: &Theme, _narrow: bool) -> Div {
+    fn render_usage_providers(&self, views: &UsageViews, theme: &Theme, _narrow: bool, cx: &mut Context<Self>) -> Div {
         let rows: Vec<UsageRankRow> = views
             .providers
             .iter()
-            .map(|row| UsageRankRow {
+            .enumerate().skip(self.usage_ranking_page * MAX_MODEL_ROWS).take(MAX_MODEL_ROWS).map(|(index, row)| UsageRankRow {
                 id: format!("usage-provider-{}", row.provider),
                 tooltip: row.provider.clone(),
                 display: row.provider.clone(),
                 count_label: tr!("usage_page.provider_models", count = row.models),
                 total: row.total,
+                selection: UsageFlowSelection::Provider(index),
             })
             .collect();
         usage_ranking_card(
@@ -1086,21 +1255,27 @@ impl Fintwind {
             theme,
             ranking_row_count(views),
             views.totals.total(),
+            self.usage_ranking_page,
+            views.provider_count,
+            false,
+            Some(usage_ranking_selector(self.usage_ranking_provider, cx)),
+            cx,
         )
     }
 
     /// The per-project ranking: which working directories the store's
     /// sessions actually ran in, largest share first.
-    fn render_usage_projects(&self, views: &UsageViews, theme: &Theme, _narrow: bool) -> Div {
+    fn render_usage_projects(&self, views: &UsageViews, theme: &Theme, _narrow: bool, cx: &mut Context<Self>) -> Div {
         let rows: Vec<UsageRankRow> = views
             .projects
             .iter()
-            .map(|row| UsageRankRow {
+            .enumerate().skip(self.usage_project_page * MAX_MODEL_ROWS).take(MAX_MODEL_ROWS).map(|(index, row)| UsageRankRow {
                 id: format!("usage-project-{}", row.directory),
                 tooltip: row.directory.clone(),
                 display: project_display_name(&row.directory),
                 count_label: tr!("usage_page.model_sessions", count = row.sessions),
                 total: row.total,
+                selection: UsageFlowSelection::Project(index),
             })
             .collect();
         usage_ranking_card(
@@ -1110,6 +1285,11 @@ impl Fintwind {
             theme,
             ranking_row_count(views),
             views.totals.total(),
+            self.usage_project_page,
+            views.project_count,
+            true,
+            None,
+            cx,
         )
     }
 }
@@ -1173,6 +1353,20 @@ struct UsageRankRow {
     /// The trailing count, already localized — "3 个会话" or "2 个模型".
     count_label: String,
     total: u64,
+    selection: UsageFlowSelection,
+}
+
+fn usage_ranking_selector(provider: bool, cx: &mut Context<Fintwind>) -> AnyElement {
+    SegmentedControl::new("usage-ranking-kind", if provider { "provider" } else { "model" })
+        .size(ControlSize::Sm)
+        .segment("model", tr!("usage_page.models_title"), None)
+        .segment("provider", tr!("usage_page.providers_title"), None)
+        .on_change(cx.listener(|this, value: &SharedString, _, cx| {
+            this.usage_ranking_provider = value.as_ref() == "provider";
+            this.usage_ranking_page = 0;
+            cx.notify();
+        }))
+        .into_any_element()
 }
 
 /// Horizontal share comparisons using the same total across all three cards.
@@ -1185,6 +1379,11 @@ fn usage_ranking_card(
     theme: &Theme,
     row_count: usize,
     total: u64,
+    page: usize,
+    count: usize,
+    project: bool,
+    selector: Option<AnyElement>,
+    cx: &mut Context<Fintwind>,
 ) -> Div {
     let list = List::new().divided().children(rows.into_iter().map(|row| {
         let share = if total > 0 {
@@ -1192,9 +1391,17 @@ fn usage_ranking_card(
         } else {
             0.0
         };
+        let key_selection = row.selection.clone();
+        let click_selection = row.selection;
         div()
             .id(SharedString::from(format!("{}-detail", row.id)))
-            .min_h(gpui::rems(4.5))
+            .tab_index(0)
+            .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
+            .on_click(cx.listener(move |this, _, _, cx| {this.usage_flow_selection = Some(click_selection.clone());cx.notify();}))
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {this.usage_flow_selection = Some(key_selection.clone());cx.notify();cx.stop_propagation();}
+            }))
+            .min_h(gpui::rems(2.0))
             .tooltip(Tooltip::text(row.tooltip))
             .child(
                 ListItem::new(SharedString::from(row.id), row.display)
@@ -1227,12 +1434,31 @@ fn usage_ranking_card(
                 ),
             )
     }));
+    let pages = count.div_ceil(MAX_MODEL_ROWS).max(1);
+    let pagination = div().flex().items_center().justify_end().gap_2()
+        .child(Button::new(if project {"usage-project-prev"} else {"usage-rank-prev"}, "‹")
+            .size(ControlSize::Sm).disabled(page == 0)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let page = if project { &mut this.usage_project_page } else { &mut this.usage_ranking_page };
+                *page = page.saturating_sub(1); cx.notify();
+            })))
+        .child(Caption::new(format!("{} / {}", page + 1, pages)))
+        .child(Button::new(if project {"usage-project-next"} else {"usage-rank-next"}, "›")
+            .size(ControlSize::Sm).disabled(page + 1 >= pages)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let page = if project { &mut this.usage_project_page } else { &mut this.usage_ranking_page };
+                *page = (*page + 1).min(pages - 1); cx.notify();
+            })));
     usage_card(theme)
         .h_full()
-        .p_5()
-        .gap_4()
-        .child(CardHeader::new(title).action(Caption::new(caption)))
-        .child(div().min_h(gpui::rems(4.5 * row_count as f32)).child(list))
+        .p_3()
+        .gap_2()
+        .child(div().flex().items_center().justify_between().gap_2()
+            .child(CardHeader::new(title).action(Caption::new(caption)))
+            .children(selector))
+        .child(div().bg(theme.composer).border_1().border_color(theme.border).rounded(px(6.0))
+            .min_h(gpui::rems(2.0 * row_count as f32)).child(list))
+        .when(pages > 1, |card| card.child(pagination))
 }
 
 fn ranking_row_count(views: &UsageViews) -> usize {
@@ -1241,6 +1467,7 @@ fn ranking_row_count(views: &UsageViews) -> usize {
         .len()
         .max(views.providers.len())
         .max(views.projects.len())
+        .min(MAX_MODEL_ROWS)
         .max(1)
 }
 
@@ -1248,21 +1475,6 @@ fn ranking_row_count(views: &UsageViews) -> usize {
 /// and inspector cards, rather than Ely's unrelated default flat surface.
 pub(super) fn usage_card(theme: &Theme) -> Div {
     crate::ui::card(theme)
-}
-
-fn usage_metric(theme: &Theme, label: String, value: String, caption: String) -> Div {
-    usage_card(theme)
-        .h_full()
-        .min_h(gpui::rems(8.0))
-        .p_5()
-        .gap_2()
-        .child(Caption::new(label))
-        .child(
-            tabular(Label::new(value))
-                .text_3xl()
-                .font_weight(FontWeight::MEDIUM),
-        )
-        .child(Caption::new(caption))
 }
 
 fn usage_notice(_theme: &Theme, icon_path: &'static str, _tint: Hsla, message: String) -> Alert {
@@ -1983,7 +2195,6 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
         return UsageViews::default();
     };
     let today = Local::now().date_naive();
-    let now = unix_time();
     let selected_day = match range {
         UsageRange::Day(offset) => Some(today - ChronoDuration::days(i64::from(offset))),
         _ => None,
@@ -1993,10 +2204,6 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
         .unwrap_or(BAR_HORIZON_DAYS)
         .min(BAR_HORIZON_DAYS);
     let bar_start = selected_day.unwrap_or(today - ChronoDuration::days(bar_horizon - 1));
-    let range_cutoff = range
-        .days()
-        .map(|days| now.saturating_sub(days as u64 * 86_400))
-        .unwrap_or(0);
 
     let mut totals = UsageTotals::default();
     // Day buckets are built from every entry: the heatmap shows its fixed
@@ -2009,7 +2216,6 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
             ..Default::default()
         })
         .collect::<Vec<_>>();
-    #[cfg(test)]
     let mut hourly_estimated = false;
     // Model rows key on the raw `provider/id` string, except a session the
     // server recorded no model for — it folds into the unknown-model row so
@@ -2082,7 +2288,10 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
             let Some(date) = local_date(lane.timestamp) else {
                 continue;
             };
-            if selected_day.map_or(lane.timestamp >= range_cutoff, |selected| date == selected) {
+            if selected_day.map_or_else(
+                || range.days().is_none_or(|days| date >= today - ChronoDuration::days(days - 1)),
+                |selected| date == selected,
+            ) {
                 range_days.insert(date);
             }
             let day = days.entry(date).or_insert_with(|| empty_day(date));
@@ -2100,10 +2309,7 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
         if let Some(selected) = selected_day {
             if entry.hours.is_empty() {
                 if entry.total_tokens() > 0 && local_date(entry.timestamp) == Some(selected) {
-                    #[cfg(test)]
-                    {
-                        hourly_estimated = true;
-                    }
+                    hourly_estimated = true;
                     let hour = local_hour(entry.timestamp) as usize;
                     let bucket = &mut hourly[hour];
                     bucket.input = bucket.input.saturating_add(entry.input_tokens);
@@ -2120,10 +2326,7 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
                     if local_date(share.timestamp) != Some(selected) {
                         continue;
                     }
-                    #[cfg(test)]
-                    {
-                        hourly_estimated |= share.estimated;
-                    }
+                    hourly_estimated |= share.estimated;
                     let bucket = &mut hourly[local_hour(share.timestamp) as usize];
                     bucket.input = bucket.input.saturating_add(share.input);
                     bucket.output = bucket.output.saturating_add(share.output);
@@ -2151,15 +2354,12 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
                     let missing_cost = (entry.cost.unwrap_or_default()
                         - entry.hours.iter().map(|h| h.cost).sum::<f64>())
                     .max(0.0);
-                    #[cfg(test)]
-                    {
-                        // Ignore floating-point dust from the pricing pass.
-                        hourly_estimated |= missing_input > 0
-                            || missing_output > 0
-                            || missing_read > 0
-                            || missing_write > 0
-                            || missing_cost > 0.005;
-                    }
+                    // Ignore floating-point dust from the pricing pass.
+                    hourly_estimated |= missing_input > 0
+                        || missing_output > 0
+                        || missing_read > 0
+                        || missing_write > 0
+                        || missing_cost > 0.005;
                     let bucket = &mut hourly[local_hour(entry.timestamp) as usize];
                     bucket.input = bucket.input.saturating_add(missing_input);
                     bucket.output = bucket.output.saturating_add(missing_output);
@@ -2260,7 +2460,6 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
         .collect();
     models.sort_by(|a, b| b.total.cmp(&a.total).then(b.last_used.cmp(&a.last_used)));
     let model_count = models.len();
-    models.truncate(MAX_MODEL_ROWS);
 
     let mut provider_rows: Vec<UsageProviderRow> = providers
         .into_iter()
@@ -2274,7 +2473,6 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
         .collect();
     provider_rows.sort_by(|a, b| b.total.cmp(&a.total));
     let provider_count = provider_rows.len();
-    provider_rows.truncate(MAX_MODEL_ROWS);
 
     let mut projects: Vec<UsageProjectRow> = projects
         .into_iter()
@@ -2288,13 +2486,11 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
         .collect();
     projects.sort_by(|a, b| b.total.cmp(&a.total).then(b.directory.cmp(&a.directory)));
     let project_count = projects.len();
-    projects.truncate(MAX_MODEL_ROWS);
 
     UsageViews {
         totals,
         daily,
         hourly,
-        #[cfg(test)]
         hourly_estimated,
         weeks,
         heatmap_active_days,

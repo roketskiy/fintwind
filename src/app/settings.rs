@@ -349,12 +349,8 @@ impl Fintwind {
     /// while it stays open.
     pub(super) fn open_usage_page(&mut self, cx: &mut Context<Self>) {
         self.mode = WorkspaceMode::Usage;
-        match self.usage_tab {
-            usage_page::UsageTab::Subscriptions => {
-                self.load_subscriptions(false, cx);
-            }
-            usage_page::UsageTab::Statistics => self.ensure_usage_stats(false, cx),
-        }
+        self.ensure_usage_stats(false, cx);
+        self.load_subscriptions(false, cx);
         self.start_usage_auto_refresh(cx);
         cx.notify();
     }

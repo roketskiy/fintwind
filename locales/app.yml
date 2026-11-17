@@ -3292,6 +3292,26 @@ usage_page.projects_caption:
   en: "%{count} projects"
 usage_page.subscriptions_title:
   en: Subscriptions
+usage_page.flow_title:
+  en: Usage flow
+usage_page.range_today:
+  en: Today
+usage_page.flow_clear:
+  en: Clear selection
+usage_page.flow_other:
+  en: Other
+usage_page.flow_reasoning:
+  en: Reasoning
+usage_page.flow_total:
+  en: Total
+usage_page.flow_composition:
+  en: Composition
+usage_page.flow_share:
+  en: Share
+usage_page.flow_scope:
+  en: Range
+usage_page.flow_input_generated:
+  en: Input / generated
 usage_page.statistics_title:
   en: Usage statistics
 usage_page.cache_title:

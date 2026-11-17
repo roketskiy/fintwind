@@ -1653,6 +1653,16 @@ usage_page.provider_models: "%{count} モデル"
 usage_page.truncated_notice: "%{sessions} 件のセッションをスキャンした時点で上限に達しました。それより古いセッションは以下の集計に含まれていません。"
 usage_page.updated_at: "%{time} 更新"
 usage_page.subscriptions_title: サブスクリプション
+usage_page.flow_title: 使用量の流れ
+usage_page.range_today: 今日
+usage_page.flow_clear: 選択を解除
+usage_page.flow_other: その他
+usage_page.flow_reasoning: 推論
+usage_page.flow_total: 合計
+usage_page.flow_composition: 全体の内訳
+usage_page.flow_share: 全体に占める割合
+usage_page.flow_scope: 集計期間
+usage_page.flow_input_generated: 入力 / 生成
 usage_page.statistics_title: 使用量統計
 usage_page.cache_title: キャッシュ使用量
 usage_page.subscriptions_empty: 使用枠を取得できる接続済みサービスはありません

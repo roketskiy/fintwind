@@ -116,9 +116,7 @@ impl Fintwind {
         for entry in self.provider_quota.entries.values_mut() {
             entry.loading = false;
         }
-        if self.mode != WorkspaceMode::Usage
-            || self.usage_tab != usage_page::UsageTab::Subscriptions
-        {
+        if self.mode != WorkspaceMode::Usage {
             return;
         }
         for provider in visible {
@@ -406,6 +404,62 @@ impl Fintwind {
             .p_5()
             .gap_4()
             .child(identity)
+            .child(body)
+            .child(footer)
+            .into_any_element()
+    }
+
+    /// Compact carousel presentation of the same provider snapshot used by
+    /// the detailed subscription board.
+    pub(super) fn render_subscription_slide(
+        &self,
+        provider: &str,
+        loading: bool,
+        reading: Option<&ProviderQuota>,
+        slots: (usize, usize),
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (balance_only, _) = subscription_layout(provider, reading);
+        let mut body = div().flex().flex_col().gap_2();
+        if let Some(reading) = reading {
+            for balance in &reading.balances {
+                body = body.child(quota_balance_row(balance, balance_only));
+            }
+            for window in &reading.windows {
+                body = body.child(quota_window(window, theme));
+            }
+        }
+        if loading && reading.is_none_or(|quota| quota.windows.is_empty() && quota.balances.is_empty()) {
+            body = body.child(subscription_loading_body(balance_only, slots, *theme));
+        }
+        let mut footer = div().flex().items_center().justify_between().gap_2();
+        if loading {
+            footer = footer.child(Caption::new(tr!("providers.quota_loading")));
+        } else if let Some(status) = subscription_state_line(
+            reading.map(|quota| &quota.status).unwrap_or(&QuotaStatus::NoData), theme,
+        ) {
+            footer = footer.child(status);
+        }
+        if let Some(quota) = reading
+            && let Some(at) = quota.measured_at.and_then(|at| DateTime::from_timestamp(at, 0))
+        {
+            let time = quota_time(at.with_timezone(&Local));
+            footer = footer.child(Caption::new(if quota.status == QuotaStatus::Ready {
+                tr!("providers.quota_measured", time = time)
+            } else {
+                tr!("providers.quota_cached_measured", time = time)
+            }));
+        }
+        div().id(SharedString::from(format!("subscription-slide-{provider}")))
+            .min_h(px(216.0)).bg(theme.composer).border_1().border_color(theme.border)
+            .rounded(px(6.0)).p_3().flex().flex_col().gap_2()
+            .child(div().flex().items_center().gap_2().border_b_1().border_color(theme.border).pb_2()
+                .child(div().flex_1().min_w_0().text_size(ui_px(15.0)).font_weight(FontWeight::MEDIUM)
+                    .truncate().child(self.subscription_display_name(provider)))
+                .children(reading.and_then(|quota| quota.plan.as_ref()).filter(|plan| !plan.is_empty()).map(|plan| Caption::new(plan.clone())))
+                .child(self.subscription_refresh_button(provider, loading, cx)))
+            .children(reading.and_then(|quota| quota.account.as_ref()).filter(|account| !account.is_empty()).map(|account| Caption::new(account.clone())))
             .child(body)
             .child(footer)
             .into_any_element()

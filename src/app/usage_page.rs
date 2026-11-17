@@ -665,7 +665,10 @@ impl Fintwind {
     /// subscription page available for refresh/status and overflow cases.
     fn render_usage_quota_compact(&self, theme: &Theme, compact: bool, cx: &mut Context<Self>) -> Div {
         let cards = self.subscription_cards();
-        let width = if compact { (f32::from(self.usage_content_width) - 24.0).max(0.0) } else { 276.0 };
+        // Measure the actual clipped viewport instead of subtracting guessed
+        // padding from its parent. Leave the border inside the clip on all sides.
+        let viewport_width = f32::from(self.usage_quota_viewport_width);
+        let width = (viewport_width - 2.0).max(0.0);
         let current = self.usage_quota_index.min(cards.len().saturating_sub(1));
         let slots = cards.iter().map(|(provider, _, reading)| {
             let (_, windows) = providers_quota::subscription_layout(provider, reading.as_ref());
@@ -697,12 +700,13 @@ impl Fintwind {
                 this.finish_usage_quota_drag(width, cx);
             }));
         for (i, (provider, loading, reading)) in self.subscription_cards().iter().enumerate() {
+            if width == 0.0 { continue; }
             if i.abs_diff(current) > 1 { continue; }
             if i != current && self.usage_quota_drag.is_none() && self.usage_quota_snap.is_none() { continue; }
-            let position = (i as f32 - current as f32) * width + offset;
+            let position = 1.0 + (i as f32 - current as f32) * width + offset;
             let content = self.render_subscription_slide(provider, *loading, reading.as_ref(), slots, theme, cx);
             let child = div().id(SharedString::from(format!("usage-quota-slide-{provider}")))
-                .absolute().left(px(position)).top_0().w(px(width)).h_full()
+                .absolute().left(px(position)).top(px(1.0)).w(px(width)).h(px(298.0))
                 .bg(theme.composer).border_1().border_color(theme.border).rounded(px(6.0)).overflow_hidden()
                 .child(div().id(SharedString::from(format!("usage-quota-content-{provider}")))
                     .size_full().overflow_y_scroll().child(content));
@@ -717,6 +721,16 @@ impl Fintwind {
             } else { child.into_any_element() };
             strip = strip.child(child);
         }
+        let measure = cx.listener(|this, bounds: &Bounds<Pixels>, _, cx| {
+            if this.usage_quota_viewport_width != bounds.size.width {
+                this.usage_quota_viewport_width = bounds.size.width;
+                cx.notify();
+            }
+        });
+        strip = strip.child(canvas(
+            move |bounds, window, cx| measure(&bounds, window, cx),
+            |_, _, _, _| {},
+        ).absolute().inset_0());
         let mut positions = div().flex_none().flex().items_center().justify_center().gap_1().h(px(28.0));
         let count = self.subscription_cards().len();
         for i in 0..count {

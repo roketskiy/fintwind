@@ -4192,6 +4192,99 @@ fn opencode_attachment_only_user_projection_is_preserved() {
 //     Unknown-pending; a fault-injecting fake fails boundedly without
 //     flipping receipts; many unresolved sessions keep the daemon responsive.
 
+#[test]
+#[ignore = "run under scripts/watchdog-e2e.py's isolated process job"]
+fn watchdog_daemon_e2e() {
+    let run = Run::new();
+    let harness = start_harness(&run.root);
+    let mut results = Vec::new();
+    for (case, enabled, tool, should_stop) in [
+        ("text", true, false, true),
+        ("tool", true, true, true),
+        ("disabled", false, false, false),
+        ("changed-text", true, false, false),
+        ("empty-text", true, false, false),
+        ("changed-tool", true, true, false),
+        ("disabled-live", true, false, false),
+    ] {
+        let mut settings = match harness.client.request(Uuid::nil(), Uuid::nil(), Command::GetSettings).unwrap() {
+            ResponsePayload::Settings { settings } => settings,
+            other => panic!("unexpected settings: {other:?}"),
+        };
+        if case == "text" {
+            assert!(settings.watchdog_enabled(), "missing setting must default to enabled");
+        }
+        settings.extra.insert("watchdog_enabled".into(), json!(enabled));
+        harness.client.request(Uuid::nil(), Uuid::nil(), Command::UpdateSettings { settings }).unwrap();
+        let sid = "ses_watchdog";
+        let mut steps = Vec::new();
+        for i in 0..10 {
+            if i == 9 { steps.push(json!({"sleep_ms": 1800})); }
+            if tool {
+                let id = format!("call_{i}");
+                for event in [
+                    json!({"type":"session.tool.input.started", "data":{"sessionID":sid,"id":id,"name":"read"}}),
+                    json!({"type":"session.tool.called", "data":{"sessionID":sid,"id":id,"input":{"path":if case == "changed-tool" && i == 4 {"b"} else {"a"}}}}),
+                    json!({"type":"session.tool.success", "data":{"sessionID":sid,"id":id,"content":"same"}}),
+                ] {
+                    steps.push(json!({"event":event}));
+                    if i == 0 && event["type"] == "session.tool.success" { steps.push(json!({"event":event})); }
+                }
+            } else {
+                let id = format!("msg_{i}");
+                let ended = json!({"type":"session.text.ended", "data":{"sessionID":sid,"assistantMessageID":id,"ordinal":0,"text":if case == "changed-text" && i == 4 {"different"} else {"same"}}});
+                let settled = json!({"type":"session.step.ended", "data":{"sessionID":sid,"assistantMessageID":id}});
+                if case != "empty-text" || i != 4 { steps.push(json!({"event":ended})); }
+                steps.push(json!({"event":settled}));
+                if i == 0 { steps.push(json!({"event":settled})); }
+            }
+        }
+        let fixture = build_fixture(&run, case, &json!({"session_id":sid,"turns":[{"active":true,"sse":steps}]}));
+        let (session, runtime) = (Uuid::new_v4(), Uuid::new_v4());
+        harness.client.request(session, runtime, Command::Start { options: start_options(&fixture.bin, &run.workspace(case)) }).unwrap();
+        let events = harness.client.subscribe(session, runtime);
+        harness.client.request(session, runtime, Command::Prompt { prompt:"repeat".into(), files:vec![] }).unwrap();
+        std::thread::sleep(Duration::from_millis(1000));
+        let interrupts = || read_jsonl(&fixture.server_log).iter().filter(|entry| entry["event"] == "post" && entry["path"].as_str().is_some_and(|path| path.ends_with("/interrupt"))).count();
+        let before = interrupts();
+        if case == "disabled-live" {
+            let mut settings = match harness.client.request(Uuid::nil(), Uuid::nil(), Command::GetSettings).unwrap() {
+                ResponsePayload::Settings { settings } => settings,
+                other => panic!("unexpected settings: {other:?}"),
+            };
+            settings.extra.insert("watchdog_enabled".into(), json!(false));
+            harness.client.request(Uuid::nil(), Uuid::nil(), Command::UpdateSettings { settings }).unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while should_stop && interrupts() == 0 && Instant::now() < deadline { std::thread::sleep(Duration::from_millis(50)); }
+        if !should_stop { std::thread::sleep(Duration::from_millis(2000)); }
+        let after = interrupts();
+        let mut received = Vec::new();
+        while let Ok(event) = events.try_recv() { received.push(json!({"kind":event.event.kind,"payload":event.event.payload})); }
+        let errors = received.iter().filter(|event| event["kind"] == "error").count();
+        results.push(json!({"case":case,"before_tenth":before,"interrupts":after,"errors":errors,"events":received}));
+        fs::write(run.root.join("watchdog-result.json"), serde_json::to_vec_pretty(&results).unwrap()).unwrap();
+        assert_eq!(before, 0, "{case}: stopped before ten distinct outputs");
+        assert_eq!(after, usize::from(should_stop), "{case}: incorrect interrupt count");
+        assert_eq!(errors, usize::from(should_stop), "{case}: incorrect error count");
+        if should_stop {
+            assert!(received.iter().any(|event| event["kind"] == "error"
+                && event["payload"].as_str().is_some_and(|text| text.contains("10"))),
+                "{case}: missing explanation in error event");
+        }
+        harness.client.request(session, runtime, Command::CloseSession).unwrap();
+    }
+    drop(harness);
+    let restarted = start_harness(&run.root);
+    match restarted.client.request(Uuid::nil(), Uuid::nil(), Command::GetSettings).unwrap() {
+        ResponsePayload::Settings { settings } => assert!(!settings.watchdog_enabled(), "disabled preference must survive daemon restart"),
+        other => panic!("unexpected settings: {other:?}"),
+    }
+    results.push(json!({"case":"restart-persistence", "disabled":true}));
+    fs::write(run.root.join("watchdog-result.json"), serde_json::to_vec_pretty(&results).unwrap()).unwrap();
+    eprintln!("watchdog artifact: {}", run.root.join("watchdog-result.json").display());
+}
+
 fn durable_submission(project: &Project, prompt: &str) -> (AgentSession, SubmissionRecord) {
     let mut session = AgentSession::new(project.id);
     let turn = session.begin_turn(prompt);

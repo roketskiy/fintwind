@@ -458,6 +458,12 @@ settings.keep_screen_awake_description:
   en: While on, the display and system stay awake for as long as the app runs
 settings.auto_compact:
   en: Auto compact
+settings.watchdog:
+  en: Repetition watchdog
+settings.watchdog_description:
+  en: Stops a task after 10 identical consecutive model replies or tool calls and results.
+errors.watchdog_repeat:
+  en: Repeated output detected 10 times; stopping the task.
 settings.auto_compact_description:
   en: Compact once when live context reaches the threshold below, for the session and its subagents
 settings.auto_compact_threshold:

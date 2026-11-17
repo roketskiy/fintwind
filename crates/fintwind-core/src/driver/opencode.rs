@@ -61,6 +61,7 @@ use crate::opencode_session::{
 mod job_work;
 mod recovery;
 mod shell_work;
+mod watchdog;
 
 /// How often the permission poll scans the server's pending requests. The
 /// endpoint answers instantly when nothing is pending and opencode does not
@@ -179,6 +180,7 @@ enum CommandMessage {
     Goal(fintwind_protocol::goal::GoalAction),
     RefreshGoal,
     Cancel,
+    WatchdogStopChild { session_id: String },
     CompactChild {
         session_id: String,
     },
@@ -818,7 +820,7 @@ pub struct OpenCodeDriver {
 impl OpenCodeDriver {
     #[cfg(test)]
     pub fn start(options: DriverStartOptions, events: DriverEventSender) -> anyhow::Result<Self> {
-        Self::start_with_tools(options, events, None, None, None)
+        Self::start_with_tools(options, events, None, None, None, Arc::new(AtomicBool::new(true)))
     }
 
     pub(crate) fn start_with_tools(
@@ -827,6 +829,7 @@ impl OpenCodeDriver {
         browser: Option<crate::browser_mcp::Runtime>,
         blobs: Option<Arc<crate::blob_store::BlobStore>>,
         scheduled: Option<crate::scheduled::tools::Runtime>,
+        watchdog_enabled: Arc<AtomicBool>,
     ) -> anyhow::Result<Self> {
         let DriverStartOptions {
             binary,
@@ -1292,6 +1295,7 @@ impl OpenCodeDriver {
                     ..OpenCodeStreamState::default()
                 };
                 state.shells = Arc::clone(&stream_background_shells);
+                let mut watchdog = watchdog::Watchdog::default();
                 let mut goal_connection = 0;
                 // SSE loss is a transport fault, not process exit. The hub
                 // reconnects; durable reconciliation runs off this consumer.
@@ -1346,6 +1350,16 @@ impl OpenCodeDriver {
                                         &stream_family,
                                     );
                                 }
+                                let session = event_session_id(&value);
+                                let belongs = session == Some(stream_session.as_str())
+                                    || session.is_some_and(|id| state.children.contains_key(id));
+                                if belongs && watchdog.observe(&value, watchdog_enabled.load(Ordering::Acquire)) {
+                                    let _ = stream_event_sink.send(DriverEvent::Error(tr!("errors.watchdog_repeat")));
+                                    if let Some(child) = session.filter(|id| *id != stream_session) {
+                                        let _ = stream_commands.send(CommandMessage::WatchdogStopChild { session_id: child.to_owned() });
+                                    }
+                                    let _ = stream_commands.send(CommandMessage::Cancel);
+                                }
                                 reconciliation.observe(
                                     &value,
                                     &stream_session,
@@ -1380,6 +1394,7 @@ impl OpenCodeDriver {
                             &stream_event_sink,
                             stream_port,
                         ) {
+                            watchdog.clear(&stream_session);
                             reconciliation.mark_completed(completed);
                         }
                     }
@@ -1959,6 +1974,14 @@ impl OpenCodeDriver {
                                     let _ = worker_events
                                         .send(DriverEvent::GoalCommandFailed(error.to_string()));
                                 }
+                            }
+                        }
+                        CommandMessage::WatchdogStopChild { session_id } => {
+                            let path = format!("/api/session/{}/interrupt", encode_path_segment(&session_id));
+                            if let Err(error) = worker_server.request("POST", &path, None) {
+                                let _ = worker_events.send(DriverEvent::Error(tr!(
+                                    "errors.stop_provider", provider = "OpenCode", error = error
+                                )));
                             }
                         }
                         CommandMessage::Cancel => {

@@ -542,7 +542,7 @@ pub(super) fn ssh_wait_button(
         })
         .flex()
         .items_center()
-        .gap(px(6.0))
+        .justify_center()
         .text_size(ui_px(12.0))
         .text_color(foreground)
         .font_weight(FontWeight::MEDIUM)
@@ -557,14 +557,7 @@ pub(super) fn ssh_wait_button(
             })
         })
         .focus_visible(|style| style.border_color(theme.accent_focus))
-        .child(div().size(px(12.0)).flex_none().when(show_spinner, |slot| {
-            slot.child(motion::spin(icon(
-                "icons/loader-circle.svg",
-                12.0,
-                foreground,
-            )))
-        }))
-        .child(label)
+        .child(crate::ui::loading_label(label, show_spinner, foreground))
         .when(enabled, |button| {
             button.on_activation(cx, move |app, _, cx| run(app, cx))
         })

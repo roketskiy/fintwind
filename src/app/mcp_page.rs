@@ -2442,16 +2442,12 @@ fn mcp_load_error_banner(
                 .flex_none()
                 .flex()
                 .items_center()
-                .gap(px(4.0))
                 .text_size(ui_px(11.0))
                 .line_height(ui_px(16.0))
                 .text_color(theme.text_secondary)
                 .hover(|element| element.text_color(theme.text))
                 .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
-                .child(tr!("common.retry"))
-                .child(div().size(px(12.0)).when(retrying, |slot| {
-                    slot.child(motion::spin_slow(icon("icons/loader-circle.svg", 12.0, theme.text_secondary)))
-                }))
+                .child(crate::ui::loading_label(tr!("common.retry"), retrying, theme.text_secondary))
                 .on_activation(cx, move |this, _, cx| {
                     if !retrying {
                         this.load_mcp_servers_from_config(cx);
@@ -2498,16 +2494,12 @@ fn mcp_status_error_banner(
                 .flex_none()
                 .flex()
                 .items_center()
-                .gap(px(4.0))
                 .text_size(ui_px(11.0))
                 .line_height(ui_px(16.0))
                 .text_color(theme.text_secondary)
                 .hover(|element| element.text_color(theme.text))
                 .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
-                .child(tr!("common.retry"))
-                .child(div().size(px(12.0)).when(retrying, |slot| {
-                    slot.child(motion::spin_slow(icon("icons/loader-circle.svg", 12.0, theme.text_secondary)))
-                }))
+                .child(crate::ui::loading_label(tr!("common.retry"), retrying, theme.text_secondary))
                 .on_activation(cx, move |this, _, cx| {
                     if !retrying {
                         this.refresh_mcp_statuses(cx);

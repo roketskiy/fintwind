@@ -13,8 +13,6 @@ use std::time::{Duration, Instant};
 use std::fs::{self, OpenOptions};
 #[cfg(unix)]
 use std::sync::atomic::{AtomicU64, Ordering};
-#[cfg(unix)]
-use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 use std::ffi::CStr;

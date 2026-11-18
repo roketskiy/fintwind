@@ -162,6 +162,12 @@ fn sidebar_project_groups(
 /// so a group's height and its internal scroll belong to one list item.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum SidebarRow {
+    LocalHost,
+    LocalProject(Uuid, String),
+    LocalSession(Uuid, String),
+    SshHost(Uuid, String),
+    SshProject(Uuid, Uuid, String),
+    SshSession(Uuid, Uuid, Uuid, String),
     /// A project group carrying its id and its started sessions.
     Group(Rc<SidebarGroup>),
     /// Spacing between project groups.
@@ -811,11 +817,53 @@ impl Fintwind {
             .panel_resize_drag
             .is_some_and(|drag| drag.target == PanelResizeTarget::Sidebar);
 
-        let rows = self.sidebar_rows_cached();
+        let rows = self.sidebar_rows_for_window(cx);
         self.sync_sidebar_rows(&rows);
         let history_scrolled =
             self.sidebar_list_state.scroll_px_offset_for_scrollbar().y < px(-0.5);
         let entity = cx.entity().downgrade();
+
+        self.render_sidebar_body(width, cx, theme, is_resizing, rows, history_scrolled, entity)
+    }
+
+    fn sidebar_rows_for_window(&self, cx: &App) -> Rc<Vec<SidebarRow>> {
+        let own_rows = self.sidebar_rows_cached();
+        if let Some(owner) = self.ssh_workspace_owner() {
+            let owner = owner.read(cx);
+            let host = owner.active_ssh_host();
+            let mut rows = vec![SidebarRow::LocalHost];
+            let titles: HashMap<_, _> = owner.state.sessions.iter().map(|session| (session.id, &session.title)).collect();
+            for row in owner.sidebar_rows_cached().iter() {
+                if let SidebarRow::Group(group) = row {
+                    if let Some(project) = owner.state.projects.iter().find(|project| project.id == group.project_id) {
+                        rows.push(SidebarRow::LocalProject(project.id, project.name.clone()));
+                        rows.extend(group.sessions.iter().filter_map(|id| {
+                            Some(SidebarRow::LocalSession(*id, (*titles.get(id)?).clone()))
+                        }));
+                    }
+                }
+            }
+            Rc::new(rows.into_iter().chain(own_rows.iter().filter(|row| !matches!(row, SidebarRow::LocalHost)).cloned()).chain(owner.sidebar_rows_cached().iter().filter(|row| {
+                match row {
+                    SidebarRow::SshHost(id, _) | SidebarRow::SshProject(id, ..) | SidebarRow::SshSession(id, ..) => Some(*id) != host,
+                    _ => false,
+                }
+            }).cloned()).collect())
+        } else {
+            own_rows
+        }
+    }
+
+    fn render_sidebar_body(
+        &self,
+        width: f32,
+        cx: &mut Context<Self>,
+        theme: Theme,
+        is_resizing: bool,
+        rows: Rc<Vec<SidebarRow>>,
+        history_scrolled: bool,
+        entity: gpui::WeakEntity<Self>,
+    ) -> Div {
 
         div()
             .w(px(width))
@@ -938,6 +986,14 @@ impl Fintwind {
     /// Projects without history keep a bare header so they stay reachable.
     fn sidebar_rows(&self) -> Vec<SidebarRow> {
         let mut rows = Vec::new();
+        let ssh_hosts = if self.daemon.is_remote() {
+            Vec::new()
+        } else {
+            self.saved_ssh_hosts()
+        };
+        if !ssh_hosts.is_empty() || self.has_workspace_owner() {
+            rows.push(SidebarRow::LocalHost);
+        }
         for (project_id, sessions) in
             sidebar_project_groups(&self.state.sessions, &self.state.projects)
         {
@@ -947,6 +1003,21 @@ impl Fintwind {
                 unfolded: self.sidebar_expanded_groups.contains(&project_id),
             })));
             rows.push(SidebarRow::GroupSpacer);
+        }
+        for (host, name) in ssh_hosts {
+            rows.push(SidebarRow::SshHost(host, name));
+            if let Some(catalog) = self.ssh_project_catalog(host) {
+                let titles: HashMap<_, _> = catalog.sessions.iter().map(|session| (session.id, &session.title)).collect();
+                for (project, sessions) in sidebar_project_groups(&catalog.sessions, &catalog.projects) {
+                    let Some(record) = catalog.projects.iter().find(|record| record.id == project) else {
+                        continue;
+                    };
+                    rows.push(SidebarRow::SshProject(host, project, record.name.clone()));
+                    rows.extend(sessions.into_iter().filter_map(|session| {
+                        Some(SidebarRow::SshSession(host, project, session, (*titles.get(&session)?).clone()))
+                    }));
+                }
+            }
         }
         rows
     }
@@ -998,6 +1069,80 @@ impl Fintwind {
             return div().into_any_element();
         };
         match row {
+            SidebarRow::LocalHost if self.has_workspace_owner() => {
+                ely_gpui_component::buttons::Button::new("sidebar-local-host", tr!("ssh.local"))
+                    .on_click(cx.listener(|app, _, window, cx| app.return_to_local_workspace(window, cx)))
+                    .into_any_element()
+            }
+            SidebarRow::LocalHost => div().child(tr!("ssh.local")).into_any_element(),
+            SidebarRow::LocalProject(project, title) | SidebarRow::LocalSession(project, title) => {
+                let id = *project;
+                let is_session = matches!(row, SidebarRow::LocalSession(..));
+                div().when(is_session, |row| row.pl(px(12.0))).child(
+                    ely_gpui_component::buttons::Button::new(
+                        gpui::SharedString::from(format!("sidebar-local-{is_session}-{id}")),
+                        title.clone(),
+                    ).on_click(cx.listener(move |app, _, window, cx| {
+                        app.route_sidebar_host_action(window, cx, move |app, window, cx| {
+                            app.activate_local_sidebar_target(id, is_session, window, cx);
+                        });
+                    }))
+                ).into_any_element()
+            }
+            SidebarRow::SshHost(host, name) => {
+                let host = *host;
+                let owner = self.ssh_workspace_owner();
+                let source = owner.as_ref().map_or(&*self, |owner| owner.read(cx));
+                let ready = source.ssh_client_for(host).is_some();
+                let (connecting, can_connect, error) = source.project_host_connection(Some(host));
+                let status = if ready {
+                    tr!("ssh.ready")
+                } else if connecting {
+                    tr!("remote.status_connecting")
+                } else {
+                    tr!("ssh.offline")
+                };
+                div().flex().flex_col().child(ely_gpui_component::buttons::Button::new(
+                    gpui::SharedString::from(format!("sidebar-ssh-host-{host}")),
+                    format!("{name} · {status}"),
+                )
+                    .disabled(ready || connecting || !can_connect)
+                    .on_click(cx.listener(move |app, _, window, cx| {
+                        app.route_sidebar_host_action(window, cx, move |app, _, cx| app.connect_project_host(host, cx));
+                    })))
+                    .children(error.map(|error| {
+                        div().px(px(8.0)).text_size(ui_px(11.0))
+                            .text_color(Theme::current(cx).danger_text).child(error)
+                    }))
+                    .into_any_element()
+            }
+            SidebarRow::SshProject(host, project, name) => {
+                let host = *host;
+                let project = *project;
+                ely_gpui_component::buttons::Button::new(gpui::SharedString::from(format!("sidebar-ssh-project-{host}/{project}")), name.clone())
+                    .disabled(self.ssh_workspace_owner().as_ref().map_or(&*self, |owner| owner.read(cx)).ssh_client_for(host).is_none())
+                    .on_click(cx.listener(move |app, _, window, cx| {
+                        app.route_sidebar_host_action(window, cx, move |app, window, cx| {
+                            app.select_ssh_workspace_project(host, project, window, cx);
+                        });
+                    }))
+                    .into_any_element()
+            }
+            SidebarRow::SshSession(host, project, session, title) => {
+                let (host, project, session) = (*host, *project, *session);
+                div().pl(px(12.0)).child(
+                    ely_gpui_component::buttons::Button::new(
+                        gpui::SharedString::from(format!("sidebar-ssh-session-{host}/{session}")),
+                        title.clone(),
+                    )
+                    .disabled(!self.ssh_workspace_owner().as_ref().map_or(&*self, |owner| owner.read(cx)).can_open_ssh_session(host, session, cx))
+                    .on_click(cx.listener(move |app, _, window, cx| {
+                        app.route_sidebar_host_action(window, cx, move |app, window, cx| {
+                            app.select_ssh_workspace_session(host, project, session, window, cx);
+                        });
+                    })),
+                ).into_any_element()
+            }
             SidebarRow::Group(group) => self.render_sidebar_group(group, cx).into_any_element(),
             SidebarRow::GroupSpacer => div().w_full().h(px(10.0)).into_any_element(),
         }
@@ -1391,8 +1536,15 @@ impl Fintwind {
             // in-group scroll used to.
             let header = SIDEBAR_PROJECT_CARD_HEIGHT + SIDEBAR_PROJECT_CARD_BOTTOM_GAP;
             let row_top = header + index as f32 * SIDEBAR_SESSION_ROW_HEIGHT;
+            let prefix = if self.has_workspace_owner() {
+                self.sidebar_row_cache.borrow().iter().take_while(|row| {
+                    matches!(row, SidebarRow::LocalHost | SidebarRow::LocalProject(..) | SidebarRow::LocalSession(..))
+                }).count().saturating_sub(1)
+            } else {
+                0
+            };
             self.sidebar_list_state.scroll_to(ListOffset {
-                item_ix: row_index,
+                item_ix: row_index + prefix,
                 offset_in_item: px(row_top),
             });
             cx.notify();
@@ -1808,6 +1960,21 @@ impl Fintwind {
                     .clone()
                     .cached(StyleRefinement::default().flex_1().min_w(px(0.0)).h_full()),
             )
+            .children(self.ssh_project_machine().map(|machine| {
+                let label = if self.daemon.client().is_disconnected() {
+                    format!("{machine} · {}", tr!("ssh.offline"))
+                } else {
+                    machine.to_owned()
+                };
+                div()
+                    .flex_none()
+                    .max_w(px(160.0))
+                    .px(px(10.0))
+                    .truncate()
+                    .text_size(ui_px(11.0))
+                    .text_color(theme.text_muted)
+                    .child(label)
+            }))
     }
     pub(super) fn render_empty_state(&self, centered: bool, cx: &mut Context<Self>) -> Div {
         let theme = Theme::current(cx);

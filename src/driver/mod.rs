@@ -1,6 +1,7 @@
 //! Desktop proxy for the provider runtime owned by `fintwind-daemon`.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::model::{BackgroundWorkKey, DriverEvent, ProviderResumeCursor, RuntimeEventCursor};
 
@@ -71,10 +72,11 @@ fn connect_remote(
     let remote_events = client.subscribe(session_id, runtime_id);
     let forwarding_events = events.clone();
     let thread_client = client.clone();
+    let transport_closed = Arc::new(AtomicBool::new(false));
+    let forwarding_closed = transport_closed.clone();
     let spawn = std::thread::Builder::new()
         .name(format!("fintwind-daemon-session-{session_id}"))
         .spawn(move || {
-            let mut saw_process_exit = false;
             while let Ok(sequenced) = remote_events.recv() {
                 if replay_cursor.is_some_and(|cursor| {
                     cursor.runtime_id == sequenced.runtime_id
@@ -94,7 +96,6 @@ fn connect_remote(
                         "fintwind daemon sent an invalid event: {error}"
                     )),
                 };
-                saw_process_exit |= matches!(&event, DriverEvent::ProcessExited);
                 if forwarding_events.send(event).is_err()
                     || forwarding_events
                         .send(DriverEvent::RuntimeEventCursorAdvanced(cursor))
@@ -104,19 +105,15 @@ fn connect_remote(
                 }
             }
             thread_client.unsubscribe(session_id, runtime_id);
-            // A development hot-swap (or daemon crash) closes the old event
-            // channel. Surface that as an ordinary provider exit so the task
-            // cannot remain stuck in Working while the supervisor connects
-            // subsequent work to the replacement daemon.
-            if !saw_process_exit {
-                let _ = forwarding_events.send(DriverEvent::ProcessExited);
-            }
+            forwarding_closed.store(true, Ordering::Release);
+            forwarding_events.wake_receiver();
         });
     if let Err(error) = spawn {
         client.unsubscribe(session_id, runtime_id);
         return Err(error.into());
     }
     Ok(DriverHandle::from_control(Arc::new(RemoteDriverControl {
+        transport_closed,
         client,
         session_id,
         runtime_id,
@@ -126,6 +123,7 @@ fn connect_remote(
 }
 
 struct RemoteDriverControl {
+    transport_closed: Arc<AtomicBool>,
     client: fintwind_client::DaemonClient,
     session_id: uuid::Uuid,
     runtime_id: uuid::Uuid,
@@ -147,6 +145,10 @@ impl RemoteDriverControl {
 }
 
 impl DriverControl for RemoteDriverControl {
+    fn transport_closed(&self) -> bool {
+        self.transport_closed.load(Ordering::Acquire)
+    }
+
     fn submit(
         &self,
         receipt: fintwind_protocol::submission::SubmissionReceipt,

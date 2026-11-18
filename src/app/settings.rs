@@ -321,6 +321,11 @@ impl Fintwind {
     /// Every entry point — the rail, the shortcut, the command palette —
     /// funnels through here, so the mode is the single navigation state.
     pub(super) fn open_settings_page(&mut self, page: SettingsPage, cx: &mut Context<Self>) {
+        if let Some(owner) = self.ssh_workspace_owner() {
+            self.hide_workspace_webviews(cx);
+            owner.update(cx, |app, cx| app.open_workspace_settings(page, cx));
+            return;
+        }
         self.mode = WorkspaceMode::Settings;
         self.settings_page = page;
         self.load_ssh_profiles(cx);

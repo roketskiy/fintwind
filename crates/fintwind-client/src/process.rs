@@ -400,6 +400,14 @@ impl DaemonSupervisor {
         receiver
     }
 
+    pub(crate) fn reconnect_through(&self, replacement: &Self) {
+        let endpoint = replacement.inner.remote_endpoint.lock().clone();
+        let mut current_endpoint = self.inner.remote_endpoint.lock();
+        let target = self.inner.target.lock();
+        *current_endpoint = endpoint;
+        target.client().disconnect();
+    }
+
     pub fn is_remote(&self) -> bool {
         self.inner.executable.is_none()
     }
@@ -581,9 +589,15 @@ fn reconnect_remote(inner: &SupervisorInner) {
         DaemonTarget::Remote(client) if client.is_disconnected() => client.last_sequences(),
         _ => return,
     };
-    match DaemonClient::connect_with_resume(&address, token, cursors) {
+    match DaemonClient::connect_with_resume(&address, token.clone(), cursors) {
         Ok(client) => {
-            let replaced = match &mut *inner.target.lock() {
+            let endpoint = inner.remote_endpoint.lock();
+            if endpoint.as_ref() != Some(&(address, token)) {
+                client.disconnect();
+                return;
+            }
+            let mut target = inner.target.lock();
+            let replaced = match &mut *target {
                 DaemonTarget::Remote(dead) if dead.is_disconnected() => {
                     *dead = client.clone();
                     true
@@ -596,6 +610,8 @@ fn reconnect_remote(inner: &SupervisorInner) {
                     .lock()
                     .retain(|subscriber| subscriber.send(client.clone()).is_ok());
                 eprintln!("fintwind daemon connection restored");
+            } else {
+                client.disconnect();
             }
         }
         Err(error) => eprintln!("could not reconnect to the remote fintwind daemon: {error:#}"),

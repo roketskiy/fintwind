@@ -326,6 +326,10 @@ ssh.empty:
   en: No saved connections
 ssh.deploy_daemon:
   en: Deploy daemon
+ssh.update_daemon:
+  en: Update and restart daemon
+ssh.update_busy:
+  en: Wait for running tasks to finish before updating the daemon.
 ssh.start_daemon:
   en: Start daemon
 ssh.deploy_missing:

@@ -17,6 +17,10 @@ pub struct DriverEventSender {
 }
 
 impl DriverEventSender {
+    pub fn wake_receiver(&self) {
+        let _ = self.wake.try_send(());
+    }
+
     pub fn send(&self, event: DriverEvent) -> Result<(), SendError<DriverEvent>> {
         self.events.send(event)?;
         let _ = self.wake.try_send(());
@@ -37,6 +41,10 @@ pub struct DriverHandle {
 }
 
 impl DriverHandle {
+    pub fn transport_closed(&self) -> bool {
+        self.inner.transport_closed()
+    }
+
     pub fn from_control(control: Arc<dyn DriverControl>) -> Self {
         Self { inner: control }
     }
@@ -111,6 +119,10 @@ impl DriverHandle {
 }
 
 pub trait DriverControl: Send + Sync {
+    fn transport_closed(&self) -> bool {
+        false
+    }
+
     fn prompt(&self, prompt: String, files: Vec<PromptFile>);
     fn submit(
         &self,

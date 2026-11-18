@@ -629,9 +629,18 @@ struct PreparedDriver {
     events: Receiver<DriverEvent>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct RemoteTaskStateSnapshot {
     projects: Vec<Project>,
     sessions: Vec<AgentSession>,
+}
+
+struct LoadedWorkspace {
+    draft_store: ComposerDraftStore,
+    drafts: ComposerDrafts,
+    state: PersistedState,
+    migration_error: Option<anyhow::Error>,
+    save_error: Option<std::io::Error>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2847,18 +2856,59 @@ impl Fintwind {
         daemon: fintwind_client::DaemonSupervisor,
         store: StateStore,
     ) -> Entity<Self> {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let composer_draft_store = ComposerDraftStore::remote(daemon.clone());
-        let composer_drafts = composer_draft_store.load().unwrap_or_default();
+        let loaded = Self::load_workspace(&daemon, &store);
+        Self::new_workspace_view(window, cx, daemon, store, loaded, false)
+    }
+
+    fn load_workspace(
+        daemon: &fintwind_client::DaemonSupervisor,
+        store: &StateStore,
+    ) -> LoadedWorkspace {
+        let cwd = if daemon.is_remote() {
+            PathBuf::new()
+        } else {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        };
+        let draft_store = ComposerDraftStore::remote(daemon.clone());
+        let drafts = draft_store.load().unwrap_or_default();
         let mut state = store.load_or_fresh(cwd);
+        let client = fintwind_client::WorkspaceClient::new(daemon.client());
+        let (migrated, migration_error) = migrate_legacy_projectless_projects(&mut state, &client);
+        let save_error = if migrated { store.save(&mut state).err() } else { None };
+        LoadedWorkspace { draft_store, drafts, state, migration_error, save_error }
+    }
+
+    fn new_workspace_view(
+        window: &mut Window,
+        cx: &mut App,
+        daemon: fintwind_client::DaemonSupervisor,
+        store: StateStore,
+        loaded: LoadedWorkspace,
+        embedded: bool,
+    ) -> Entity<Self> {
+        let LoadedWorkspace {
+            draft_store: composer_draft_store,
+            drafts: composer_drafts,
+            mut state,
+            migration_error: projectless_migration_error,
+            save_error: projectless_save_error,
+        } = loaded;
         state.apply_daemon_settings(daemon.settings());
         if store.publishes_daemon_settings() && let Err(error) = daemon.update_settings(state.daemon_settings()) {
             eprintln!("could not normalize daemon settings after migration: {error:#}");
         }
-        crate::i18n::set_language(state.language);
+        if !embedded {
+            crate::i18n::set_language(state.language);
+            fintwind_protocol::http::set_active_proxy(state.network_proxy_url());
+            crate::theme::set_ui_text_scale(state.ui_text_scale);
+            crate::theme::set_code_text_scale(state.code_text_scale);
+            crate::theme::set_transcript_width(state.transcript_width);
+            crate::theme::set_ui_font_family(state.ui_font_family.clone());
+            crate::theme::set_code_font_family(state.code_font_family.clone());
+            crate::platform::set_keep_awake(state.keep_screen_awake);
+        }
         // The app process's own fetches (update checks, the model catalog,
         // provider probes) ride the stored proxy from the first request on.
-        fintwind_protocol::http::set_active_proxy(state.network_proxy_url());
         let activity_database = store.path().to_path_buf();
         cx.background_executor()
             .spawn(async move {
@@ -2867,14 +2917,6 @@ impl Fintwind {
                 }
             })
             .detach();
-        crate::theme::set_ui_text_scale(state.ui_text_scale);
-        crate::theme::set_code_text_scale(state.code_text_scale);
-        crate::theme::set_transcript_width(state.transcript_width);
-        crate::theme::set_ui_font_family(state.ui_font_family.clone());
-        crate::theme::set_code_font_family(state.code_font_family.clone());
-        // The Win32 execution-state request belongs to the UI thread, so the
-        // startup value is applied here rather than from a background task.
-        crate::platform::set_keep_awake(state.keep_screen_awake);
 
         let composer = cx.new(|cx| {
             ComposerInput::new(window, cx)
@@ -3056,12 +3098,6 @@ impl Fintwind {
         let session_tabs_pane = FintwindPane::new(Fintwind::session_tabs_pane_content, cx);
         let new_session_background =
             cx.new(|cx| new_session_background::NewSessionBackground::new(window, cx));
-        let workspace_client = fintwind_client::WorkspaceClient::new(daemon.client());
-        let (projectless_migrated, projectless_migration_error) =
-            migrate_legacy_projectless_projects(&mut state, &workspace_client);
-        let projectless_save_error = projectless_migrated
-            .then(|| store.save(&mut state).err())
-            .flatten();
         let startup_toast = projectless_migration_error
             .map(|error| tr!("errors.move_projectless_task", error = error))
             .or_else(|| {
@@ -3442,14 +3478,21 @@ impl Fintwind {
                 let store = this.composer_draft_store.clone();
                 let drafts = this.composer_drafts.clone();
                 let daemon = this.daemon.clone();
+                let save_navigation = !daemon.is_remote();
+                let active_host = this.ssh_host_for_next_launch();
+                let ssh_connection = this.ssh_connection_for_quit(cx);
                 let task_store = this.store.clone();
                 let mut final_state = std::mem::replace(&mut this.state, PersistedState::empty());
                 let quit = cx.background_executor().spawn(async move {
+                    if save_navigation && let Err(error) = ssh_page::save_ssh_navigation(active_host) {
+                        eprintln!("could not save SSH navigation: {error:#}");
+                    }
                     if let Err(error) = task_store.flush(&mut final_state) {
                         eprintln!("could not flush final desktop state: {error}");
                     }
                     let _ = store.save(drafts, generation);
                     daemon.shutdown();
+                    drop(ssh_connection);
                 });
                 async move {
                     let _ = quit.await;
@@ -4459,6 +4502,9 @@ impl Fintwind {
                 }
             }
             this.restart_task_state_sync();
+            if !this.daemon.is_remote() {
+                this.load_ssh_profiles(cx);
+            }
             for session_id in startup_live_session_ids {
                 this.start_runtime_attachment(session_id, cx);
             }

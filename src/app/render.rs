@@ -266,6 +266,12 @@ impl Fintwind {
 
 impl Render for Fintwind {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.restore_ssh_navigation(window, cx);
+        if self.mode != WorkspaceMode::Settings
+            && let Some(workspace) = self.active_ssh_workspace()
+        {
+            return workspace.into_any_element();
+        }
         // Both transcript panes share caches, so age them once per window
         // frame, not once per pane (which would evict each other's rows).
         self.begin_transcript_cache_frame();
@@ -733,7 +739,7 @@ impl Render for Fintwind {
             ))
             .into_any_element();
 
-        self.render_window_frame(content, window, cx)
+        self.render_window_frame(content, window, cx).into_any_element()
     }
 }
 

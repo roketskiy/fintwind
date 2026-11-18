@@ -1075,7 +1075,7 @@ impl StateStore {
     pub fn load_or_fresh(&self, cwd: PathBuf) -> PersistedState {
         let mut state = match self.load() {
             Ok(state) => {
-                self.task_state_loaded.store(true, Ordering::Release);
+                self.mark_task_state_loaded();
                 state
             }
             Err(_) if cwd.parent().is_none() => PersistedState::empty(),
@@ -1091,6 +1091,10 @@ impl StateStore {
             let _ = self.hydrate(session);
         }
         state
+    }
+
+    pub fn mark_task_state_loaded(&self) {
+        self.task_state_loaded.store(true, Ordering::Release);
     }
 
     pub fn load(&self) -> io::Result<PersistedState> {
@@ -1988,8 +1992,14 @@ pub fn hydrate_session(
     daemon: &DaemonSupervisor,
     session_id: Uuid,
 ) -> io::Result<Option<AgentSession>> {
-    match daemon
-        .client()
+    hydrate_session_on_client(&daemon.client(), session_id)
+}
+
+pub fn hydrate_session_on_client(
+    client: &crate::DaemonClient,
+    session_id: Uuid,
+) -> io::Result<Option<AgentSession>> {
+    match client
         .request(
             Uuid::nil(),
             Uuid::nil(),

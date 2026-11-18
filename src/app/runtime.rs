@@ -26,11 +26,13 @@ fn attach_driver(
     daemon: fintwind_client::DaemonSupervisor,
     session_id: Uuid,
     event_wake: smol::channel::Sender<()>,
-) -> anyhow::Result<Option<(AgentSession, PreparedDriver)>> {
-    let Some(session) = fintwind_client::persistence::hydrate_session(&daemon, session_id)? else {
+    recover_settled_turn: bool,
+) -> anyhow::Result<Option<(AgentSession, Option<PreparedDriver>)>> {
+    let client = daemon.client();
+    let Some(session) = fintwind_client::persistence::hydrate_session_on_client(&client, session_id)? else {
         return Ok(None);
     };
-    let response = daemon.client().request(
+    let response = client.request(
         session_id,
         Uuid::nil(),
         fintwind_client::Command::AttachSession,
@@ -43,18 +45,24 @@ fn attach_driver(
         anyhow::bail!("fintwind daemon returned an invalid runtime attachment response");
     };
     let Some(runtime_id) = runtime_id else {
-        return Ok(None);
+        if !recover_settled_turn {
+            return Ok(None);
+        }
+        let settled = fintwind_client::persistence::hydrate_session_on_client(&client, session_id)?;
+        return Ok(settled.filter(|session| {
+            !session.status.is_busy() && session.active_turn_id().is_none()
+        }).map(|session| (session, None)));
     };
     let (event_tx, events) = driver::event_channel(event_wake);
     let handle = driver::attach_remote(
-        daemon.client(),
+        client,
         session_id,
         runtime_id,
         supports_steer,
         session.runtime_event_cursor,
         event_tx,
     )?;
-    Ok(Some((session, PreparedDriver { handle, events })))
+    Ok(Some((session, Some(PreparedDriver { handle, events }))))
 }
 
 pub(super) fn load_remote_task_state(
@@ -515,6 +523,7 @@ impl Fintwind {
             self.remove_right_panel_session_state(*session_id);
         }
         self.state.projects = snapshot.projects;
+        self.store.mark_task_state_loaded();
 
         let attach = self
             .state
@@ -522,6 +531,7 @@ impl Fintwind {
             .iter()
             .filter(|session| {
                 session.status.is_busy()
+                    || session.active_turn_id().is_some()
                     || (self.state.selected_session == Some(session.id) && session.has_started())
             })
             .map(|session| session.id)
@@ -592,10 +602,15 @@ impl Fintwind {
         let daemon = self.daemon.clone();
         let event_wake = self.event_wake_tx.clone();
         let placement_generation = self.native_placement_generation(session_id);
+        let recover_settled_turn = self.state.sessions.iter().any(|session| {
+            session.id == session_id && session.active_turn_id().is_some()
+        });
         cx.spawn(async move |fintwind, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { attach_driver(daemon, session_id, event_wake) })
+                .spawn(async move {
+                    attach_driver(daemon, session_id, event_wake, recover_settled_turn)
+                })
                 .await;
             let _ = fintwind.update(cx, move |fintwind, cx| {
                 fintwind.finish_runtime_attachment(session_id, placement_generation, result, cx);
@@ -608,7 +623,7 @@ impl Fintwind {
         &mut self,
         session_id: Uuid,
         placement_generation: u64,
-        result: anyhow::Result<Option<(AgentSession, PreparedDriver)>>,
+        result: anyhow::Result<Option<(AgentSession, Option<PreparedDriver>)>>,
         cx: &mut Context<Self>,
     ) {
         if !self.runtime_attach_pending.remove(&session_id) {
@@ -646,7 +661,12 @@ impl Fintwind {
                         session.title = self.state.sessions[index].title.clone();
                     }
                     self.state.sessions[index] = session;
-                    self.install_prepared_driver(session_id, prepared);
+                    if let Some(prepared) = prepared {
+                        self.install_prepared_driver(session_id, prepared);
+                    } else if self.pending_goal_actions.contains_key(&session_id) {
+                        self.start_goal_runtime(session_id, placement_generation, cx);
+                        return;
+                    }
                     if let Some(action) = self.pending_goal_actions.remove(&session_id) {
                         self.control_goal(session_id, action, cx);
                     }
@@ -748,7 +768,7 @@ impl Fintwind {
             let result = cx
                 .background_executor()
                 .spawn(
-                    async move { start_driver(request, cwd).map(|driver| Some((session, driver))) },
+                    async move { start_driver(request, cwd).map(|driver| Some((session, Some(driver)))) },
                 )
                 .await;
             let _ = this.update(cx, |this, cx| {
@@ -2437,6 +2457,12 @@ impl Fintwind {
         submission: ComposerSubmission,
         cx: &mut Context<Self>,
     ) {
+        if self.daemon.is_remote() && self.daemon.client().is_disconnected() {
+            self.restore_composer_submission(submission, cx);
+            self.show_toast_with_tone(tr!("ssh.offline"), ToastTone::Alert);
+            cx.notify();
+            return;
+        }
         if self.selected_session().is_none() {
             self.create_projectless_session(cx);
             if self.selected_session().is_none() {
@@ -3263,6 +3289,7 @@ impl Fintwind {
             let previous_block_count = (self.state.selected_session == Some(session_id))
                 .then(|| self.selected_transcript_blocks().len());
             let follow_up_remeasure = std::mem::take(&mut runtime.stream_remeasure_pending);
+            let transport_closed = runtime.driver.transport_closed();
             Self::collect_runtime_events(&mut runtime);
             let mut runtime_changed = false;
             let mut background_changed = false;
@@ -3338,8 +3365,10 @@ impl Fintwind {
                 }
             }
             runtime.stream_remeasure_pending = markdown_changed;
-            if keep_runtime {
+            if keep_runtime && !transport_closed {
                 self.runtimes.insert(session_id, runtime);
+            } else if keep_runtime && !self.daemon.client().is_disconnected() {
+                self.start_runtime_attachment(session_id, cx);
             }
             // A new activity group closes the previously newest group, which
             // may be separated from the tail by several assistant text parts.

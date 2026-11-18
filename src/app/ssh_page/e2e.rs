@@ -22,13 +22,16 @@ struct Fixture {
     state_dir: PathBuf,
     proof: PathBuf,
     live_model: Option<String>,
+    peer_profile: Option<Profile>,
+    peer_workspace: Option<String>,
 }
 
 const LIVE_PROMPT: &str = "Work only inside the current test project. Use the file write tool to create ssh-e2e.txt containing FINTWIND-SSH-FILE, then use the file read tool to verify it. Use the subagent tool to launch a general subagent and wait for its result. Ask the subagent to read ssh-e2e.txt and report FINTWIND-SSH-CHILD with the file marker. After its tool result arrives, give a short final answer including FINTWIND-SSH-DONE.";
 
 #[gpui::test]
 #[ignore = "requires the isolated SSH daemon fixture"]
-fn desktop_ssh_project_streams(cx: &mut TestAppContext) {
+fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
+    let cx = &mut *test_app;
     cx.background_executor.allow_parking();
     let fixture: Fixture =
         serde_json::from_str(&std::env::var("FINTWIND_SSH_DESKTOP_FIXTURE").unwrap()).unwrap();
@@ -40,7 +43,7 @@ fn desktop_ssh_project_streams(cx: &mut TestAppContext) {
     )
     .unwrap();
     let client = bootstrap.connection.client();
-    let cwd = bootstrap.directory.clone();
+    let cwd = bootstrap.project.path.clone();
     let request = |command| client.request(Uuid::nil(), Uuid::nil(), command).unwrap();
     let read_settings = || match request(fintwind_client::Command::GetSettings) {
         fintwind_client::ResponsePayload::Settings { settings } => settings,
@@ -78,7 +81,46 @@ fn desktop_ssh_project_streams(cx: &mut TestAppContext) {
         crate::ui::menu::init(cx);
         crate::theme::init(cx);
     });
-    let (launch_tx, launch_rx) = std::sync::mpsc::channel();
+    if std::env::var_os("FINTWIND_SSH_RESTART_PHASE").is_some() {
+        let mut proof: serde_json::Value = serde_json::from_slice(&std::fs::read(&fixture.proof).unwrap()).unwrap();
+        let expected: Uuid = serde_json::from_value(proof["session"].clone()).unwrap();
+        let daemon = bootstrap.connection.supervisor();
+        let store = StateStore::ssh_workspace(daemon.clone(), &bootstrap.state_dir);
+        let (view, desktop_cx) = cx.add_window_view(|window, cx| {
+            let view = Fintwind::new_with_store(window, cx, daemon, store);
+            view.update(cx, |app, cx| {
+                app.load_ssh_profiles_with_navigation(true, cx);
+            });
+            Desktop(view, false)
+        });
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            desktop_cx.run_until_parked();
+            desktop_cx.update(|window, cx| {
+                view.read(cx).0.clone().update(cx, |app, cx| app.restore_ssh_navigation(window, cx));
+            });
+            let restored = desktop_cx.read_entity(&view, |view, cx| {
+                view.0.read(cx).active_ssh_workspace().is_some_and(|workspace| {
+                    let app = workspace.read(cx);
+                    app.state.selected_session == Some(expected)
+                        && app.selected_session().is_some_and(|session| {
+                            session.detail_loaded
+                                && session.turns.last().is_some_and(|turn| turn.status == TurnStatus::Completed)
+                                && session.messages.iter().filter(|message| {
+                                    message.role == fintwind_protocol::model::MessageRole::User
+                                }).count() == 1
+                        })
+                })
+            });
+            if restored { break; }
+            assert!(Instant::now() < deadline, "new desktop process did not restore the selected SSH session");
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        proof["restoredInNewProcess"] = serde_json::json!(true);
+        proof["restoredCompletedTurnWithoutDuplicateMessage"] = serde_json::json!(true);
+        std::fs::write(&fixture.proof, serde_json::to_vec_pretty(&proof).unwrap()).unwrap();
+        return;
+    }
     let mut profile = fixture.profile.clone();
     profile.fingerprint = None;
     let profile_id = profile.id;
@@ -89,7 +131,7 @@ fn desktop_ssh_project_streams(cx: &mut TestAppContext) {
         desktop.update(cx, |app, cx| {
             app.ssh.loaded = true;
             app.ssh.profiles.push(profile);
-            app.ssh.test_launch = Some(launch_tx);
+            app.ssh.test_location_picker = true;
             app.open_add_project_dialog(window, cx);
         });
         Desktop(desktop, false)
@@ -207,36 +249,76 @@ fn desktop_ssh_project_streams(cx: &mut TestAppContext) {
     picker_cx.run_until_parked();
     picker_cx.simulate_keystrokes("enter");
     let deadline = Instant::now() + Duration::from_secs(15);
-    let (chosen_id, chosen_path, chosen_name) = loop {
+    let desktop = loop {
         picker_cx.run_until_parked();
-        if let Ok(launch) = launch_rx.try_recv() {
-            break launch;
+        if let Some(workspace) = picker_cx.read_entity(&picker, |app, _| app.active_ssh_workspace()) {
+            break workspace;
         }
         assert!(
             Instant::now() < deadline,
-            "dialog did not request an SSH project window"
+            "dialog did not open the SSH project in the current window"
         );
         std::thread::sleep(Duration::from_millis(20));
     };
+    let chosen_id = picker_cx.read_entity(&picker, |app, _| app.active_ssh_host().unwrap());
     assert_eq!(chosen_id, profile_id);
+    let project = picker_cx.read_entity(&desktop, |app, _| app.selected_project().unwrap().clone());
+    let chosen_path = project.path.clone();
     assert_eq!(chosen_path, cwd.join("new-remote-project"));
     let workspace = chosen_path.to_str().unwrap().to_owned();
     let launch = prepare_project_launch(
         fixture.profile,
         workspace.clone(),
-        chosen_name,
-        fixture.state_dir,
+        project.name.clone(),
+        fixture.state_dir.clone(),
     )
     .unwrap();
-    let daemon = launch.connection.supervisor();
-    let store = StateStore::ssh_workspace(daemon.clone(), &launch.state_dir);
-    let (view, cx) = cx
-        .add_window_view(|window, cx| Desktop(Fintwind::new_with_store(window, cx, daemon, store), false));
-    let desktop = cx.read_entity(&view, |view, _| view.0.clone());
+    let cx = picker_cx;
+    let peer_verified = if let (Some(profile), Some(path)) = (&fixture.peer_profile, &fixture.peer_workspace) {
+        let peer = prepare_project_launch(profile.clone(), path.clone(), project.name.clone(), fixture.state_dir.join("peer")).unwrap();
+        let loaded = load_ssh_workspace(profile.id, &peer.connection.supervisor()).unwrap();
+        cx.update(|window, cx| {
+            picker.update(cx, |app, cx| {
+                app.ssh.profiles.push(profile.clone());
+                app.ssh.connections.insert(profile.id, Arc::new(peer.connection));
+                app.ssh.loaded_workspaces.insert(profile.id, loaded);
+                assert!(app.open_registered_ssh_project(profile.id, peer.project, window, cx));
+                let active = app.active_ssh_workspace().unwrap();
+                assert_ne!(active, desktop);
+                assert_eq!(active.read(cx).selected_project().unwrap().path, PathBuf::from(path));
+                assert!(app.open_registered_ssh_project(profile_id, project.clone(), window, cx));
+                assert_eq!(app.active_ssh_workspace(), Some(desktop.clone()));
+            });
+        });
+        true
+    } else {
+        false
+    };
+    let client_updates = cx.read_entity(&desktop, |app, _| app.daemon.subscribe_clients());
+    client_updates.try_recv().expect("initial SSH daemon client");
+    cx.update(|_, cx| {
+        picker.update(cx, |app, _| {
+            Arc::get_mut(app.ssh.connections.get_mut(&profile_id).unwrap()).unwrap().replace_tunnel(launch.connection);
+        });
+    });
+    let reconnect_deadline = Instant::now() + Duration::from_secs(15);
+    while client_updates.try_recv().is_err() {
+        assert!(Instant::now() < reconnect_deadline, "embedded workspace did not reconnect through the replacement tunnel");
+        cx.run_until_parked();
+        std::thread::sleep(Duration::from_millis(20));
+    }
     let live = fixture.live_model.is_some();
+    cx.update(|_, cx| {
+        desktop.update(cx, |app, cx| app.open_settings_page(SettingsPage::McpServers, cx));
+        picker.update(cx, |app, cx| {
+            assert_eq!(app.mode, WorkspaceMode::Settings);
+            assert_eq!(app.settings_ssh_host(), Some(profile_id));
+            app.mode = WorkspaceMode::Sessions;
+            cx.notify();
+        });
+    });
     let id = cx.update(|_, cx| {
         desktop.update(cx, |app, cx| {
-            app.open_ssh_project(launch, cx);
             assert_eq!(app.selected_project().unwrap().path, chosen_path);
             let id = app.state.selected_session.unwrap();
             let session = app.state.session_mut(id).unwrap();
@@ -260,8 +342,22 @@ fn desktop_ssh_project_streams(cx: &mut TestAppContext) {
             id
         })
     });
-    let until = Instant::now() + Duration::from_secs(if live { 210 } else { 35 });
+    let observed_from = Instant::now();
+    let until = observed_from + Duration::from_secs(if live { 210 } else { 35 });
+    let mut settled_at = None;
+    let mut child_result_at = None;
     let mut observed_live = false;
+    let quit_during_turn = std::env::var_os("FINTWIND_SSH_QUIT_DURING_TURN").is_some();
+    let mut switched_during_stream = false;
+    let mut reconnected_during_stream = false;
+    let local_session_id = cx.update(|_, cx| {
+        picker.update(cx, |app, _| {
+            let session = AgentSession::new(project.id);
+            let session_id = session.id;
+            app.state.sessions.push(session);
+            session_id
+        })
+    });
     loop {
         cx.run_until_parked();
         let (streaming, complete, text, live_proof) = cx.update(|_, cx| {
@@ -284,8 +380,80 @@ fn desktop_ssh_project_streams(cx: &mut TestAppContext) {
             })
         });
         observed_live |= streaming;
+        if streaming && !complete && quit_during_turn {
+            save_ssh_navigation(Some(profile_id)).unwrap();
+            let before = request(fintwind_client::Command::HydrateSession { session_id: id });
+            assert!(matches!(before,
+                fintwind_client::ResponsePayload::Session { session: Some(session) }
+                    if session.active_turn_id().is_some()
+            ), "remote turn must be active when the desktop quits");
+            let busy = require_idle_daemon(&client).expect_err("active remote turn must block daemon updates");
+            assert_eq!(busy.to_string(), tr!("ssh.update_busy"));
+            test_app.quit();
+            let deadline = Instant::now() + Duration::from_secs(90);
+            loop {
+                let response = client.request_with_timeout(
+                    Uuid::nil(),
+                    Uuid::nil(),
+                    fintwind_client::Command::HydrateSession { session_id: id },
+                    Duration::from_secs(5),
+                ).unwrap();
+                if let fintwind_client::ResponsePayload::Session { session: Some(session) } = response
+                    && session.turns.last().is_some_and(|turn| turn.status == TurnStatus::Completed)
+                {
+                    require_idle_daemon(&client).expect("settled remote turn must permit daemon updates");
+                    let proof = serde_json::json!({
+                        "passed": true,
+                        "session": id,
+                        "quitDuringStreaming": true,
+                        "remoteTurnActiveBeforeQuit": true,
+                        "remoteTurnCompletedAfterQuit": true,
+                        "updateBlockedWhileBusy": true,
+                        "updateAllowedWhenIdle": true,
+                    });
+                    std::fs::write(&fixture.proof, serde_json::to_vec_pretty(&proof).unwrap()).unwrap();
+                    return;
+                }
+                assert!(Instant::now() < deadline, "remote turn did not complete after desktop quit");
+                std::thread::sleep(Duration::from_millis(250));
+            }
+        }
+        if streaming && !complete && !switched_during_stream {
+            cx.update(|window, cx| {
+                desktop.update(cx, |app, cx| {
+                    app.route_sidebar_host_action(window, cx, move |app, window, cx| {
+                        app.activate_local_sidebar_target(local_session_id, true, window, cx);
+                    });
+                });
+                if live {
+                    desktop.read(cx).daemon.client().disconnect();
+                }
+            });
+            cx.run_until_parked();
+            cx.read_entity(&picker, |app, _| {
+                assert!(app.active_ssh_workspace().is_none());
+                assert_eq!(app.state.selected_session, Some(local_session_id));
+            });
+            switched_during_stream = true;
+        }
+        if live && switched_during_stream && client_updates.try_recv().is_ok() {
+            reconnected_during_stream = true;
+        }
         if let Some(mut proof) = live_proof {
-            if (complete && proof["childCompleted"] == true) || Instant::now() >= until {
+            if complete && proof["completed"] == true {
+                settled_at.get_or_insert_with(|| observed_from.elapsed().as_millis());
+            }
+            if proof["childCompleted"] == true {
+                child_result_at.get_or_insert_with(|| observed_from.elapsed().as_millis());
+            }
+            let transcript_ready = complete
+                && proof["completed"] == true
+                && proof["childCompleted"] == true
+                && proof["assistantText"] == true;
+            if transcript_ready || Instant::now() >= until {
+                proof["desktopTurnSettledMs"] = serde_json::json!(settled_at);
+                proof["desktopChildResultMs"] = serde_json::json!(child_result_at);
+                proof["desktopTurnAndChildObservedTogetherMs"] = serde_json::json!(observed_from.elapsed().as_millis());
                 let file_written = matches!(client.request(Uuid::nil(), Uuid::nil(), fintwind_client::Command::Workspace {
                     operation: fintwind_client::WorkspaceOperation::ReadTextFile {
                         root: chosen_path.clone(),
@@ -297,6 +465,71 @@ fn desktop_ssh_project_streams(cx: &mut TestAppContext) {
                 proof["workspace"] = serde_json::json!(workspace);
                 proof["observedLive"] = serde_json::json!(observed_live);
                 proof["remoteFileVerified"] = serde_json::json!(file_written);
+                assert!(switched_during_stream, "remote stream did not survive switching views");
+                proof["switchedDuringStream"] = serde_json::json!(switched_during_stream);
+                proof["openedLocalSidebarSession"] = serde_json::json!(true);
+                proof["switchedBetweenRemoteDaemons"] = serde_json::json!(peer_verified);
+                let catalog_deadline = Instant::now() + Duration::from_secs(12);
+                let executor = cx.update(|_, cx| cx.background_executor().clone());
+                loop {
+                    executor.advance_clock(Duration::from_millis(100));
+                    cx.run_until_parked();
+                    if cx.read_entity(&picker, |app, _| {
+                        app.ssh_project_catalog(profile_id)
+                            .is_some_and(|catalog| catalog.sessions.iter().any(|session| session.id == id))
+                    }) {
+                        break;
+                    }
+                    assert!(Instant::now() < catalog_deadline, "remote session missing from host catalog");
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                cx.update(|window, cx| {
+                    picker.update(cx, |app, cx| {
+                        app.select_ssh_workspace_session(profile_id, project.id, id, window, cx);
+                        assert!(app.active_ssh_workspace().is_some_and(|active| active == desktop));
+                    });
+                    assert_eq!(desktop.read(cx).state.selected_session, Some(id));
+                });
+                proof["reopenedFromHostCatalog"] = serde_json::json!(true);
+                proof["desktopSessionReopenedMs"] = serde_json::json!(observed_from.elapsed().as_millis());
+                proof["replacementTunnelUsed"] = serde_json::json!(true);
+                proof["reconnectedDuringTask"] = serde_json::json!(reconnected_during_stream);
+                assert!(reconnected_during_stream, "daemon client did not reconnect during the remote task");
+                let user_messages = cx.read_entity(&desktop, |app, _| {
+                    app.state.sessions.iter().find(|session| session.id == id).unwrap()
+                        .messages.iter().filter(|message| {
+                            message.role == fintwind_protocol::model::MessageRole::User
+                        }).count()
+                });
+                assert_eq!(user_messages, 1, "reconnecting duplicated the submitted message");
+                proof["userMessageCount"] = serde_json::json!(user_messages);
+                proof["mcpSettingsTargetedActiveHost"] = serde_json::json!(true);
+                let (store, mut persisted) = cx.read_entity(&desktop, |app, _| {
+                    (app.store.clone(), app.state.clone())
+                });
+                store.flush(&mut persisted).expect("save remote workspace navigation");
+                proof["desktopNavigationFlushedMs"] = serde_json::json!(observed_from.elapsed().as_millis());
+                save_ssh_navigation(Some(profile_id)).expect("save selected host");
+                let daemon = cx.read_entity(&desktop, |app, _| app.daemon.clone());
+                let loaded = load_ssh_workspace(profile_id, &daemon).expect("load saved workspace");
+                proof["desktopWorkspaceLoadedMs"] = serde_json::json!(observed_from.elapsed().as_millis());
+                cx.update(|window, cx| {
+                    picker.update(cx, |app, cx| {
+                        app.ssh.workspaces.remove(&profile_id);
+                        app.ssh.loaded_workspaces.insert(profile_id, loaded);
+                        app.ssh.active_workspace = None;
+                        app.ssh.restoring_workspace = read_ssh_navigation();
+                        app.restore_ssh_navigation(window, cx);
+                    });
+                });
+                cx.run_until_parked();
+                cx.update(|_, cx| {
+                    let restored = picker.read(cx).active_ssh_workspace().expect("restored SSH workspace");
+                    assert_ne!(restored, desktop);
+                    assert_eq!(restored.read(cx).state.selected_session, Some(id));
+                });
+                proof["restoredSavedSessionInNewWorkspace"] = serde_json::json!(true);
+                proof["desktopWorkspaceRestoredMs"] = serde_json::json!(observed_from.elapsed().as_millis());
                 proof["passed"] = serde_json::json!(["completed", "reasoning", "assistantText", "fileRead", "fileWrite", "childCompleted", "observedLive", "remoteFileVerified"]
                     .into_iter().all(|field| proof[field].as_bool() == Some(true)));
                 std::fs::write(&fixture.proof, serde_json::to_vec_pretty(&proof).unwrap()).unwrap();
@@ -320,13 +553,26 @@ fn desktop_ssh_project_streams(cx: &mut TestAppContext) {
             std::fs::write(&fixture.proof, serde_json::to_vec_pretty(&serde_json::json!({
                 "passed": true, "workspace": workspace, "session": id,
                 "selectedHost": chosen_id, "observedLive": observed_live, "settledText": "Hello from the SSH stream fixture.",
-                "cloneProgressToast": true, "cloneErrorToastDismissibleOverDialog": true
+                "cloneProgressToast": true, "cloneErrorToastDismissibleOverDialog": true,
+                "openedLocalSidebarSession": switched_during_stream,
+                "switchedBetweenRemoteDaemons": peer_verified
             })).unwrap()).unwrap();
             break;
         }
         assert!(Instant::now() < until, "unfinished SSH task: {text}");
         std::thread::sleep(Duration::from_millis(20));
     }
+    assert!(!quit_during_turn, "no active streaming turn was observed before desktop quit");
+    let quit_started = Instant::now();
+    test_app.quit();
+    assert!(matches!(
+        request(fintwind_client::Command::LoadTaskState),
+        fintwind_client::ResponsePayload::TaskState { .. }
+    ));
+    let mut proof: serde_json::Value = serde_json::from_slice(&std::fs::read(&fixture.proof).unwrap()).unwrap();
+    proof["daemonReachableAfterDesktopQuit"] = serde_json::json!(true);
+    proof["desktopQuitAndDaemonProbeMs"] = serde_json::json!(quit_started.elapsed().as_millis());
+    std::fs::write(&fixture.proof, serde_json::to_vec_pretty(&proof).unwrap()).unwrap();
 }
 
 fn live_session_proof(session: &fintwind_protocol::model::AgentSession) -> serde_json::Value {

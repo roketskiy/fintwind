@@ -1031,8 +1031,8 @@ project.location_label: 文件所在位置
 project.location_local: 此电脑
 project.folder_label: 源文件夹
 project.folder_pick: 点击选择文件夹
-project.name_label: 项目名称
-project.name_placeholder: 输入名称…
+project.name_label: 名称（可选）
+project.name_placeholder: 默认使用文件夹名称
 project.add_confirm: 添加
 providers.reasoning_efforts_label: 思考程度
 providers.reasoning_efforts_hint: 留空则跟随模型目录

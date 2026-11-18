@@ -31,6 +31,11 @@ pub(super) enum ModelLatencyState {
 }
 
 impl Fintwind {
+    fn settings_provider_credentials(&self) -> Option<(fintwind_client::persistence::StateStore, Option<(PathBuf, PathBuf)>)> {
+        let daemon = self.settings_daemon()?;
+        let workspace = self.provider_auth_target().map(|(_, workspace)| workspace);
+        Some((fintwind_client::persistence::StateStore::remote(daemon), workspace))
+    }
     /// The "fetch models" action. The table is reused while fresh, otherwise
     /// downloaded off the UI thread with the session's copy and the disk
     /// cache as offline fallbacks; a table that cannot be had still lets the
@@ -124,7 +129,7 @@ impl Fintwind {
     ) {
         let outcome = {
             let Some(provider) = self
-                .providers_store
+                .settings_providers_mut()
                 .iter_mut()
                 .find(|provider| provider.id == provider_id)
             else {
@@ -152,39 +157,44 @@ impl Fintwind {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Div {
-        let fetching = self.models_dev_fetching;
+        let provider_id = self
+            .selected_custom_provider()
+            .map(|provider| provider.id.clone());
+        let fetching = provider_id
+            .as_deref()
+            .is_some_and(|id| self.provider_models_fetching.contains_key(id));
+        let indicator = self.models_fetch_indicator(
+            provider_id.clone().unwrap_or_default(),
+            fetching,
+            theme,
+            cx,
+        );
         let fetch_button = outline_button(
             "fetch-provider-models",
-            if fetching {
-                tr!("providers.fetching_models")
-            } else {
-                tr!("providers.fetch_models")
-            },
-            Some(if fetching {
-                "icons/loader-circle.svg"
-            } else {
-                "icons/download.svg"
-            }),
+            tr!("providers.fetch_models"),
+            None,
             theme,
         )
-        .opacity(if fetching { 0.6 } else { 1.0 })
+        .child(indicator)
         .tooltip(Tooltip::text(tr!("providers.fetch_models_tooltip")))
-        .when(!fetching, |element| {
-            element
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.fetch_provider_models(cx);
-                }))
-                .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                    if !event.keystroke.modifiers.modified()
-                        && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                    {
-                        this.fetch_provider_models(cx);
-                        cx.stop_propagation();
-                    }
-                }))
-        });
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.fetch_provider_models(cx);
+        }))
+        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+            if !event.keystroke.modifiers.modified()
+                && matches!(event.keystroke.key.as_str(), "enter" | "space")
+            {
+                this.fetch_provider_models(cx);
+                cx.stop_propagation();
+            }
+        }));
 
-        models_header_with_button(theme, tr!("providers.models_label"), fetch_button)
+        let error = provider_id
+            .as_deref()
+            .and_then(|id| self.provider_models_errors.get(id));
+        div().flex().flex_col()
+            .child(models_header_with_button(theme, tr!("providers.models_label"), fetch_button))
+            .children(error.map(|error| div().px(px(9.0)).text_size(ui_px(12.0)).text_color(theme.danger_text).child(error.clone())))
     }
 
     /// The add form's Models section header: the label and the form's fetch
@@ -196,38 +206,64 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) -> Div {
         let fetching = self.providers_form_fetching;
+        let indicator = self.models_fetch_indicator(String::new(), fetching, theme, cx);
         let fetch_button = outline_button(
             "fetch-form-provider-models",
-            if fetching {
-                tr!("providers.fetching_models")
-            } else {
-                tr!("providers.fetch_models")
-            },
-            Some(if fetching {
-                "icons/loader-circle.svg"
-            } else {
-                "icons/download.svg"
-            }),
+            tr!("providers.fetch_models"),
+            None,
             theme,
         )
-        .opacity(if fetching { 0.6 } else { 1.0 })
+        .child(indicator)
         .tooltip(Tooltip::text(tr!("providers.fetch_models_tooltip")))
-        .when(!fetching, |element| {
-            element
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.fetch_form_models(cx);
-                }))
-                .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                    if !event.keystroke.modifiers.modified()
-                        && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                    {
-                        this.fetch_form_models(cx);
-                        cx.stop_propagation();
-                    }
-                }))
-        });
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.fetch_form_models(cx);
+        }))
+        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+            if !event.keystroke.modifiers.modified()
+                && matches!(event.keystroke.key.as_str(), "enter" | "space")
+            {
+                this.fetch_form_models(cx);
+                cx.stop_propagation();
+            }
+        }));
 
-        models_header_with_button(theme, tr!("providers.models_label"), fetch_button)
+        div().flex().flex_col()
+            .child(models_header_with_button(theme, tr!("providers.models_label"), fetch_button))
+            .children(self.providers_form_models_error.as_ref().map(|error| {
+                div().px(px(9.0)).text_size(ui_px(12.0)).text_color(theme.danger_text).child(error.clone())
+            }))
+    }
+
+    fn models_fetch_indicator(
+        &self,
+        key: String,
+        fetching: bool,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (phase, wake) = {
+            let mut states = self.provider_models_loading.borrow_mut();
+            let result = crate::ui::loading::LoadingDelay::observe(
+                states.entry(key.clone()).or_default(), (), fetching,
+            );
+            if result.0 == crate::ui::loading::LoadingPhase::Done {
+                states.remove(&key);
+            }
+            result
+        };
+        if let Some(wake) = wake {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(wake.delay()).await;
+                wake.fired();
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+        }
+        if phase == crate::ui::loading::LoadingPhase::Visible {
+            motion::spin_slow(icon("icons/loader-circle.svg", 12.5, theme.text_tertiary))
+        } else {
+            icon("icons/download.svg", 12.5, theme.text_tertiary).into_any_element()
+        }
     }
     /// Make sure the built-in metadata table is available for the page's
     /// modality badges. The snapshot parses on the background executor;
@@ -263,12 +299,12 @@ impl Fintwind {
             return;
         }
         let provider_id = provider.id.clone();
-        let credentials = fintwind_client::persistence::StateStore::remote(self.daemon.clone());
-        let workspace = self.provider_workspace();
+        let Some((credentials, workspace)) = self.settings_provider_credentials() else { return; };
         self.provider_connectivity_generation += 1;
         let generation = self.provider_connectivity_generation;
         self.provider_connectivity_testing
             .insert(provider_id.clone(), generation);
+        self.provider_connectivity_errors.remove(&provider_id);
         cx.notify();
         cx.spawn(async move |this, cx| {
             let outcome = cx
@@ -288,7 +324,7 @@ impl Fintwind {
                 // describes the provider, so it stays mute.
                 if this.provider_connectivity_testing.get(&provider_id) == Some(&generation) {
                     this.provider_connectivity_testing.remove(&provider_id);
-                    this.toast_connectivity_outcome(outcome);
+                    this.record_connectivity_outcome(provider_id, outcome);
                 }
                 cx.notify();
             });
@@ -298,7 +334,11 @@ impl Fintwind {
 
     /// A connectivity probe's verdict as a toast: the measured latency on
     /// success, the localized failure reason otherwise.
-    fn toast_connectivity_outcome(&mut self, outcome: custom_providers::ConnectivityOutcome) {
+    fn record_connectivity_outcome(
+        &mut self,
+        key: String,
+        outcome: custom_providers::ConnectivityOutcome,
+    ) {
         match outcome {
             custom_providers::ConnectivityOutcome::Reachable { latency } => {
                 self.show_success_toast(tr!(
@@ -307,7 +347,7 @@ impl Fintwind {
                 ));
             }
             custom_providers::ConnectivityOutcome::Failed { error } => {
-                self.show_toast(tr!(
+                self.provider_connectivity_errors.insert(key, tr!(
                     "providers.connection_failed",
                     error = api_list_error_text(&error)
                 ));
@@ -370,17 +410,21 @@ impl Fintwind {
     /// request also runs while the provider has no models yet — the form's
     /// whole point is to fill that list.
     pub(super) fn fetch_form_models(&mut self, cx: &mut Context<Self>) {
-        if self.providers_form_fetching {
+        if self.providers_form_fetching
+            || self.provider_models_loading.borrow().get("")
+                .and_then(Option::as_ref).is_some_and(|loading| loading.is_visible())
+        {
             return;
         }
         if !self.form_endpoint_ready(cx) {
-            self.show_toast(tr!("providers.error_invalid_url"));
+            self.providers_form_models_error = Some(tr!("providers.error_invalid_url"));
+            cx.notify();
             return;
         }
         let provider = self.form_transient_provider(cx);
+        let Some((credentials, workspace)) = self.settings_provider_credentials() else { return; };
         self.providers_form_fetching = true;
-        let credentials = fintwind_client::persistence::StateStore::remote(self.daemon.clone());
-        let workspace = self.provider_workspace();
+        self.providers_form_models_error = None;
         self.providers_form_fetch_generation += 1;
         let generation = self.providers_form_fetch_generation;
         cx.notify();
@@ -415,10 +459,11 @@ impl Fintwind {
                         if let Some(table) = &table {
                             this.models_dev_table = Some(table.clone());
                         }
+                        this.providers_form_models_error = None;
                         this.apply_fetched_form_models(&api_models, table.as_deref(), window, cx);
                     }
                     Err(error) => {
-                        this.show_toast(tr!(
+                        this.providers_form_models_error = Some(tr!(
                             "providers.fetch_failed",
                             error = api_list_error_text(&error)
                         ));
@@ -512,15 +557,17 @@ impl Fintwind {
             return;
         }
         if !self.form_endpoint_ready(cx) {
-            self.show_toast(tr!("providers.error_invalid_url"));
+            self.provider_connectivity_errors
+                .insert(String::new(), tr!("providers.error_invalid_url"));
+            cx.notify();
             return;
         }
         let provider = self.form_transient_provider(cx);
+        let Some((credentials, workspace)) = self.settings_provider_credentials() else { return; };
         self.providers_form_probe_generation += 1;
-        let credentials = fintwind_client::persistence::StateStore::remote(self.daemon.clone());
-        let workspace = self.provider_workspace();
         let generation = self.providers_form_probe_generation;
         self.providers_form_connectivity_testing = true;
+        self.provider_connectivity_errors.remove("");
         cx.notify();
         cx.spawn(async move |this, cx| {
             let outcome = cx
@@ -537,7 +584,7 @@ impl Fintwind {
             let _ = this.update(cx, |this, cx| {
                 if this.providers_form_probe_generation == generation {
                     this.providers_form_connectivity_testing = false;
-                    this.toast_connectivity_outcome(outcome);
+                    this.record_connectivity_outcome(String::new(), outcome);
                 }
                 cx.notify();
             });
@@ -561,6 +608,8 @@ impl Fintwind {
         self.providers_adding = false;
         self.providers_form_stage = ProviderFormStage::Picking;
         self.providers_form_connectivity_testing = false;
+        self.provider_connectivity_errors.remove("");
+        self.providers_form_models_error = None;
         self.providers_form_model_catalog.clear();
         self.providers_form_fetch_generation += 1;
         self.providers_form_probe_generation += 1;
@@ -584,17 +633,16 @@ impl Fintwind {
             return;
         }
         let Some(provider) = self
-            .providers_store
+            .settings_providers()
             .iter()
             .find(|provider| provider.id == provider_id)
             .cloned()
         else {
             return;
         };
+        let Some((credentials, workspace)) = self.settings_provider_credentials() else { return; };
         self.model_latency.insert(key, ModelLatencyState::Testing);
         cx.notify();
-        let credentials = fintwind_client::persistence::StateStore::remote(self.daemon.clone());
-        let workspace = self.provider_workspace();
         cx.spawn(async move |this, cx| {
             let probe_model_id = model_id.clone();
             let result = cx
@@ -629,6 +677,9 @@ impl Fintwind {
     /// changes; drop them so a stale verdict neither renders nor toasts.
     pub(super) fn clear_provider_probe_results(&mut self, provider_id: &str) {
         self.provider_connectivity_testing.remove(provider_id);
+        self.provider_models_fetching.remove(provider_id);
+        self.provider_connectivity_errors.remove(provider_id);
+        self.provider_models_errors.remove(provider_id);
         self.model_latency
             .retain(|(owner, _), _| owner != provider_id);
     }
@@ -705,6 +756,13 @@ impl Fintwind {
                         this.subscriptions_connections_updated(cx);
                     }
                     Err(error) => {
+                        // Keep the last known authorized set: the failure only
+                        // marks it stale, explained where it shows, with a
+                        // retry that re-reads.
+                        this.providers_auth_error = Some(tr!(
+                            "providers.auth_load_failed",
+                            error = error.to_string()
+                        ));
                         this.subscriptions_connections_failed();
                         if report_failure {
                             this.show_toast(tr!(
@@ -791,6 +849,8 @@ impl Fintwind {
         &mut self,
         integrations: Vec<fintwind_protocol::provider_session::IntegrationSummary>,
     ) {
+        // A landed read replaces the stale marker, if any.
+        self.providers_auth_error = None;
         self.providers_key_accounts = integrations
             .iter()
             .filter(|integration| !integration.key_accounts.is_empty())
@@ -874,6 +934,9 @@ impl Fintwind {
         provider_id: String,
         cx: &mut Context<Self>,
     ) {
+        if self.settings_machine_selected() && self.providers_auth_loading {
+            return;
+        }
         let key = self
             .provider_form_api_key
             .read(cx)
@@ -1126,7 +1189,7 @@ impl Fintwind {
         if self.providers_oauth_flow.is_some() {
             return;
         }
-        let Some(workspace) = self.provider_workspace() else {
+        let Some((daemon, workspace)) = self.provider_auth_target() else {
             return;
         };
         self.providers_oauth_draft = None;
@@ -1137,7 +1200,6 @@ impl Fintwind {
             attempt: None,
         });
         cx.notify();
-        let daemon = self.daemon.clone();
         cx.spawn(async move |this, cx| {
             let started = cx
                 .background_executor()
@@ -1187,13 +1249,12 @@ impl Fintwind {
     /// fails, or expires. Short-lived network errors retry; the generation
     /// guard ends the loop the moment the flow is replaced or torn down.
     fn run_provider_oauth_poll(&mut self, generation: u64, cx: &mut Context<Self>) {
-        let Some(workspace) = self.provider_workspace() else {
+        let Some((daemon, workspace)) = self.provider_auth_target() else {
             return;
         };
         let Some(flow) = self.providers_oauth_flow.clone() else {
             return;
         };
-        let daemon = self.daemon.clone();
         cx.spawn(async move |this, cx| {
             let mut transient_errors = 0u32;
             loop {
@@ -1262,7 +1323,7 @@ impl Fintwind {
     /// field does nothing; a refused code toasts and leaves the flow up so
     /// the code can be corrected.
     pub(super) fn submit_provider_oauth_code(&mut self, cx: &mut Context<Self>) {
-        let Some(workspace) = self.provider_workspace() else {
+        let Some((daemon, workspace)) = self.provider_auth_target() else {
             return;
         };
         let Some(flow) = self.providers_oauth_flow.clone() else {
@@ -1281,7 +1342,7 @@ impl Fintwind {
             return;
         }
         let attempt_id = attempt.attempt_id.clone();
-        let daemon = self.daemon.clone();
+        let generation = self.providers_oauth_generation;
         cx.spawn(async move |this, cx| {
             let completed = cx
                 .background_executor()
@@ -1298,6 +1359,7 @@ impl Fintwind {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| match completed {
+                _ if this.providers_oauth_generation != generation => {},
                 Ok(()) => this.finish_provider_oauth(cx),
                 Err(error) => {
                     this.show_toast(tr!(
@@ -1331,10 +1393,9 @@ impl Fintwind {
         let Some(attempt) = flow.attempt else {
             return;
         };
-        let Some(workspace) = self.provider_workspace() else {
+        let Some((daemon, workspace)) = self.provider_auth_target() else {
             return;
         };
-        let daemon = self.daemon.clone();
         cx.spawn(async move |_this, cx| {
             let _ = cx
                 .background_executor()
@@ -1360,6 +1421,12 @@ impl Fintwind {
             return;
         };
         self.providers_oauth_generation += 1;
+        if self.settings_machine_selected() {
+            self.clear_oauth_code_field(cx);
+            self.show_success_toast(tr!("providers.oauth_done_toast"));
+            self.refresh_integrations(cx);
+            return;
+        }
         self.providers_authorized.insert(flow.provider_id.clone());
         self.clear_oauth_code_field(cx);
         if matches!(
@@ -1414,11 +1481,11 @@ impl Fintwind {
         if self.providers_auth_loading || self.providers_save_in_flight {
             return;
         }
-        let Some((binary, directory)) = self.provider_workspace() else {
+        let Some((daemon, (binary, directory))) = self.provider_auth_target() else {
             return;
         };
         self.providers_auth_loading = true;
-        let store = fintwind_client::persistence::StateStore::remote(self.daemon.clone());
+        let store = fintwind_client::persistence::StateStore::remote(daemon);
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
@@ -1465,13 +1532,13 @@ impl Fintwind {
         if !self.provider_is_authorized(&catalog_id) {
             return;
         }
-        let Some(workspace) = self.provider_workspace() else {
+        let Some((daemon, workspace)) = self.provider_auth_target() else {
             return;
         };
         self.providers_builtin_catalog_check_id = Some(catalog_id.clone());
+        self.providers_builtin_catalog_error = None;
         cx.notify();
         let probe_id = catalog_id.clone();
-        let daemon = self.daemon.clone();
         cx.spawn(async move |this, cx| {
             let outcome = cx
                 .background_executor()
@@ -1490,9 +1557,9 @@ impl Fintwind {
                             this.show_success_toast(tr!("providers.builtin_catalog_ok"));
                         }
                         Err(detail) => {
-                            this.show_toast(tr!(
-                                "providers.builtin_catalog_failed",
-                                error = detail
+                            this.providers_builtin_catalog_error = Some((
+                                catalog_id.clone(),
+                                tr!("providers.builtin_catalog_failed", error = detail),
                             ));
                         }
                     }
@@ -1523,24 +1590,41 @@ impl Fintwind {
             )
             .into_any_element();
         }
+        let error = self
+            .providers_builtin_catalog_error
+            .as_ref()
+            .filter(|(id, _)| id == &provider.id);
+        let (phase, wake) = if error.is_none() {
+            crate::ui::loading::LoadingDelay::observe(
+                &mut self.providers_builtin_catalog_loading.borrow_mut(),
+                provider.id.clone(),
+                testing,
+            )
+        } else {
+            *self.providers_builtin_catalog_loading.borrow_mut() = None;
+            (crate::ui::loading::LoadingPhase::Done, None)
+        };
+        if let Some(wake) = wake {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(wake.delay()).await;
+                wake.fired();
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+        }
         let mut button = outline_button(
             "check-builtin-provider-catalog",
-            if testing {
-                tr!("providers.builtin_catalog_checking")
-            } else {
-                tr!("providers.builtin_catalog_check")
-            },
-            Some(if testing {
-                "icons/loader-circle.svg"
-            } else {
-                "icons/list.svg"
-            }),
+            tr!("providers.builtin_catalog_check"),
+            None,
             theme,
         )
-        .tooltip(Tooltip::text(tr!("providers.builtin_catalog_tooltip")));
-        if testing {
-            button = button.opacity(0.6);
+        .child(if phase == crate::ui::loading::LoadingPhase::Visible {
+            motion::spin_slow(icon("icons/loader-circle.svg", 12.5, theme.text_tertiary))
         } else {
+            icon("icons/list.svg", 12.5, theme.text_tertiary).into_any_element()
+        })
+        .tooltip(Tooltip::text(tr!("providers.builtin_catalog_tooltip")));
+        if !testing {
             button = button
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.check_builtin_provider_catalog(cx);
@@ -1561,6 +1645,12 @@ impl Fintwind {
             .items_center()
             .gap(px(10.0))
             .child(button)
+            .children(error.map(|(_, error)| {
+                div()
+                    .text_size(ui_px(12.0))
+                    .text_color(theme.danger_text)
+                    .child(error.clone())
+            }))
             .into_any_element()
     }
 }
@@ -1654,6 +1744,38 @@ pub(super) fn format_probe_latency(latency: Duration) -> String {
 }
 
 impl Fintwind {
+    fn connectivity_indicator(
+        &self,
+        key: String,
+        testing: bool,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (phase, wake) = {
+            let mut states = self.provider_connectivity_loading.borrow_mut();
+            let result = crate::ui::loading::LoadingDelay::observe(
+                states.entry(key.clone()).or_default(), (), testing,
+            );
+            if result.0 == crate::ui::loading::LoadingPhase::Done {
+                states.remove(&key);
+            }
+            result
+        };
+        if let Some(wake) = wake {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(wake.delay()).await;
+                wake.fired();
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+        }
+        if phase == crate::ui::loading::LoadingPhase::Visible {
+            motion::spin_slow(icon("icons/loader-circle.svg", 12.5, theme.text_tertiary))
+        } else {
+            icon("icons/globe.svg", 12.5, theme.text_tertiary).into_any_element()
+        }
+    }
+
     /// The endpoint section's connectivity row: the test button, spinning
     /// while probing; the verdict lands as a toast.
     pub(super) fn render_connectivity_field(
@@ -1663,24 +1785,16 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let testing = self.provider_connectivity_testing.contains_key(&provider.id);
+        let indicator = self.connectivity_indicator(provider.id.clone(), testing, theme, cx);
         let mut button = outline_button(
             "test-provider-connection",
-            if testing {
-                tr!("providers.testing_connection")
-            } else {
-                tr!("providers.test_connection")
-            },
-            Some(if testing {
-                "icons/loader-circle.svg"
-            } else {
-                "icons/globe.svg"
-            }),
+            tr!("providers.test_connection"),
+            None,
             theme,
         )
+        .child(indicator)
         .tooltip(Tooltip::text(tr!("providers.connection_tooltip")));
-        if testing {
-            button = button.opacity(0.6);
-        } else {
+        if !testing {
             button = button
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.probe_provider_connectivity(cx);
@@ -1701,6 +1815,9 @@ impl Fintwind {
             .items_center()
             .gap(px(10.0))
             .child(button)
+            .children(self.provider_connectivity_errors.get(&provider.id).map(|error| {
+                div().text_size(ui_px(12.0)).text_color(theme.danger_text).child(error.clone())
+            }))
             .into_any_element()
     }
 
@@ -1714,24 +1831,16 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let testing = self.providers_form_connectivity_testing;
+        let indicator = self.connectivity_indicator(String::new(), testing, theme, cx);
         let mut button = outline_button(
             "test-provider-form-connection",
-            if testing {
-                tr!("providers.testing_connection")
-            } else {
-                tr!("providers.test_connection")
-            },
-            Some(if testing {
-                "icons/loader-circle.svg"
-            } else {
-                "icons/globe.svg"
-            }),
+            tr!("providers.test_connection"),
+            None,
             theme,
         )
+        .child(indicator)
         .tooltip(Tooltip::text(tr!("providers.connection_tooltip")));
-        if testing {
-            button = button.opacity(0.6);
-        } else {
+        if !testing {
             button = button
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.probe_form_connectivity(cx);
@@ -1752,6 +1861,9 @@ impl Fintwind {
             .items_center()
             .gap(px(10.0))
             .child(button)
+            .children(self.provider_connectivity_errors.get("").map(|error| {
+                div().text_size(ui_px(12.0)).text_color(theme.danger_text).child(error.clone())
+            }))
             .into_any_element()
     }
 }
@@ -1768,7 +1880,7 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if self
-            .providers_store
+            .settings_providers()
             .iter()
             .find(|provider| provider.id == provider_id)
             .and_then(|provider| provider.model(model_id))

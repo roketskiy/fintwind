@@ -13,11 +13,13 @@ use chrono::{Datelike as _, Duration as ChronoDuration, Local, NaiveDate, Timeli
 use chrono::TimeZone as _;
 
 use crate::usage::{cache_hit_percent, format_tokens};
+use crate::ui::loading::{LoadingDelay, LoadingPhase};
+use crate::ui::ActivationExt;
 use fintwind_client::models_dev::{self, ModelsDevTable};
 
 use super::*;
 use ely_gpui_component::{
-    buttons::{Button, ButtonVariant, IconButton, SegmentedControl},
+    buttons::{Button, ButtonVariant, SegmentedControl},
     charts::CalendarHeatmap,
     feedback::{Alert, EmptyState},
     layout::CardHeader,
@@ -383,6 +385,7 @@ impl Fintwind {
         if self.usage_stats_source.as_ref() != Some(&binary) {
             self.usage_stats_source = Some(binary.clone());
             self.usage_stats = None;
+            self.usage_stats_complete = false;
             self.usage_stats_loaded_at = None;
             self.usage_stats_pending = false;
             self.usage_stats_generation += 1;
@@ -468,6 +471,7 @@ impl Fintwind {
                         this.usage_stats_error = stats.refresh_error.clone();
                         this.usage_stats_loaded_at = Some(Instant::now());
                         if !stats.refreshing && stats.refresh_error.is_none() {
+                            this.usage_stats_complete = true;
                         }
                         this.usage_stats = Some(Arc::new(stats));
                         this.rebuild_usage_views(cx);
@@ -555,7 +559,7 @@ impl Fintwind {
     }
 
     pub(super) fn render_usage_page(
-        &self,
+        &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -563,11 +567,35 @@ impl Fintwind {
         let first_load = self
             .usage_stats
             .as_ref()
-            .is_none_or(|stats| stats.entries.is_empty() && stats.refreshing);
-        let no_workspace =
-            self.native_binary_path().is_none() || self.state.selected_project.is_none();
+            .is_none_or(|stats| {
+                !self.usage_stats_complete && stats.entries.is_empty() && stats.refreshing
+            });
+        let source = self.native_binary_path().zip(self.state.selected_project);
+        let no_workspace = source.is_none();
+        let loading_phase = if let Some(source) = source.filter(|_| self.usage_stats_error.is_none()) {
+            let (phase, wake) = LoadingDelay::observe(
+                &mut self.usage_loading,
+                source,
+                first_load
+                    && (self.usage_stats_pending
+                        || self.usage_stats.as_ref().is_some_and(|stats| stats.refreshing)),
+            );
+            if let Some(wake) = wake {
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(wake.delay()).await;
+                    wake.fired();
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                })
+                .detach();
+            }
+            phase
+        } else {
+            self.usage_loading = None;
+            LoadingPhase::Done
+        };
 
         let mut column = div().flex().flex_col().gap_6().min_w_0().w_full();
+        let mut quota_rendered = false;
 
         if let Some(error) = &self.usage_stats_error {
             column = column.child(
@@ -579,29 +607,51 @@ impl Fintwind {
                 )
                 .action(usage_retry_button(&theme, cx)),
             );
-        } else if first_load
-            && (self.usage_stats_pending
-                || self
-                    .usage_stats
-                    .as_ref()
-                    .is_some_and(|stats| stats.refreshing))
-        {
-            column = column.child(Caption::new(tr!("usage_page.loading")));
+        } else if loading_phase != LoadingPhase::Done {
+            let compact = self.usage_content_width > px(0.0)
+                && self.usage_content_width < px(900.0);
+            let placeholder_opacity = if loading_phase == LoadingPhase::Visible { 1.0 } else { 0.0 };
+            let quota = self.render_usage_quota_compact(&theme, compact, cx);
+            quota_rendered = true;
+            column = column.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .child(self.render_usage_history_filter(window, &theme, cx))
+                    .child(
+                        div().flex().flex_wrap().w_full().border_y_1().border_color(theme.border).py_3()
+                            .opacity(placeholder_opacity)
+                            .children((0..6).map(|_| {
+                                div().flex_1().min_w(px(120.0)).px_3().flex().flex_col().gap_1()
+                                    .child(div().w(px(72.0)).h(ui_px(12.0)).rounded(px(3.0)).bg(theme.overlay_strong))
+                                    .child(div().w(px(92.0)).h(ui_px(22.0)).rounded(px(3.0)).bg(theme.overlay_strong))
+                                    .child(div().w(px(64.0)).h(ui_px(12.0)).rounded(px(3.0)).bg(theme.overlay_strong))
+                            })),
+                    )
+                    .child(
+                        div().flex().gap_3().min_w_0()
+                            .when(compact, |row| row.flex_col())
+                            .child(usage_card(&theme).flex_1().min_h(px(282.0)).opacity(placeholder_opacity))
+                            .child(quota),
+                    ),
+            );
         }
 
-        let mut quota_rendered = false;
         if no_workspace {
             column = column.child(usage_empty_card(
                 &theme,
                 tr!("usage_page.no_workspace_title"),
                 tr!("usage_page.no_workspace_body"),
             ));
-        } else if let Some(stats) = self
+        } else if loading_phase == LoadingPhase::Done && let Some(stats) = self
             .usage_stats
             .as_ref()
-            .filter(|stats| !stats.entries.is_empty() || !stats.refreshing)
+            .filter(|stats| {
+                !stats.entries.is_empty() || !stats.refreshing || self.usage_stats_complete
+            })
         {
-            if stats.entries.is_empty() && !stats.refreshing {
+            if stats.entries.is_empty() && (!stats.refreshing || self.usage_stats_complete) {
                 column = column.child(usage_empty_card(
                     &theme,
                     tr!("usage_page.empty_title"),
@@ -665,6 +715,26 @@ impl Fintwind {
     /// subscription page available for refresh/status and overflow cases.
     fn render_usage_quota_compact(&self, theme: &Theme, compact: bool, cx: &mut Context<Self>) -> Div {
         let cards = self.subscription_cards();
+        let (quota_phase, wake) = if self.subscriptions_connection_error() {
+            *self.usage_quota_loading.borrow_mut() = None;
+            (LoadingPhase::Done, None)
+        } else {
+            LoadingDelay::observe(
+                &mut self.usage_quota_loading.borrow_mut(),
+                (),
+                cards.is_empty()
+                    && !self.subscriptions_connections_loaded()
+                    && self.subscriptions_loading(),
+            )
+        };
+        if let Some(wake) = wake {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(wake.delay()).await;
+                wake.fired();
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+        }
         // Measure the actual clipped viewport instead of subtracting guessed
         // padding from its parent. Leave the border inside the clip on all sides.
         let viewport_width = f32::from(self.usage_quota_viewport_width);
@@ -757,18 +827,35 @@ impl Fintwind {
                 })));
         }
         let mut inner = div().flex().flex_col().child(strip).child(positions);
-        if count == 0 {
-            inner = div().p_3().child(if self.subscriptions_connection_error() {
-                tr!("usage_page.connections_failed")
-            } else if self.subscriptions_loading() {
-                tr!("providers.quota_loading")
-            } else {
-                tr!("usage_page.subscriptions_empty")
+        if quota_phase != LoadingPhase::Done {
+            inner = div().p_3().h(px(120.0)).flex().flex_col().gap(px(10.0))
+                .when(quota_phase == LoadingPhase::Visible, |body| body.children(
+                    [120.0, 180.0, 150.0].into_iter().map(|width| {
+                        div().w(px(width)).h(px(12.0)).rounded(px(3.0)).bg(theme.overlay_strong)
+                    }),
+                ));
+        } else if count == 0 {
+            inner = div().p_3().when(!self.subscriptions_connection_error(), |body| {
+                body.child(tr!("usage_page.subscriptions_empty"))
             });
         }
         usage_card(theme).min_w_0().flex_none().when(compact, |card| card.w_full()).when(!compact, |card| card.w(px(300.0)))
             .p_3().flex().flex_col().gap_2()
             .child(div().text_size(ui_px(13.0)).font_weight(FontWeight::MEDIUM).child(tr!("usage_page.subscriptions_title")))
+            .when(self.subscriptions_connection_error(), |card| {
+                card.child(
+                    div().flex().items_center().gap(px(8.0)).text_size(ui_px(12.0))
+                        .text_color(theme.danger_text)
+                        .child(div().flex_1().min_w_0().child(tr!("usage_page.connections_failed")))
+                        .child(
+                            div().id("usage-quota-retry").tab_index(0)
+                                .text_color(theme.text_secondary)
+                                .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
+                                .child(tr!("common.retry"))
+                                .on_activation(cx, |this, _, cx| this.load_subscriptions(true, cx)),
+                        ),
+                )
+            })
             .child(inner)
     }
 
@@ -799,15 +886,38 @@ impl Fintwind {
         cx.notify();
     }
 
-    pub(super) fn render_usage_toolbar(&self, _theme: &Theme, cx: &mut Context<Self>) -> Div {
-        let refresh = IconButton::new("usage-refresh", IconName::RefreshCw)
-            .size(ControlSize::Sm)
-            .disabled(self.usage_stats_pending)
-            .tooltip(tr!("usage_page.refresh"))
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.ensure_usage_stats(true, cx);
-                this.load_subscriptions(true, cx);
-            }));
+    pub(super) fn render_usage_toolbar(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
+        let busy = self.usage_stats_pending || self.subscriptions_loading();
+        let focus = self.transcript_control_focus("usage-refresh", cx);
+        let refresh_icon = motion::action_icon(
+            &self.usage_refresh_spin,
+            busy,
+            false,
+            icon("icons/rotate-cw.svg", 14.0, theme.text_secondary),
+            cx,
+        );
+        let refresh = div()
+            .id("usage-refresh")
+            .role(gpui::Role::Button)
+            .aria_label(tr!("usage_page.refresh"))
+            .track_focus(&focus)
+            .tab_index(0)
+            .size(px(26.0))
+            .rounded(px(6.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
+            .hover(|style| style.bg(theme.overlay))
+            .tooltip(Tooltip::text(tr!("usage_page.refresh")))
+            .child(refresh_icon)
+            .on_activation(cx, |this, _, cx| {
+                if !this.usage_stats_pending && !this.subscriptions_loading() {
+                    *this.usage_refresh_spin.get_mut() = Some(motion::ActionSpin::start());
+                    this.ensure_usage_stats(true, cx);
+                    this.load_subscriptions(true, cx);
+                }
+            });
         div()
             .flex()
             .items_center()

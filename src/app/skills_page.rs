@@ -10,6 +10,7 @@
 //! invalidate the catalog.
 
 use crate::theme::ui_px;
+use crate::ui::ActivationExt;
 
 use std::path::Path;
 
@@ -135,7 +136,7 @@ impl Fintwind {
                         this.skills_catalog = Some(Rc::new(catalog));
                         this.skills_scanned_at = Some(Instant::now());
                     }
-                    Err(error) => this.show_toast(error.to_string()),
+                    Err(error) => this.skills_scan_error = Some(error.to_string()),
                 }
                 cx.notify();
             });
@@ -1240,15 +1241,11 @@ impl Fintwind {
                     .bg(theme.danger.opacity(0.18))
                     .text_color(theme.danger_text)
             })
-            .child(icon(
-                "icons/trash.svg",
-                12.5,
-                if armed {
-                    theme.danger
-                } else {
-                    theme.text_tertiary
-                },
-            ))
+            .child(if indicator_action == Some(None) && pending_phase == crate::ui::loading::LoadingPhase::Visible {
+                motion::spin_slow(icon("icons/loader-circle.svg", 12.5, theme.text_tertiary))
+            } else {
+                icon("icons/trash.svg", 12.5, if armed { theme.danger } else { theme.text_tertiary }).into_any_element()
+            })
             .child(if armed {
                 tr!("skills.confirm_delete")
             } else {
@@ -1484,6 +1481,28 @@ impl Fintwind {
                 &self.skills_detail_scrollbar,
             ))
     }
+}
+
+fn skills_scan_error(error: &str, theme: &Theme, cx: &mut Context<Fintwind>) -> Div {
+    let theme = *theme;
+    div()
+        .px(px(12.0))
+        .py(px(8.0))
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .text_size(ui_px(12.0))
+        .text_color(theme.danger_text)
+        .child(div().flex_1().min_w_0().child(error.to_owned()))
+        .child(
+            div()
+                .id("skills-scan-retry")
+                .tab_index(0)
+                .text_color(theme.text_secondary)
+                .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
+                .child(tr!("common.retry"))
+                .on_activation(cx, |app, _, cx| app.ensure_skills_catalog(true, cx)),
+        )
 }
 
 fn skills_empty_state(theme: &Theme) -> Div {

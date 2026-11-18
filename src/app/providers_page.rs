@@ -175,7 +175,7 @@ impl Fintwind {
             Some(id) if id.starts_with(BUILTIN_SELECTION_PREFIX) => id.to_owned(),
             Some(id)
                 if self
-                    .providers_store
+                    .settings_providers()
                     .iter()
                     .any(|provider| provider.id == id) =>
             {
@@ -278,7 +278,7 @@ impl Fintwind {
     /// changes; the `Edited` handler's echo guard skips the reflection.
     fn load_provider_fields(&mut self, id: &str, cx: &mut Context<Self>) {
         let Some(provider) = self
-            .providers_store
+            .settings_providers()
             .iter()
             .find(|provider| provider.id == id)
             .cloned()
@@ -330,12 +330,16 @@ impl Fintwind {
         }
         self.providers_load_generation += 1;
         let generation = self.providers_load_generation;
-        let workspace = self.provider_workspace();
-        let daemon = self.daemon.clone();
+        let workspace = self.provider_auth_target().map(|(_, workspace)| workspace);
+        let Some(daemon) = self.settings_daemon() else { return; };
         cx.spawn(async move |this, cx| {
             let (loaded, migration_error) = cx
                 .background_executor()
                 .spawn(async move {
+                    if daemon.is_remote() {
+                        return (Self::settings_json::<Vec<fintwind_client::opencode_config::ProviderConfigEntry>>(&daemon, fintwind_client::Command::LoadOpenCodeProviders)
+                            .map(|entries| entries.into_iter().map(Into::into).collect()), None);
+                    }
                     fintwind_client::opencode_config::migrate_legacy_override_file();
                     let migration_error = workspace.and_then(|(binary, directory)| {
                         let store = fintwind_client::persistence::StateStore::remote(daemon);
@@ -462,7 +466,7 @@ impl Fintwind {
                         let mut clear_key_editor = false;
                         for (before, saved) in submitted.iter().zip(saved) {
                             if let Some(current) =
-                                this.providers_store.iter_mut().find(|p| p.id == saved.id)
+                                this.settings_providers_mut().iter_mut().find(|p| p.id == saved.id)
                             {
                                 // Keep newer model/endpoint/key edits. Only the submitted
                                 // secret and original-record baseline belong to this save.
@@ -479,14 +483,14 @@ impl Fintwind {
                                         model.api_package = saved_model.api_package.clone();
                                     }
                                 }
-                                if current.api_key == before.api_key
+                                let key_changed = current.api_key == before.api_key
                                     && saved.api_key.is_empty()
-                                    && !before.api_key.is_empty()
-                                {
+                                    && !before.api_key.is_empty();
+                                if key_changed {
                                     current.api_key.clear();
-                                    this.providers_authorized.insert(current.id.clone());
+                                    this.providers_authorized.insert(before.id.clone());
                                     clear_key_editor |= this.providers_selected.as_deref()
-                                        == Some(current.id.as_str())
+                                        == Some(before.id.as_str())
                                         && this.provider_api_key_input.read(cx).content().trim()
                                             == before.api_key;
                                 }
@@ -503,8 +507,10 @@ impl Fintwind {
                                 .update(cx, |input, cx| input.set_content(String::new(), cx));
                             this.providers_api_key_revealed = false;
                         }
-                        this.rebuild_image_models_report(cx, true);
-                        this.refresh_provider_detection();
+                        if !this.settings_machine_selected() {
+                            this.rebuild_image_models_report(cx, true);
+                            this.refresh_provider_detection();
+                        }
                         this.refresh_integrations(cx);
                     }
                     Err(error) => {
@@ -551,7 +557,7 @@ impl Fintwind {
     ) {
         let selected = self.providers_selected.clone();
         let Some(provider) = self
-            .providers_store
+            .settings_providers_mut()
             .iter_mut()
             .find(|provider| Some(&provider.id) == selected.as_ref())
         else {
@@ -575,10 +581,10 @@ impl Fintwind {
             }
         };
         if changed {
+            let provider_id = provider.id.clone();
             self.providers_load_generation += 1;
             // The endpoint or key just changed: this provider's connectivity
             // and first-token verdicts no longer describe it.
-            let provider_id = provider.id.clone();
             self.clear_provider_probe_results(&provider_id);
             // A key is a replacement draft. Do not persist partial secrets
             // merely because the user pauses while typing.
@@ -598,10 +604,11 @@ impl Fintwind {
         if key.is_empty() {
             return;
         }
+        let selected = self.providers_selected.clone();
         let Some(provider) = self
-            .providers_store
+            .settings_providers_mut()
             .iter_mut()
-            .find(|provider| Some(&provider.id) == self.providers_selected.as_ref())
+            .find(|provider| Some(&provider.id) == selected.as_ref())
         else {
             return;
         };
@@ -703,7 +710,7 @@ impl Fintwind {
         }
 
         let slugs: Vec<String> = self
-            .providers_store
+            .settings_providers()
             .iter()
             .map(|provider| provider.slug.clone())
             .collect();
@@ -716,7 +723,7 @@ impl Fintwind {
             models,
         );
         let id = provider.id.clone();
-        self.providers_store.push(provider);
+        self.settings_providers_mut().push(provider);
         self.commit_custom_providers(cx);
         self.exit_provider_form(cx);
         self.provider_form_api_key
@@ -726,11 +733,11 @@ impl Fintwind {
 
     fn delete_provider(&mut self, id: String, cx: &mut Context<Self>) {
         let name = self
-            .providers_store
+            .settings_providers()
             .iter()
             .find(|provider| provider.id == id)
             .map(|provider| provider.name.clone());
-        self.providers_store.retain(|provider| provider.id != id);
+        self.settings_providers_mut().retain(|provider| provider.id != id);
         self.providers_delete_arming = None;
         self.clear_provider_probe_results(&id);
         self.commit_custom_providers(cx);
@@ -744,7 +751,7 @@ impl Fintwind {
 
     fn toggle_provider_enabled(&mut self, id: String, cx: &mut Context<Self>) {
         if let Some(provider) = self
-            .providers_store
+            .settings_providers_mut()
             .iter_mut()
             .find(|provider| provider.id == id)
         {
@@ -760,7 +767,7 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) {
         if let Some(provider) = self
-            .providers_store
+            .settings_providers_mut()
             .iter_mut()
             .find(|provider| provider.id == id)
         {
@@ -800,7 +807,7 @@ impl Fintwind {
         self.providers_renaming = false;
         let selected = self.providers_selected.clone();
         if let Some(provider) = self
-            .providers_store
+            .settings_providers_mut()
             .iter_mut()
             .find(|provider| Some(&provider.id) == selected.as_ref())
         {
@@ -945,7 +952,7 @@ impl Fintwind {
             ..Default::default()
         };
         if let Some(provider) = self
-            .providers_store
+            .settings_providers_mut()
             .iter_mut()
             .find(|candidate| candidate.id == provider.id)
         {
@@ -975,7 +982,7 @@ impl Fintwind {
     fn delete_model(&mut self, id: String, index: usize, cx: &mut Context<Self>) {
         let mut removed = false;
         if let Some(provider) = self
-            .providers_store
+            .settings_providers_mut()
             .iter_mut()
             .find(|provider| provider.id == id)
         {
@@ -1102,8 +1109,12 @@ impl Fintwind {
             }
         }
 
+        // The authorized set above may be the last known one: a failed
+        // re-read keeps it and explains itself here, with a retry.
+        rows = rows.children(self.render_provider_auth_error(theme, cx));
+
         rows = rows.child(section_label(theme, tr!("providers.section_custom"), false));
-        for (index, provider) in self.providers_store.iter().enumerate() {
+        for (index, provider) in self.settings_providers().iter().enumerate() {
             rows = rows.child(self.render_provider_list_row(
                 SharedString::from(format!("provider-row-{index}")),
                 provider.id.clone(),
@@ -1171,12 +1182,62 @@ impl Fintwind {
     }
 
     fn providers_footer_caption(&self) -> SharedString {
-        let count = self.providers_store.len();
+        let count = self.settings_providers().len();
         SharedString::from(match count {
             0 => tr!("providers.custom_count_zero"),
             1 => tr!("providers.custom_count_one", count = count),
             _ => tr!("providers.custom_count_many", count = count),
         })
+    }
+
+    /// The authorization read's in-place failure: the last known authorized
+    /// set stays on screen, so the error explains the staleness where that
+    /// set shows, with a retry that re-reads. `None` while no failure is
+    /// recorded; the button goes dead while a read is running.
+    pub(super) fn render_provider_auth_error(
+        &self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let error = self.providers_auth_error.as_ref()?.clone();
+        let loading = self.providers_auth_loading;
+        let mut retry = outline_button(
+            "retry-provider-auth",
+            tr!("common.retry"),
+            Some("icons/rotate-cw.svg"),
+            theme,
+        );
+        if !loading {
+            retry = retry
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.retry_provider_integrations(cx);
+                }))
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                    if !event.keystroke.modifiers.modified()
+                        && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                    {
+                        this.retry_provider_integrations(cx);
+                        cx.stop_propagation();
+                    }
+                }));
+        }
+        Some(
+            div()
+                .w_full()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(ui_px(12.0))
+                        .text_color(theme.danger_text)
+                        .child(error),
+                )
+                .child(retry)
+                .into_any_element(),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1387,34 +1448,44 @@ impl Fintwind {
             || self
                 .provider_model_discoveries_pending
                 .contains(&self.provider_directory());
+        let refresh_icon = motion::action_icon(
+            &self.builtin_refresh_spin,
+            loading_models,
+            loading_models,
+            icon("icons/rotate-cw.svg", 12.5, theme.text_tertiary),
+            cx,
+        );
 
         let refresh = outline_button(
             "refresh-builtin-providers",
-            if checking {
-                tr!("common.checking")
-            } else {
-                tr!("common.refresh")
-            },
-            Some("icons/rotate-cw.svg"),
+            tr!("common.refresh"),
+            None,
             theme,
         )
-        .opacity(if checking { 0.6 } else { 1.0 })
-        .when(!checking, |element| {
-            element
-                .on_click(cx.listener(|this, _, _, cx| {
+        .child(refresh_icon)
+        .on_click(cx.listener(|this, _, _, cx| {
+            if this.provider_detection_remaining == 0
+                && !this.provider_model_discoveries_pending.contains(&this.provider_directory())
+            {
+                *this.builtin_refresh_spin.get_mut() = Some(motion::ActionSpin::start());
+                this.refresh_provider_detection();
+                cx.notify();
+            }
+        }))
+        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+            if !event.keystroke.modifiers.modified()
+                && matches!(event.keystroke.key.as_str(), "enter" | "space")
+            {
+                if this.provider_detection_remaining == 0
+                    && !this.provider_model_discoveries_pending.contains(&this.provider_directory())
+                {
+                    *this.builtin_refresh_spin.get_mut() = Some(motion::ActionSpin::start());
                     this.refresh_provider_detection();
                     cx.notify();
-                }))
-                .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                    if !event.keystroke.modifiers.modified()
-                        && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                    {
-                        this.refresh_provider_detection();
-                        cx.stop_propagation();
-                        cx.notify();
-                    }
-                }))
-        });
+                }
+                cx.stop_propagation();
+            }
+        }));
 
         let mut header_title = div().flex().items_baseline().gap(px(7.0)).child(
             div()
@@ -1434,7 +1505,9 @@ impl Fintwind {
         }
 
         let mut model_rows = div().flex().flex_col();
-        if model_count == 0 {
+        if model_count == 0 && loading_models {
+            model_rows = model_rows.child(div().h(px(36.0)));
+        } else if model_count == 0 {
             model_rows = model_rows.child(
                 div()
                     .px(px(10.0))
@@ -1448,9 +1521,7 @@ impl Fintwind {
                             .text_size(ui_px(10.5))
                             .line_height(ui_px(15.0))
                             .text_color(theme.text_tertiary)
-                            .child(if loading_models {
-                                tr!("models.loading")
-                            } else if installed {
+                            .child(if installed {
                                 tr!("providers.no_available_models")
                             } else {
                                 tr!("providers.not_detected_as", command = "opencode")
@@ -2994,6 +3065,12 @@ impl Fintwind {
                         )
                         .icon("icons/search.svg", 13.0),
                     ),
+                )
+                // The badges above may reflect the last known authorized set:
+                // a failed re-read keeps them and explains itself here.
+                .children(
+                    self.render_provider_auth_error(theme, cx)
+                        .map(|error| div().mt(px(8.0)).child(error))
                 )
                 .child(
                     div()

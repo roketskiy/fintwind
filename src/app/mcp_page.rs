@@ -17,6 +17,7 @@
 //! the Providers page uses.
 
 use crate::theme::ui_px;
+use crate::ui::ActivationExt;
 
 use gpui::KeyDownEvent;
 
@@ -356,7 +357,8 @@ impl Fintwind {
                         cx.notify();
                     }
                     Err(error) => {
-                        this.show_toast(tr!("mcp.sync_failed", error = error.to_string()));
+                        this.mcp_load_error = Some(error.to_string());
+                        cx.notify();
                     }
                 }
             });
@@ -457,10 +459,15 @@ impl Fintwind {
                                 .map(|entry| (entry.name.clone(), entry))
                                 .collect(),
                         );
+                        this.mcp_status_error = None;
+                        this.mcp_status_pending = false;
                         cx.notify();
                     }
                     Err(error) => {
                         eprintln!("could not refresh MCP statuses: {error}");
+                        this.mcp_status_error = Some(error.to_string());
+                        this.mcp_status_pending = false;
+                        cx.notify();
                     }
                 }
             });
@@ -630,6 +637,10 @@ impl Fintwind {
         else {
             return;
         };
+        // The flipped switch invalidates the old dot until the refresh lands.
+        if let Some(statuses) = self.mcp_statuses.as_mut() {
+            statuses.remove(&name);
+        }
         if self.commit_mcp_servers(cx) {
             self.show_success_toast(if enabled {
                 tr!("mcp.enabled_toast", name = name)
@@ -677,9 +688,15 @@ impl Fintwind {
                 return;
             }
             server.oauth.mode = mode;
+            // Auth mode changes what the server reports, so the old status
+            // no longer describes it. Re-read like a kind switch does.
+            if let Some(statuses) = self.mcp_statuses.as_mut() {
+                statuses.remove(&name);
+            }
             if self.commit_mcp_servers(cx) {
                 self.show_success_toast(tr!("mcp.oauth_mode_updated", name = name));
             }
+            self.refresh_mcp_statuses(cx);
         }
     }
 
@@ -772,7 +789,7 @@ impl Fintwind {
             return;
         };
         self.mcp_oauth_cancel_requested = true;
-        let daemon = self.daemon.clone();
+        let Some(daemon) = self.settings_daemon() else { return; };
         cx.spawn(async move |_, cx| {
             let _ = cx
                 .background_executor()
@@ -823,13 +840,14 @@ impl Fintwind {
         {
             server.name = name.clone();
         }
-        if let Some(statuses) = self.mcp_statuses.as_mut()
-            && let Some(entry) = statuses.remove(&selected)
-        {
-            statuses.insert(name.clone(), entry);
+        // The renamed server reports under its new key. Carrying the old
+        // entry over would show a stale state as current.
+        if let Some(statuses) = self.mcp_statuses.as_mut() {
+            statuses.remove(&selected);
         }
         self.mcp_selected = Some(name);
         self.commit_mcp_servers(cx);
+        self.refresh_mcp_statuses(cx);
     }
 
     fn cancel_mcp_rename(&mut self, cx: &mut Context<Self>) {
@@ -943,6 +961,7 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = Theme::current(cx);
+        let has_roster = !self.mcp_servers.is_empty();
         div()
             .size_full()
             .min_h_0()
@@ -1085,6 +1104,25 @@ impl Fintwind {
                     TextField::new("mcp-search-field", self.mcp_search.clone())
                         .icon("icons/search.svg", 13.0),
                 ),
+            )
+            .children(
+                self.mcp_load_error
+                    .as_ref()
+                    .filter(|_| !self.mcp_servers.is_empty())
+                    .map(|error| {
+                        div().px(px(12.0)).pt(px(8.0)).flex_none().child(
+                            mcp_load_error_banner(error, self.mcp_load_pending, theme, cx),
+                        )
+                    }),
+            )
+            .children(
+                self.mcp_status_error
+                    .as_ref()
+                    .map(|error| {
+                        div().px(px(12.0)).pt(px(8.0)).flex_none().child(
+                            mcp_status_error_banner(error, self.mcp_status_pending, theme, cx),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -1581,42 +1619,47 @@ impl Fintwind {
         let variables_section =
             self.render_mcp_variables(server, McpVariableTable::for_kind(current_kind), theme, cx);
 
-        let status_section = self.mcp_status(&server.name).map(|entry| {
-            let color = mcp_status_color(entry.status, theme);
-            div()
-                .mt(px(16.0))
-                .flex()
-                .flex_col()
-                .gap(px(6.0))
-                .child(
+        let status_section: Option<Div> = match self.mcp_status(&server.name) {
+            Some(entry) => {
+                let color = mcp_status_color(entry.status, theme);
+                Some(
                     div()
+                        .mt(px(16.0))
                         .flex()
-                        .items_center()
-                        .gap(px(8.0))
-                        .child(icon(mcp_status_glyph(entry.status), 13.0, color))
+                        .flex_col()
+                        .gap(px(6.0))
                         .child(
                             div()
-                                .text_size(ui_px(12.0))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(color)
-                                .child(mcp_status_label(entry)),
+                                .flex()
+                                .items_center()
+                                .gap(px(8.0))
+                                .child(icon(mcp_status_glyph(entry.status), 13.0, color))
+                                .child(
+                                    div()
+                                        .text_size(ui_px(12.0))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(color)
+                                        .child(mcp_status_label(entry)),
+                                ),
+                        )
+                        .children(entry.error.clone().map(|error| {
+                            div()
+                                .text_size(ui_px(10.5))
+                                .line_height(ui_px(15.0))
+                                .text_color(theme.text_tertiary)
+                                .child(SharedString::from(error))
+                        }))
+                        .child(
+                            div()
+                                .text_size(ui_px(10.5))
+                                .line_height(ui_px(15.0))
+                                .text_color(theme.text_tertiary)
+                                .child(tr!("mcp.status_refresh_hint", name = server.name.clone())),
                         ),
                 )
-                .children(entry.error.clone().map(|error| {
-                    div()
-                        .text_size(ui_px(10.5))
-                        .line_height(ui_px(15.0))
-                        .text_color(theme.text_tertiary)
-                        .child(SharedString::from(error))
-                }))
-                .child(
-                    div()
-                        .text_size(ui_px(10.5))
-                        .line_height(ui_px(15.0))
-                        .text_color(theme.text_tertiary)
-                        .child(tr!("mcp.status_refresh_hint", name = server.name.clone())),
-                )
-        });
+            }
+            None => None,
+        };
 
         self.mcp_scrollable_detail(
             div()
@@ -2108,6 +2151,7 @@ impl Fintwind {
     /// that leaves it.
     fn render_mcp_empty_detail(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let accent = mcp_accent(theme);
+        let failed = self.mcp_load_error.is_some();
         div()
             .flex_1()
             .h_full()
@@ -2125,14 +2169,21 @@ impl Fintwind {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(icon("icons/wrench.svg", 20.0, theme.text_tertiary)),
+                    .child(if failed {
+                        icon("icons/alert.svg", 20.0, theme.danger)
+                    } else {
+                        icon("icons/wrench.svg", 20.0, theme.text_tertiary)
+                    }),
             )
             .child(
                 div()
-                    .text_size(ui_px(13.5))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text)
-                    .child(tr!("mcp.count_zero")),
+                    .when(!failed, |element| {
+                        element
+                            .text_size(ui_px(13.5))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.text)
+                            .child(tr!("mcp.count_zero"))
+                    }),
             )
             .child(
                 div()
@@ -2141,11 +2192,19 @@ impl Fintwind {
                     .text_size(ui_px(11.5))
                     .line_height(ui_px(17.0))
                     .text_color(theme.text_secondary)
-                    .child(tr!("mcp.empty_description")),
+                    .child(if failed {
+                        self.mcp_load_error.clone().unwrap_or_default()
+                    } else {
+                        tr!("mcp.empty_description")
+                    }),
             )
             .child(
                 div()
-                    .id("add-mcp-server-empty")
+                    .id(if failed {
+                        "retry-mcp-load-empty"
+                    } else {
+                        "add-mcp-server-empty"
+                    })
                     .tab_index(0)
                     .focus_visible(|style| style.border_color(accent))
                     .mt(px(6.0))
@@ -2161,18 +2220,24 @@ impl Fintwind {
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(on_mcp_accent(theme))
                     .hover(|element| element.bg(accent.opacity(0.85)))
-                    .child(tr!("mcp.add_server"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.begin_add_mcp_server(cx);
-                    }))
-                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                        if !event.keystroke.modifiers.modified()
-                            && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                        {
+                    .child(if failed {
+                        tr!("common.retry")
+                    } else {
+                        tr!("mcp.add_server")
+                    })
+                    .on_activation(cx, move |this, _, cx| {
+                        if failed {
+                            // Guard the in-flight reload against stacked loads.
+                            // Statuses re-read with the roster so the dots do
+                            // not stay unknown after a successful retry.
+                            if !this.mcp_load_pending {
+                                this.load_mcp_servers_from_config(cx);
+                                this.refresh_mcp_statuses(cx);
+                            }
+                        } else {
                             this.begin_add_mcp_server(cx);
-                            cx.stop_propagation();
                         }
-                    })),
+                    }),
             )
             .into_any_element()
     }
@@ -2334,4 +2399,119 @@ impl Fintwind {
                 ),
         )
     }
+}
+
+/// The failed roster load, in the list's own place: the daemon's error
+/// message and the one action that leaves the state. A retry already in
+/// flight replaces the button with a spinner so a second click cannot
+/// stack loads.
+fn mcp_load_error_banner(
+    error: &str,
+    retrying: bool,
+    theme: &Theme,
+    cx: &mut Context<Fintwind>,
+) -> Div {
+    let theme = *theme;
+    div()
+        .px(px(10.0))
+        .py(px(8.0))
+        .rounded(px(8.0))
+        .bg(theme.overlay)
+        .flex()
+        .items_start()
+        .gap(px(8.0))
+        .child(
+            div()
+                .mt(px(2.0))
+                .flex_none()
+                .child(icon("icons/alert.svg", 12.0, theme.danger)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_size(ui_px(11.0))
+                .line_height(ui_px(16.0))
+                .text_color(theme.danger_text)
+                .child(SharedString::from(error.to_owned())),
+        )
+        .child(
+            div()
+                .id("mcp-load-retry")
+                .tab_index(0)
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .text_size(ui_px(11.0))
+                .line_height(ui_px(16.0))
+                .text_color(theme.text_secondary)
+                .hover(|element| element.text_color(theme.text))
+                .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
+                .child(tr!("common.retry"))
+                .child(div().size(px(12.0)).when(retrying, |slot| {
+                    slot.child(motion::spin_slow(icon("icons/loader-circle.svg", 12.0, theme.text_secondary)))
+                }))
+                .on_activation(cx, move |this, _, cx| {
+                    if !retrying {
+                        this.load_mcp_servers_from_config(cx);
+                        this.refresh_mcp_statuses(cx);
+                    }
+                })
+        )
+}
+
+fn mcp_status_error_banner(
+    error: &str,
+    retrying: bool,
+    theme: &Theme,
+    cx: &mut Context<Fintwind>,
+) -> Div {
+    let theme = *theme;
+    div()
+        .px(px(10.0))
+        .py(px(8.0))
+        .rounded(px(8.0))
+        .bg(theme.overlay)
+        .flex()
+        .items_start()
+        .gap(px(8.0))
+        .child(
+            div()
+                .mt(px(2.0))
+                .flex_none()
+                .child(icon("icons/alert.svg", 12.0, theme.danger)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_size(ui_px(11.0))
+                .line_height(ui_px(16.0))
+                .text_color(theme.danger_text)
+                .child(SharedString::from(error.to_owned())),
+        )
+        .child(
+            div()
+                .id("mcp-status-retry")
+                .tab_index(0)
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .text_size(ui_px(11.0))
+                .line_height(ui_px(16.0))
+                .text_color(theme.text_secondary)
+                .hover(|element| element.text_color(theme.text))
+                .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
+                .child(tr!("common.retry"))
+                .child(div().size(px(12.0)).when(retrying, |slot| {
+                    slot.child(motion::spin_slow(icon("icons/loader-circle.svg", 12.0, theme.text_secondary)))
+                }))
+                .on_activation(cx, move |this, _, cx| {
+                    if !retrying {
+                        this.refresh_mcp_statuses(cx);
+                    }
+                })
+        )
 }

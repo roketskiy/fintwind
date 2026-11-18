@@ -252,7 +252,32 @@ async fn command(
 ) -> Result<String> {
     let mut channel = session.channel_open_session().await?;
     let size = binary.map_or(0, |bytes| bytes.len());
-    let script = format!("{ROOT}\nset -- {size}\n{script}");
+    #[cfg(test)]
+    let isolated_root = std::env::var("FINTWIND_SSH_E2E_DEPLOY_ROOT")
+        .ok()
+        .map(|path| {
+            let suffix = path.strip_prefix("/tmp/fintwind-deploy-e2e-").unwrap_or_default();
+            ensure!(
+                !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'),
+                "invalid isolated SSH deployment root"
+            );
+            Ok::<_, anyhow::Error>(format!("root='{path}'"))
+        })
+        .transpose()?;
+    #[cfg(test)]
+    let root = isolated_root.as_deref().unwrap_or(ROOT);
+    #[cfg(not(test))]
+    let root = ROOT;
+    #[cfg(test)]
+    let script = if isolated_root.is_some() {
+        script.replace("nohup flock", "nohup timeout -k 5s 90s flock").replace(
+            "exec ./daemon --bind",
+            "exec env HOME=\"$PWD/home\" XDG_CONFIG_HOME=\"$PWD/config\" XDG_DATA_HOME=\"$PWD/opencode-data\" ./daemon --parent-pid \"$(cat fixture-owner)\" --bind",
+        )
+    } else {
+        script.to_owned()
+    };
+    let script = format!("{root}\nset -- {size}\n{script}");
     channel.exec(true, script).await?;
     if let Some(binary) = binary {
         channel.data(binary).await?;

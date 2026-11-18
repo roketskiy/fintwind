@@ -89,20 +89,25 @@ export function useRemote() {
       location.pathname + location.search,
     );
     const onPop = (event: PopStateEvent) => {
-      generation.current++;
       const next = event.state;
-      if (
+      const nextSelection: Selection = (
         next?.fintwindPage === "conversation" &&
         typeof next.sessionId === "string" &&
         typeof next.projectId === "string"
-      ) {
-        setSelection({
+      ) ? {
           projectId: next.projectId,
           sessionId: next.sessionId,
           page: "conversation",
-        });
-      } else setSelection((value) => ({ ...value, page: "sessions" }));
-      saveSelection("fintwind-page", next?.fintwindPage === "conversation" ? "conversation" : "sessions");
+        } : { ...currentSelection.current, page: "sessions" };
+      const current = currentSelection.current;
+      if (current.page !== nextSelection.page || current.projectId !== nextSelection.projectId || current.sessionId !== nextSelection.sessionId) {
+        generation.current++;
+        setError(null);
+        setOperationError(null);
+        if (remoteClient.getSnapshot().connection === "connected") setLoading(true);
+        setSelection(nextSelection);
+      }
+      saveSelection("fintwind-page", nextSelection.page);
     };
     const onHide = () => remoteClient.stop();
     const onShow = () => remoteClient.start();
@@ -265,7 +270,9 @@ export function useRemote() {
   ]);
 
   const selectWorkspace = useCallback((projectId: string) => {
+    if (currentSelection.current.projectId === projectId && currentSelection.current.page === "sessions") return;
     generation.current++;
+    setLoading(remoteClient.getSnapshot().connection === "connected");
     setError(null);
     setOperationError(null);
     setData((value) => ({ ...value, sessions: [], detail: null, projectId }));
@@ -284,6 +291,7 @@ export function useRemote() {
     if (currentSelection.current.page === "conversation" &&
       currentSelection.current.sessionId === sessionId && currentSelection.current.projectId === projectId) return;
     generation.current++;
+    setLoading(remoteClient.getSnapshot().connection === "connected");
     if (currentSelection.current.page !== "conversation")
       history.pushState(
         {
@@ -301,6 +309,7 @@ export function useRemote() {
   }, []);
 
   const back = useCallback(() => {
+    if (currentSelection.current.page === "sessions") return;
     generation.current++;
     if (history.state?.fintwindPage === "conversation") history.back();
     else setSelection((value) => ({ ...value, page: "sessions" }));
@@ -351,6 +360,7 @@ export function useRemote() {
     sessions: data.projectId === selection.projectId ? data.sessions : [],
     loading,
     error: operationError || error || client.error,
+    readError: !operationError && Boolean(error),
     busy,
     stopping,
     selectWorkspace,

@@ -5,6 +5,7 @@ import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { useDelayedLoading } from "@/hooks/use-delayed-loading";
 import { Textarea } from "@/components/ui/textarea";
 import { textBytes } from "@/lib/remote-validation";
 import { errorMessage } from "@/lib/error-message";
@@ -72,6 +73,12 @@ export function PermissionCard({
   onPermission: (optionId: string) => void;
 }) {
   const locked = disabled || busy;
+  const [chosen, setChosen] = React.useState<string | null>(null);
+  const showBusy = useDelayedLoading(busy && chosen !== null);
+
+  React.useEffect(() => {
+    if (!busy && !showBusy) setChosen(null);
+  }, [busy, showBusy]);
 
   if (permission.options.length === 0) {
     return (
@@ -101,9 +108,9 @@ export function PermissionCard({
             type="button"
             variant={option.allow ? "default" : "outline"}
             disabled={locked}
-            onClick={() => onPermission(option.id)}
+            onClick={() => { setChosen(option.id); onPermission(option.id); }}
           >
-            {busy && option.allow ? (
+            {showBusy && chosen === option.id ? (
               <Spinner data-icon="inline-start" />
             ) : null}
             {option.label || option.id}
@@ -169,6 +176,7 @@ function QuestionForm({
   const submitting = React.useRef(false);
   const [submitted, setSubmitted] = React.useState(false);
   const [sending, setSending] = React.useState(false);
+  const showSubmissionLoading = useDelayedLoading(sending);
   const [submissionError, setSubmissionError] = React.useState<string | null>(null);
   const review = React.useRef<HTMLDivElement>(null);
   React.useEffect(() => { if (reviewing) review.current?.focus(); }, [reviewing]);
@@ -575,7 +583,7 @@ function QuestionForm({
           </div>
           {reviewing ? (
             <ApprovalAction key="submit" type="button" disabled={locked} onClick={() => void submit()}>
-              {busy || sending ? <Spinner data-icon="inline-start" /> : null}
+              {showSubmissionLoading ? <Spinner data-icon="inline-start" /> : null}
               {submitted ? "已提交" : "提交"}
             </ApprovalAction>
           ) : (

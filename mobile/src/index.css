@@ -321,9 +321,10 @@
 }
 .session-skeleton {
   display: flex;
-  gap: 1rem;
+  gap: 8px;
   align-items: center;
-  padding: 1rem;
+  min-height: 56px;
+  padding: 6px;
 }
 .list-footer {
   display: flex;
@@ -570,6 +571,7 @@
   padding-bottom: 0.5rem;
 }
 .attachment-chip {
+  position: relative;
   display: flex;
   flex: none;
   max-width: 16rem;
@@ -578,6 +580,14 @@
   padding: 0.3rem 0.4rem;
   border: 1px solid var(--border);
   border-radius: 0.625rem;
+}
+.attachment-upload-progress {
+  position: absolute;
+  inset-inline: 4px;
+  bottom: 0;
+  width: calc(100% - 8px);
+  height: 3px;
+  accent-color: var(--primary);
 }
 .attachment-chip img {
   width: 2.5rem;

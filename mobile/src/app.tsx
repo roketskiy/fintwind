@@ -12,7 +12,7 @@ import {
   SearchIcon,
   CloseIcon,
 } from "@/components/icons";
-import { GlideMenu, PixelLoader } from "@/components/beautiful/primitives";
+import { GlideMenu } from "@/components/beautiful/primitives";
 import { GoalCard } from "@/components/goal-card";
 import { PhoneSettings } from "@/components/phone-settings";
 import { usePhoneTheme } from "@/lib/theme";
@@ -44,6 +44,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { useRemote } from "@/hooks/use-remote";
+import { useDelayedLoading } from "@/hooks/use-delayed-loading";
 import type {
   ClientSnapshot,
   SessionStatus,
@@ -193,17 +194,16 @@ function sessionTime(updatedAt: number) {
 function LoadingList() {
   return (
     <div
-      className="flex flex-col gap-3"
+      className="flex flex-col"
       role="status"
       aria-label="正在加载会话"
     >
-      <PixelLoader label="正在加载会话" />
       {[0, 1, 2, 3].map((id) => (
         <div className="session-skeleton" key={id}>
-          <Skeleton className="size-11 rounded-2xl" />
-          <div className="flex flex-1 flex-col gap-3">
-            <Skeleton className="h-4 w-3/5" />
-            <Skeleton className="h-3 w-2/5" />
+          <Skeleton className="size-[30px] rounded-lg" />
+          <div className="flex flex-1 flex-col gap-1">
+            <Skeleton className="h-3 w-3/5 rounded-md" />
+            <Skeleton className="h-3 w-2/5 rounded-md" />
           </div>
         </div>
       ))}
@@ -272,6 +272,10 @@ export function RemoteView({ app, previewOptions }: { app: ReturnType<typeof use
   const projectPending = app.pendingScopes.includes(`project:${app.projectId}`);
   const disabled = !connected || app.busy || sessionPending;
   const currentSummary = app.sessions.find((item) => item.id === app.sessionId);
+  const waitingForSessions = app.page === "sessions" && app.loading && !app.sessions.length;
+  const waitingForConversation = app.page === "conversation" && app.loading && !detail;
+  const showSessionSkeleton = useDelayedLoading(waitingForSessions, app.projectId);
+  const showConversationSkeleton = useDelayedLoading(waitingForConversation, `${app.projectId}:${app.sessionId}`);
   const visibleSessions = app.sessions.filter((session) =>
     (session.title || "未命名会话")
       .toLocaleLowerCase()
@@ -359,6 +363,7 @@ export function RemoteView({ app, previewOptions }: { app: ReturnType<typeof use
             <Alert variant="destructive" className="mb-4">
               <AlertTitle>无法完成操作</AlertTitle>
               <AlertDescription>{errorMessage(app.error)}</AlertDescription>
+              {connected && app.readError && <Button variant="outline" size="sm" onClick={app.refresh}>重试</Button>}
             </Alert>
           )}
           {projectPending && (
@@ -374,8 +379,8 @@ export function RemoteView({ app, previewOptions }: { app: ReturnType<typeof use
               connection={app.connection}
               onReconnect={app.reconnect}
             />
-          ) : app.loading && !app.sessions.length ? (
-            <LoadingList />
+          ) : waitingForSessions || showSessionSkeleton ? (
+            showSessionSkeleton ? <LoadingList /> : null
           ) : !app.workspaces.length ? (
             <Empty>
               <EmptyHeader>
@@ -501,11 +506,12 @@ export function RemoteView({ app, previewOptions }: { app: ReturnType<typeof use
           <Alert variant="destructive" className="screen-alert">
             <AlertTitle>无法完成操作</AlertTitle>
             <AlertDescription>{errorMessage(app.error)}</AlertDescription>
+            {connected && app.readError && !detail && <Button variant="outline" size="sm" onClick={app.refresh}>重试</Button>}
           </Alert>
         )}
         {detail?.goal && <GoalCard goal={detail.goal} disabled={disabled || !detail.canSend || detail.desktopRequired} onControl={(action) => { void app.mutate("sendPrompt", { sessionId: detail.id, text: `/goal ${action}` }); }} />}
         {detail?.failureReason && <Alert variant="destructive" className="screen-alert"><AlertTitle>任务失败</AlertTitle><AlertDescription className="error-reason">{errorMessage(detail.failureReason)}</AlertDescription></Alert>}
-        {detail ? (
+        {detail && !showConversationSkeleton ? (
           <Suspense
             fallback={
               <>
@@ -564,13 +570,13 @@ export function RemoteView({ app, previewOptions }: { app: ReturnType<typeof use
               mutate={app.mutate}
             />
           </Suspense>
-        ) : app.loading ? (
-          <div className="chat-loading" role="status" aria-label="正在加载对话">
+        ) : waitingForConversation || showConversationSkeleton ? (
+          showConversationSkeleton ? <div className="chat-loading" role="status" aria-label="正在加载对话">
             <Skeleton className="ml-auto h-16 w-2/3 rounded-3xl" />
             <Skeleton className="h-5 w-3/4" />
             <Skeleton className="h-5 w-full" />
             <Skeleton className="h-5 w-5/6" />
-          </div>
+          </div> : <div className="chat-loading" aria-busy="true" />
         ) : (
           <Empty className="flex-1">
             <EmptyHeader>

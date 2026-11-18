@@ -6,7 +6,7 @@ import {
   TerminalIcon,
   SparkleIcon,
 } from "@/components/icons";
-import { GlideMenu, PixelLoader } from "@/components/beautiful/primitives";
+import { GlideMenu } from "@/components/beautiful/primitives";
 import { Popover, PopoverContent, PopoverTitle } from "@/components/ui/popover";
 import { PromptBar } from "@/components/beautiful/prompt-bar";
 import { composerCommands, slashQuery, type ComposerCommand } from "@/lib/composer-commands";
@@ -15,6 +15,8 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { ModelPicker } from "@/components/model-picker";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useDelayedLoading } from "@/hooks/use-delayed-loading";
 import "./beautiful/segmented-control.css";
 import { remoteClient } from "@/lib/remote-client";
 import { errorMessage } from "@/lib/error-message";
@@ -41,6 +43,7 @@ interface Props {
   previewOptions?: ComposerOptions;
 }
 type PickedFile = { id: string; file: File; preview?: string };
+type UploadProgress = { id: string; name: string; sent: number; total: number };
 
 function base64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -69,7 +72,8 @@ export function Composer({
   const [optionsLoading, setOptionsLoading] = useState(false);
   const [files, setFiles] = useState<PickedFile[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [progress, setProgress] = useState("");
+  const [progress, setProgress] = useState<UploadProgress | null>(null);
+  const lastProgress = useRef<UploadProgress | null>(null);
   const [deliveryError, setDeliveryError] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
@@ -127,7 +131,10 @@ export function Composer({
   }, []);
 
   useEffect(() => {
-    if ((!panel && query === null) || !configurable || disabled || previewOptions) return;
+    if ((!panel && query === null) || !configurable || disabled || previewOptions) {
+      setOptionsLoading(false);
+      return;
+    }
     let current = true;
     setOptionsLoading(true);
     void remoteClient
@@ -209,11 +216,9 @@ export function Composer({
       for (const entry of files) {
         const encoded = await base64(entry.file);
         const uploadId = crypto.randomUUID();
+        setProgress({ id: entry.id, name: entry.file.name, sent: 0, total: encoded.length });
         for (let offset = 0; offset < encoded.length; offset += 65536) {
           if (!active.current) return;
-          setProgress(
-            `${entry.file.name} · ${Math.round((offset / encoded.length) * 100)}%`,
-          );
           const part = encoded.slice(offset, offset + 65536);
           await remoteClient.command("uploadChunk", {
             sessionId: session.id,
@@ -223,11 +228,12 @@ export function Composer({
             dataBase64: part,
             complete: offset + part.length === encoded.length,
           });
+          if (active.current) setProgress({ id: entry.id, name: entry.file.name, sent: offset + part.length, total: encoded.length });
         }
         attachmentIds.push(uploadId);
       }
       if (!active.current) return;
-      setProgress(steering ? "正在提交引导…" : "");
+      setProgress(null);
       const result = await mutate(steering ? "steerPrompt" : "sendPrompt", {
         sessionId: session.id,
         text,
@@ -247,7 +253,7 @@ export function Composer({
       sending.current = false;
       if (active.current) {
         setUploading(false);
-        setProgress("");
+        setProgress(null);
       }
     }
   }
@@ -263,6 +269,12 @@ export function Composer({
   }
 
   const catalog = previewOptions ?? options;
+  const showOptionsSkeleton = useDelayedLoading(optionsLoading && !catalog && panel !== null);
+  const showUploadProgress = useDelayedLoading(progress !== null);
+  const showSendSpinner = useDelayedLoading((uploading || busy) && progress === null);
+  if (progress) lastProgress.current = progress;
+  const visibleProgress = showUploadProgress && files.some((entry) => entry.id === lastProgress.current?.id)
+    ? lastProgress.current : null;
   const model = catalog?.models.find(
     (candidate) => candidate.id === session.model,
   );
@@ -282,7 +294,7 @@ export function Composer({
                 <span className="command-copy"><strong>/{command.name}</strong><small>{command.description}</small></span>
                 <span aria-hidden="true">↵</span>
               </Button>)}
-              {!matches.length && <p className="palette-empty">{optionsLoading ? "正在加载命令…" : "没有匹配的命令"}</p>}
+              {!matches.length && !optionsLoading && <p className="palette-empty">没有匹配的命令</p>}
             </div>
           </GlideMenu>
         </div>
@@ -303,7 +315,7 @@ export function Composer({
         draft={draft} placeholder={running ? "引导当前回复…" : "发送消息…"}
         inputDisabled={uploading || busy} locked={locked}
         canSend={!locked && session.canSend && (!running || canSteer) && !session.desktopRequired && (!!draft.trim() || !!files.length)}
-        sending={uploading || busy} running={running} stopDisabled={stopDisabled ?? locked} attachmentsSupported={attachmentsSupported}
+        sending={showSendSpinner && !visibleProgress} running={running} stopDisabled={stopDisabled ?? locked} attachmentsSupported={attachmentsSupported}
         configurable={configurable} modelName={session.modelName}
         mode={session.interactionMode === "plan" ? "Plan" : "Build"} effort={session.reasoningEffort || "默认思考"}
         commandsOpen={commandOpen}
@@ -323,8 +335,13 @@ export function Composer({
               )}
               <span>
                 <strong>{entry.file.name}</strong>
-                <small>{(entry.file.size / 1024).toFixed(0)} KiB</small>
+                <small>{visibleProgress?.id === entry.id
+                  ? `${Math.round(visibleProgress.sent / visibleProgress.total * 100)}%`
+                  : `${(entry.file.size / 1024).toFixed(0)} KiB`}</small>
               </span>
+              {visibleProgress?.id === entry.id && (
+                <progress className="attachment-upload-progress" aria-label={`上传 ${visibleProgress.name}`} value={visibleProgress.sent} max={visibleProgress.total} />
+              )}
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -343,11 +360,6 @@ export function Composer({
           ))}
         </div>
       )} />
-      {progress && (
-        <p className="composer-notice" role="status">
-          {progress}
-        </p>
-      )}
       {deliveryError && <Alert variant="destructive"><AlertDescription className="error-reason">{errorMessage(deliveryError)}</AlertDescription></Alert>}
       {!configurable && (
         <p className="composer-notice">更新桌面端后可使用模型选项和附件。</p>
@@ -355,8 +367,12 @@ export function Composer({
       <PopoverContent side="top" align="start" sideOffset={8} className={panel === "model" ? "composer-popover model-picker-popup" : "composer-popover"}>
         <PopoverTitle className={panel === "model" ? "sr-only" : undefined}>{panel === "model" ? "选择模型" : "会话选项"}</PopoverTitle>
         <div className="composer-panel">
-            {optionsLoading && !catalog ? (
-              <PixelLoader label="正在加载选项" />
+            {(optionsLoading && !catalog) || showOptionsSkeleton ? (
+              <div className="flex min-h-24 flex-col gap-3 p-3" role="status" aria-label="正在加载选项">
+                {showOptionsSkeleton && [0, 1, 2].map((index) => (
+                  <Skeleton key={index} className="h-4 w-3/4 rounded-md" />
+                ))}
+              </div>
             ) : !catalog ? (
               <p>无法加载选项，请关闭后重试。</p>
             ) : (

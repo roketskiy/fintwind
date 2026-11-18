@@ -550,7 +550,7 @@ export function Conversation({
                   messageId="system:working"
                 >
                   <Marker>
-                    <MarkerContent><PixelLoader label="正在处理" /></MarkerContent>
+                    <MarkerContent><PixelLoader compact label="正在处理" /></MarkerContent>
                   </Marker>
                 </MessageScrollerItem>
               ) : null}

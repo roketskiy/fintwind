@@ -11,7 +11,7 @@ function Spinner({
       role="status"
       aria-hidden={false}
       aria-label="正在加载"
-      className={cn("animate-spin", className)}
+      className={cn("motion-safe:animate-spin", className)}
       {...props}
     />
   );

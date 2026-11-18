@@ -268,11 +268,26 @@ impl Fintwind {
     }
 
     pub(super) fn close_add_project_dialog(&mut self, cx: &mut Context<Self>) {
+        if self
+            .add_project_dialog
+            .as_ref()
+            .is_some_and(|d| d.pending && d.method != ProjectMethod::Existing)
+        {
+            return;
+        }
         self.add_project_dialog = None;
         cx.notify();
     }
 
     fn pick_add_project_folder(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self
+            .add_project_dialog
+            .as_ref()
+            .filter(|dialog| !dialog.pending)
+            .map(|dialog| dialog.id)
+        else {
+            return;
+        };
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -284,7 +299,11 @@ impl Fintwind {
                 && let Some(path) = paths.into_iter().next()
             {
                 let _ = this.update(cx, |this, cx| {
-                    let Some(dialog) = this.add_project_dialog.as_mut() else {
+                    let Some(dialog) = this
+                        .add_project_dialog
+                        .as_mut()
+                        .filter(|d| d.id == id && d.server.is_none() && !d.pending)
+                    else {
                         return;
                     };
                     let previous_default = dialog
@@ -307,6 +326,7 @@ impl Fintwind {
                             .update(cx, |input, cx| input.set_content(next_default, cx));
                     }
                     dialog.folder = Some(path);
+                    dialog.error = None;
                     cx.notify();
                 });
             }
@@ -651,6 +671,56 @@ impl Fintwind {
                 .text_color(theme.text_secondary)
                 .child(text)
         };
+        let methods = {
+            let mut row = div()
+                .flex()
+                .gap(px(4.0))
+                .p(px(4.0))
+                .rounded(px(8.0))
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.overlay);
+            for (kind, id, title) in [
+                (
+                    ProjectMethod::Existing,
+                    "project-existing",
+                    tr!("project.method_existing"),
+                ),
+                (
+                    ProjectMethod::Clone,
+                    "project-clone",
+                    tr!("project.method_clone"),
+                ),
+                (
+                    ProjectMethod::Empty,
+                    "project-empty",
+                    tr!("project.method_empty"),
+                ),
+            ] {
+                row = row.child(
+                    div().flex_1().min_w_0().flex().justify_center().child(
+                        Button::new(id, title)
+                            .size(ControlSize::Sm)
+                            .variant(if kind == method {
+                                ButtonVariant::Secondary
+                            } else {
+                                ButtonVariant::Ghost
+                            })
+                            .disabled(pending || (!can_create && kind != ProjectMethod::Existing))
+                            .on_click(cx.listener(move |app, _, _, cx| {
+                                if let Some(dialog) =
+                                    app.add_project_dialog.as_mut().filter(|d| !d.pending)
+                                {
+                                    dialog.method = kind;
+                                    dialog.error = None;
+                                    cx.notify();
+                                }
+                            })),
+                    ),
+                );
+            }
+            row
+        };
 
         let pick_weak = weak.clone();
         let key_weak = weak.clone();
@@ -662,12 +732,18 @@ impl Fintwind {
             .id("add-project-folder")
             .track_focus(&folder_focus)
             .tab_index(0)
-            .relative()
-            .h(px(120.0))
+            .h(px(32.0))
             .w_full()
-            .rounded(px(10.0))
-            .cursor_default()
-            .focus_visible(|style| style.border_1().border_color(theme.accent))
+            .px(px(9.0))
+            .rounded(px(7.0))
+            .border_1()
+            .border_color(theme.border_strong)
+            .bg(theme.composer)
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .cursor_pointer()
+            .focus_visible(|style| style.border_color(theme.accent))
             .hover(|style| style.bg(theme.overlay))
             .on_click(move |_, _, cx| {
                 let _ = pick_weak.update(cx, |this, cx| this.pick_add_project_folder(cx));
@@ -681,79 +757,29 @@ impl Fintwind {
                 }
             })
             .child(
-                canvas(
-                    |_, _, _| {},
-                    move |bounds, _, window, _| {
-                        let x = bounds.origin.x + px(0.5);
-                        let y = bounds.origin.y + px(0.5);
-                        let w = bounds.size.width - px(1.0);
-                        let h = bounds.size.height - px(1.0);
-                        let r = px(10.0);
-                        let mut builder =
-                            PathBuilder::stroke(px(1.0)).dash_array(&[px(4.0), px(4.0)]);
-                        builder.move_to(point(x + r, y));
-                        builder.line_to(point(x + w - r, y));
-                        builder.arc_to(point(r, r), px(0.0), false, true, point(x + w, y + r));
-                        builder.line_to(point(x + w, y + h - r));
-                        builder.arc_to(
-                            point(r, r),
-                            px(0.0),
-                            false,
-                            true,
-                            point(x + w - r, y + h),
-                        );
-                        builder.line_to(point(x + r, y + h));
-                        builder.arc_to(point(r, r), px(0.0), false, true, point(x, y + h - r));
-                        builder.line_to(point(x, y + r));
-                        builder.arc_to(point(r, r), px(0.0), false, true, point(x + r, y));
-                        builder.close();
-                        if let Ok(border) = builder.build() {
-                            window.paint_path(border, theme.border_strong);
-                        }
-                    },
-                )
-                .absolute()
-                .inset_0(),
-            )
-            .child(
                 div()
-                    .absolute()
-                    .inset_0()
-                    .px(px(16.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .gap(px(8.0))
-                    .child(icon(
-                        if folder.is_some() {
-                            "icons/folder.svg"
-                        } else {
-                            "icons/folder-new.svg"
-                        },
-                        16.0,
-                        theme.text_tertiary,
-                    ))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(ui_px(12.5))
-                            .text_color(if folder.is_some() {
-                                theme.text
-                            } else {
-                                theme.text_secondary
-                            })
-                            .child(folder_label),
-                    ),
-            );
+                    .min_w_0()
+                    .flex_1()
+                    .truncate()
+                    .text_size(ui_px(12.5))
+                    .text_color(if folder.is_some() {
+                        theme.text
+                    } else {
+                        theme.text_secondary
+                    })
+                    .child(folder_label),
+            )
+            .child(icon("icons/folder.svg", 15.0, theme.text_tertiary));
 
         let close_weak = weak.clone();
         let cancel_weak = weak.clone();
-        let confirm_weak = weak;
+        let confirm_focus = self.transcript_control_focus("add-project-confirm", cx);
         let card = div()
             .id("add-project-dialog-card")
             .w_full()
-            .max_w(px(520.0))
+            .max_w(px(560.0))
+            .h(px(460.0))
+            .max_h_full()
             .rounded(px(12.0))
             .border_1()
             .border_color(theme.border)
@@ -794,63 +820,121 @@ impl Fintwind {
             )
             .child(
                 div()
+                    .id("add-project-fields")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
                     .px(px(20.0))
                     .pb(px(8.0))
                     .flex()
                     .flex_col()
                     .gap(px(14.0))
+                    .child(methods)
                     .child(
                         div()
                             .flex()
-                            .flex_col()
-                            .gap(px(6.0))
+                            .when(method == ProjectMethod::Existing, |element| {
+                                element.flex_col().items_start()
+                            })
+                            .when(method != ProjectMethod::Existing, |element| {
+                                element.items_center()
+                            })
+                            .gap(px(8.0))
                             .child(label(tr!("project.location_label")))
-                            .child(
-                                div()
-                                    .h(px(36.0))
-                                    .px(px(10.0))
-                                    .rounded(px(8.0))
-                                    .border_1()
-                                    .border_color(theme.border_strong)
-                                    .bg(theme.composer)
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(8.0))
-                                    .child(icon("icons/laptop.svg", 14.0, theme.text_tertiary))
-                                    .child(
-                                        div()
-                                            .text_size(ui_px(12.5))
-                                            .text_color(theme.text)
-                                            .child(tr!("project.location_local")),
-                                    ),
-                            ),
+                            .child(location),
                     )
+                    .when(method == ProjectMethod::Clone, |el| {
+                        el.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(6.0))
+                                .child(label(tr!("project.repository")))
+                                .child(
+                                    TextField::new("add-project-repository", repository).w_full(),
+                                ),
+                        )
+                    })
                     .child(
                         div()
                             .flex()
                             .flex_col()
                             .gap(px(6.0))
-                            .child(label(tr!("project.folder_label")))
-                            .child(folder_area),
+                            .child(label(if method == ProjectMethod::Existing {
+                                tr!("project.folder_label")
+                            } else if method == ProjectMethod::Clone {
+                                tr!("project.clone_parent_directory")
+                            } else {
+                                tr!("project.parent_directory")
+                            }))
+                            .child(if remote {
+                                TextField::new("add-project-remote-path", remote_path)
+                                    .w_full()
+                                    .into_any_element()
+                            } else {
+                                folder_area.into_any_element()
+                            }),
                     )
-                    .child(
+                    .when(method != ProjectMethod::Existing, |el| {
+                        el.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(6.0))
+                                .child(label(if method == ProjectMethod::Empty {
+                                    tr!("project.new_folder_name")
+                                } else {
+                                    tr!("project.target_folder")
+                                }))
+                                .child(
+                                    TextField::new("add-project-directory-name", directory_name)
+                                        .w_full(),
+                                ),
+                        )
+                    })
+                    .when(method == ProjectMethod::Existing, |element| {
+                        element.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(6.0))
+                                .child(label(tr!("project.name_label")))
+                                .child(TextField::new("add-project-name", name).w_full()),
+                        )
+                    })
+                    .when_some(target_preview, |element, path| {
+                        element.child(
+                            div()
+                                .text_size(ui_px(12.0))
+                                .text_color(theme.text_secondary)
+                                .child(if method == ProjectMethod::Clone {
+                                    tr!("project.clone_destination", path = path)
+                                } else {
+                                    tr!("project.create_destination", path = path)
+                                }),
+                        )
+                    })
+                    .children(error.map(|error| {
                         div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(6.0))
-                            .child(label(tr!("project.name_label")))
-                            .child(TextField::new("add-project-name", name).w_full()),
-                    ),
+                            .text_size(ui_px(12.0))
+                            .text_color(theme.warning_text)
+                            .child(error)
+                    })),
             )
             .child(
                 div()
-                    .px(px(16.0))
+                    .flex_none()
+                    .mx(px(20.0))
+                    .mt(px(8.0))
+                    .border_t_1()
+                    .border_color(theme.border)
                     .py(px(12.0))
                     .flex()
                     .justify_end()
                     .gap(px(8.0))
                     .child(
                         Button::new("add-project-cancel", tr!("common.cancel"))
+                            .disabled(pending && method != ProjectMethod::Existing)
                             .variant(ButtonVariant::Ghost)
                             .size(ControlSize::Sm)
                             .on_click(move |_, _, cx| {
@@ -859,13 +943,44 @@ impl Fintwind {
                             }),
                     )
                     .child(
-                        Button::new("add-project-confirm", tr!("project.add_confirm"))
-                            .variant(ButtonVariant::Primary)
-                            .size(ControlSize::Sm)
-                            .disabled(!can_confirm)
-                            .on_click(move |_, _, cx| {
-                                let _ = confirm_weak
-                                    .update(cx, |this, cx| this.confirm_add_project(cx));
+                        div()
+                            .id("add-project-confirm")
+                            .role(gpui::Role::Button)
+                            .aria_label(confirm_label.clone())
+                            .track_focus(&confirm_focus)
+                            .when(can_confirm || pending || showing, |button| button.tab_index(0))
+                            .h(px(24.0))
+                            .px(px(8.0))
+                            .rounded(px(6.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .bg(theme.accent_fill)
+                            .text_color(theme.on_accent)
+                            .text_size(ui_px(12.0))
+                            .font_weight(FontWeight::MEDIUM)
+                            .when(!can_confirm && !pending && !showing, |button| button.opacity(0.45))
+                            .when(can_confirm, |button| {
+                                button.hover(|style| style.opacity(0.9))
+                            })
+                            .focus_visible(|style| {
+                                style.border_1().border_color(theme.accent_focus)
+                            })
+                            .child(div().size(px(12.0)).flex_none().when(
+                                loading_phase == LoadingPhase::Visible,
+                                |slot| {
+                                    slot.child(motion::spin(icon(
+                                        "icons/loader-circle.svg",
+                                        12.0,
+                                        theme.on_accent,
+                                    )))
+                                },
+                            ))
+                            .child(confirm_label)
+                            .when(can_confirm, |button| {
+                                button.on_activation(cx, |this, _, cx| {
+                                    this.confirm_add_project(cx);
+                                })
                             }),
                     ),
             );

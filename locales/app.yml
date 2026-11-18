@@ -2104,9 +2104,9 @@ project.folder_label:
 project.folder_pick:
   en: Click to choose a folder
 project.name_label:
-  en: Project name
+  en: Name (optional)
 project.name_placeholder:
-  en: Enter a name…
+  en: Uses the folder name by default
 project.add_confirm:
   en: Add
 providers.reasoning_efforts_label:

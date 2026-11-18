@@ -9,6 +9,7 @@ use gpui::{
 };
 use gpui_kit::component::{Disableable, switch::Switch};
 
+pub mod loading;
 pub mod menu;
 pub mod motion;
 pub mod scrollbar;
@@ -607,6 +608,7 @@ pub struct MenuChip {
     outlined: bool,
     selected: bool,
     disabled: bool,
+    loading: bool,
     height: Option<Pixels>,
     background: Option<Hsla>,
     icon_only: bool,
@@ -629,6 +631,7 @@ impl MenuChip {
             outlined: false,
             selected: false,
             disabled: false,
+            loading: false,
             height: None,
             background: None,
             icon_only: false,
@@ -681,6 +684,11 @@ impl MenuChip {
 
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    pub fn loading(mut self, loading: bool) -> Self {
+        self.loading = loading;
         self
     }
 
@@ -777,13 +785,23 @@ impl RenderOnce for MenuChip {
                     .hover(|element| element.bg(theme.overlay))
                     .active(|element| element.bg(theme.overlay_strong))
             })
-            .when(self.disabled, |element| element.opacity(0.7))
+            .when(self.disabled && !self.loading, |element| {
+                element.opacity(0.7)
+            })
             .when_some(self.icon, |element, chip_icon| {
-                element.child(match chip_icon {
-                    ChipIcon::Tinted(path, color) => {
-                        icon(path, CHIP_ICON, color).into_any_element()
+                element.child(if self.loading {
+                    motion::spin_slow(icon(
+                        "icons/loader-circle.svg",
+                        CHIP_ICON,
+                        theme.text_tertiary,
+                    ))
+                } else {
+                    match chip_icon {
+                        ChipIcon::Tinted(path, color) => {
+                            icon(path, CHIP_ICON, color).into_any_element()
+                        }
+                        ChipIcon::Mark(mark, tint) => model_mark_element(mark, CHIP_ICON, tint),
                     }
-                    ChipIcon::Mark(mark, tint) => model_mark_element(mark, CHIP_ICON, tint),
                 })
             })
             .when(!self.icon_only, |element| {

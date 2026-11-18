@@ -257,6 +257,11 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
     picker_cx.simulate_click(dismiss.center(), gpui::Modifiers::none());
     picker_cx.run_until_parked();
     assert!(picker_cx.read_entity(&picker, |app, _| app.toast.is_none() && app.add_project_dialog.is_some()));
+    picker_cx.update(|_, cx| {
+        assert_eq!(repository.read(cx).content(), "https://github.com/octocat/Hello-World");
+        assert_eq!(input.read(cx).content(), fixture.workspace);
+        assert_eq!(folder.read(cx).content(), ".git");
+    });
     let empty = picker_cx.debug_bounds("segment empty").unwrap();
     picker_cx.simulate_click(empty.center(), gpui::Modifiers::none());
     picker_cx.run_until_parked();

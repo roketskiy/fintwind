@@ -313,7 +313,29 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
             assert_eq!(folder.read(cx).content(), "new-remote-project");
         });
     }
-    let empty = picker_cx.debug_bounds("segment empty").unwrap();
+    let registration_retry = std::env::var_os("FINTWIND_SSH_E2E_REGISTRATION_RETRY").is_some();
+    if registration_retry {
+        picker_cx.update(|_, cx| {
+            repository.update(cx, |input, cx| input.set_content("https://github.com/octocat/Hello-World", cx));
+            folder.update(cx, |input, cx| input.set_content("new-remote-project", cx));
+        });
+        picker_cx.simulate_click(submit.center(), gpui::Modifiers::none());
+        let deadline = Instant::now() + Duration::from_secs(135);
+        loop {
+            picker_cx.run_until_parked();
+            if picker_cx.read_entity(&picker, |app, _| app.toast.as_ref().is_some_and(|toast| {
+                toast.tone == ToastTone::Alert && toast.message.contains(&tr!("ssh.offline"))
+            })) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "successful clone did not report the injected registration failure");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let dismiss = picker_cx.debug_bounds("dismiss-notification-toast").unwrap();
+        picker_cx.simulate_click(dismiss.center(), gpui::Modifiers::none());
+        picker_cx.run_until_parked();
+    }
+    let empty = picker_cx.debug_bounds(if registration_retry { "segment clone" } else { "segment empty" }).unwrap();
     picker_cx.simulate_click(empty.center(), gpui::Modifiers::none());
     picker_cx.run_until_parked();
     picker_cx.update(|window, cx| {
@@ -710,6 +732,7 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
                 "selectedHost": chosen_id, "observedLive": observed_live, "settledText": "Hello from the SSH stream fixture.",
                 "cloneProgressToast": true, "cloneErrorToastDismissibleOverDialog": true,
                 "sshAuthenticationErrorToastAndRetry": true,
+                "reusedCloneAfterRegistrationFailure": registration_retry,
                 "openedLocalSidebarSession": switched_during_stream,
                 "switchedBetweenRemoteDaemons": peer_verified
             })).unwrap()).unwrap();

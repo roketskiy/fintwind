@@ -46,7 +46,6 @@ struct Draft {
 }
 
 enum Probe {
-    Fingerprint(String),
     Snapshot(Vec<String>, Option<Deployment>),
     BackendUnavailable(Vec<String>, String, Option<Deployment>),
     Ready(Vec<String>, tunnel::Connection),
@@ -54,7 +53,7 @@ enum Probe {
 
 #[derive(Clone, Copy)]
 enum Deployment {
-    Upload(deploy::LinuxTarget),
+    Upload,
     Start,
 }
 
@@ -83,7 +82,6 @@ pub(super) struct SshPage {
     profiles: Vec<Profile>,
     selected: Option<Uuid>,
     draft: Option<Draft>,
-    challenge: Option<(Uuid, String)>,
     last_read: HashMap<Uuid, Vec<String>>,
     search: Option<Entity<ComposerInput>>,
     row_focus: HashMap<Uuid, FocusHandle>,
@@ -181,13 +179,16 @@ impl client::Handler for HostKey {
 
     async fn check_server_key(&mut self, key: &PublicKeyOrCertificate) -> Result<bool> {
         let fingerprint = key.public_key().fingerprint(HashAlg::Sha256).to_string();
-        let matches = self.expected.as_ref() == Some(&fingerprint);
+        let matches = self
+            .expected
+            .as_ref()
+            .is_none_or(|expected| expected == &fingerprint);
         *self.observed.lock().expect("SSH host key mutex") = Some(fingerprint);
         Ok(matches)
     }
 }
 
-async fn authenticate(profile: &Profile) -> Result<Result<client::Handle<HostKey>, String>> {
+async fn authenticate(profile: &Profile) -> Result<(client::Handle<HostKey>, String)> {
     let observed = Arc::new(Mutex::new(None));
     let mut session = match client::connect(
         Arc::new(client::Config {
@@ -208,7 +209,6 @@ async fn authenticate(profile: &Profile) -> Result<Result<client::Handle<HostKey
             profile.fingerprint.as_ref(),
             observed.lock().expect("SSH host key mutex").take(),
         ) {
-            (None, Some(fingerprint)) => return Ok(Err(fingerprint)),
             (Some(expected), Some(current)) if expected != &current => {
                 anyhow::bail!("{}", tr!("ssh.key_changed"))
             }
@@ -228,14 +228,17 @@ async fn authenticate(profile: &Profile) -> Result<Result<client::Handle<HostKey
         "{}",
         tr!("ssh.auth_failed")
     );
-    Ok(Ok(session))
+    let fingerprint = observed
+        .lock()
+        .expect("SSH host key mutex")
+        .take()
+        .context("SSH host key was not recorded")?;
+    Ok((session, fingerprint))
 }
 
-async fn inspect(profile: Profile, provision: bool) -> Result<Probe> {
-    let session = match authenticate(&profile).await? {
-        Ok(session) => session,
-        Err(fingerprint) => return Ok(Probe::Fingerprint(fingerprint)),
-    };
+async fn inspect(profile: &mut Profile, provision: bool) -> Result<Probe> {
+    let (session, fingerprint) = authenticate(profile).await?;
+    profile.fingerprint = Some(fingerprint);
     let mut channel = session.channel_open_session().await?;
     channel.exec(true, "export LC_ALL=C; printf '%s\\n' \"$(opencode --version 2>/dev/null | head -n1)\" \"$(uname -sm)\" \"$(getconf _NPROCESSORS_ONLN)\" \"$(awk '/^MemTotal:/ {print $2 \" KiB\"}' /proc/meminfo)\" \"$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | paste -sd, -)\" \"$(df -hP . | awk 'NR==2 {print $4}')\"").await?;
     let mut bytes = Vec::new();
@@ -276,13 +279,13 @@ async fn inspect(profile: Profile, provision: bool) -> Result<Probe> {
                     return Ok(Probe::BackendUnavailable(
                         values,
                         error.to_string(),
-                        Some(Deployment::Upload(target)),
+                        Some(Deployment::Upload),
                     ));
                 }
             }
         } else {
             match deploy::detect(&session).await? {
-                deploy::Detection::Missing => deployment = Some(Deployment::Upload(target)),
+                deploy::Detection::Missing => deployment = Some(Deployment::Upload),
                 deploy::Detection::Stopped => deployment = Some(Deployment::Start),
                 deploy::Detection::Running { port, token_file } => {
                     endpoint = Some((port, token_file))
@@ -290,30 +293,15 @@ async fn inspect(profile: Profile, provision: bool) -> Result<Probe> {
             }
         }
     }
-    if provision && let Some(action) = deployment {
-        match deploy::deploy(&session, action).await {
-            Ok(address) => endpoint = Some(address),
-            Err(error) => {
-                return Ok(Probe::BackendUnavailable(
-                    values,
-                    error.to_string(),
-                    deployment,
-                ));
-            }
-        }
-    }
     if let Some((port, token_file)) = endpoint {
+        let profile = profile.clone();
         let connection = tunnel::Connection::open_with_reconnect(
             Arc::new(session),
             port,
             &token_file,
             Some(move || {
                 let profile = profile.clone();
-                async move {
-                    authenticate(&profile)
-                        .await?
-                        .map_err(|_| anyhow::anyhow!("SSH host fingerprint is not trusted"))
-                }
+                async move { authenticate(&profile).await.map(|(session, _)| session) }
             }),
         )
         .await;
@@ -417,18 +405,17 @@ pub(crate) fn project_launch() -> Result<Option<ProjectLaunch>> {
 }
 
 fn prepare_project_launch(
-    profile: Profile,
+    mut profile: Profile,
     path: String,
     name: String,
     state_dir: PathBuf,
 ) -> Result<ProjectLaunch> {
     let machine = profile.name.clone();
-    let connected_profile = profile.clone();
     let runtime = tunnel::RUNTIME
         .as_ref()
         .map_err(|error| anyhow::anyhow!("{error}"))?;
-    let probe = runtime.block_on(async move {
-        tokio::time::timeout(Duration::from_secs(30), inspect(profile, false)).await
+    let probe = runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(30), inspect(&mut profile, false)).await
     })??;
     let connection = match probe {
         Probe::Ready(_, connection) => connection,
@@ -466,7 +453,7 @@ fn prepare_project_launch(
         );
     }
     Ok(ProjectLaunch {
-        profile: connected_profile,
+        profile,
         machine,
         directory,
         name,
@@ -622,18 +609,19 @@ impl Fintwind {
         id: Uuid,
         path: PathBuf,
         name: String,
-    ) -> std::io::Result<()> {
+    ) -> std::io::Result<Option<smol::process::Child>> {
         #[cfg(test)]
         if let Some(launch) = &self.ssh.test_launch {
-            return launch.send((id, path, name)).map_err(std::io::Error::other);
+            return launch.send((id, path, name)).map(|()| None).map_err(std::io::Error::other);
         }
-        std::process::Command::new(std::env::current_exe()?)
+        smol::process::Command::new(std::env::current_exe()?)
             .arg("--ssh-project")
             .arg(id.to_string())
             .arg(path)
             .arg(name)
-            .spawn()?;
-        Ok(())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .map(Some)
     }
     pub(crate) fn open_ssh_project(&mut self, remote: ProjectLaunch, cx: &mut Context<Self>) {
         self.ssh.project_connection = Some(remote.connection);
@@ -649,23 +637,22 @@ impl Fintwind {
     pub(super) fn ssh_project_creator(
         &self,
         server: Option<Uuid>,
-    ) -> Option<impl FnOnce(String, String, Option<String>) -> Result<String> + use<>> {
+    ) -> Option<impl FnOnce(String, String, Option<String>, super::add_project_dialog::CloneProgress) -> Result<String> + use<>> {
         let profile = match server {
             Some(id) => self.ssh.profiles.iter().find(|p| p.id == id),
             None => self.ssh.project_profile.as_ref(),
         }?
         .clone();
         Some(
-            move |parent: String, name: String, repository: Option<String>| {
+            move |parent: String, name: String, repository: Option<String>, progress: super::add_project_dialog::CloneProgress| {
                 let runtime = tunnel::RUNTIME
                     .as_ref()
                     .map_err(|error| anyhow::anyhow!("{error}"))?;
                 let result = runtime.block_on(async {
-                    let session =
+                    let (session, _) =
                         tokio::time::timeout(Duration::from_secs(20), authenticate(&profile))
-                            .await??
-                            .map_err(|_| anyhow::anyhow!("SSH host fingerprint is not trusted"))?;
-                    tunnel::create_project(&session, &parent, &name, repository.as_deref()).await
+                            .await??;
+                    tunnel::create_project(&session, &parent, &name, repository.as_deref(), |update| progress.publish(update)).await
                 })?;
                 match result {
                     tunnel::ProjectCreation::Created(path) => Ok(path),
@@ -683,13 +670,46 @@ impl Fintwind {
         )
     }
 
-    pub(super) fn ready_ssh_hosts(&self) -> Vec<(Uuid, String)> {
+    pub(super) fn saved_ssh_hosts(&self) -> Vec<(Uuid, String)> {
         self.ssh
             .profiles
             .iter()
-            .filter(|p| self.ssh.ready.contains(&p.id))
             .map(|p| (p.id, p.name.clone()))
             .collect()
+    }
+
+    pub(super) fn project_host_connection(
+        &self,
+        host: Option<Uuid>,
+    ) -> (bool, bool, Option<String>) {
+        let Some(id) = host.filter(|id| self.ssh_client_for(*id).is_none()) else {
+            return (false, false, None);
+        };
+        let connecting = self.ssh.selected == Some(id) && self.ssh.connection_action.is_some();
+        let error = if connecting {
+            None
+        } else {
+            self.ssh
+                .connection_errors
+                .get(&id)
+                .or_else(|| self.ssh.backend_errors.get(&id))
+                .cloned()
+        };
+        (connecting, !self.ssh.busy, error)
+    }
+
+    pub(super) fn connect_project_host(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        if !self.ssh.busy
+            && let Some(profile) = self
+                .ssh
+                .profiles
+                .iter()
+                .find(|profile| profile.id == id)
+                .cloned()
+        {
+            self.ssh.selected = Some(id);
+            self.ssh_probe(profile, cx);
+        }
     }
 
     pub(super) fn ssh_client_for(&self, id: Uuid) -> Option<fintwind_client::DaemonClient> {
@@ -822,7 +842,6 @@ impl Fintwind {
                         }
                         this.ssh.selected = selected;
                         this.ssh.draft = None;
-                        this.ssh.challenge = None;
                         if connect
                             && let Some(profile) = this
                                 .ssh
@@ -886,7 +905,6 @@ impl Fintwind {
                 field
             })
         });
-        self.ssh.challenge = None;
         self.ssh.remove = None;
         self.ssh.error = None;
         self.ssh.draft = Some(Draft {
@@ -960,7 +978,7 @@ impl Fintwind {
 
     fn ssh_connect(
         &mut self,
-        profile: Profile,
+        mut profile: Profile,
         action: SshConnectionAction,
         cx: &mut Context<Self>,
     ) {
@@ -970,23 +988,42 @@ impl Fintwind {
         self.ssh.busy = true;
         self.ssh.error = None;
         self.ssh.remove = None;
-        self.ssh.challenge = None;
         let id = profile.id;
+        let mut profiles = profile
+            .fingerprint
+            .is_none()
+            .then(|| self.ssh.profiles.clone());
         *self.ssh.connection_loading.get_mut() = None;
         self.ssh.connection_action = Some(action);
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let result = cx
+            let (result, fingerprint) = cx
                 .background_executor()
                 .spawn(async move {
-                    let runtime = tunnel::RUNTIME
+                    let result = tunnel::RUNTIME
                         .as_ref()
-                        .map_err(|error| anyhow::anyhow!("{error}"))?;
-                    let mut result = runtime.block_on(async move {
-                        tokio::time::timeout(Duration::from_secs(210), inspect(profile, true))
-                            .await
-                            .context(tr!("ssh.timeout"))?
-                    })?;
+                        .map_err(|error| anyhow::anyhow!("{error}"))
+                        .and_then(|runtime| runtime.block_on(async {
+                            tokio::time::timeout(Duration::from_secs(210), inspect(&mut profile, true))
+                                .await
+                                .context(tr!("ssh.timeout"))?
+                        }));
+                    let fingerprint = if let Some(profiles) = profiles.as_mut()
+                        && let Some(fingerprint) = profile.fingerprint.as_ref()
+                        && let Some(saved) = profiles.iter_mut().find(|saved| saved.id == id)
+                    {
+                        saved.fingerprint = Some(fingerprint.clone());
+                        if let Err(error) = write_profiles(profiles) {
+                            return (Err(error), None);
+                        }
+                        Some(fingerprint.clone())
+                    } else {
+                        None
+                    };
+                    let mut result = match result {
+                        Ok(probe) => probe,
+                        Err(error) => return (Err(error), fingerprint),
+                    };
                     let opencode = match &mut result {
                         Probe::Ready(values, connection) => probe_opencode(&connection.client())
                             .map(|(installed, version)| {
@@ -998,16 +1035,18 @@ impl Fintwind {
                             }),
                         _ => None,
                     };
-                    Ok::<_, anyhow::Error>((result, opencode))
+                    (Ok((result, opencode)), fingerprint)
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.ssh.busy = false;
                 this.ssh.connection_action = None;
+                if let Some(fingerprint) = fingerprint
+                    && let Some(profile) = this.ssh.profiles.iter_mut().find(|profile| profile.id == id)
+                {
+                    profile.fingerprint = Some(fingerprint);
+                }
                 match result {
-                    Ok((Probe::Fingerprint(fingerprint), _)) => {
-                        this.ssh.challenge = Some((id, fingerprint))
-                    }
                     Ok((Probe::Snapshot(values, deployment), _)) => {
                         this.ssh.backend_errors.remove(&id);
                         this.ssh.connection_errors.remove(&id);
@@ -1067,6 +1106,11 @@ impl Fintwind {
                         this.ssh.backend_errors.remove(&id);
                         this.ssh.connection_errors.insert(id, error.to_string());
                     }
+                }
+                if this.add_project_targets_host(id)
+                    && let (_, _, Some(error)) = this.project_host_connection(Some(id))
+                {
+                    this.report_add_project_error(error, cx);
                 }
                 cx.notify();
             });
@@ -1667,7 +1711,6 @@ impl Fintwind {
             .draft
             .as_ref()
             .map(|draft| (draft.id, 0))
-            .or_else(|| self.ssh.challenge.as_ref().map(|(id, _)| (*id, 1)))
             .or_else(|| self.ssh.remove.map(|id| (id, 2)));
         let (loading_phase, wake) = if let Some(key) = dialog_key {
             LoadingDelay::observe(&mut self.ssh.dialog_loading.borrow_mut(), key, busy)
@@ -1689,7 +1732,6 @@ impl Fintwind {
             let _ = weak.update(cx, |app, cx| {
                 if !app.ssh.busy {
                     app.ssh.draft = None;
-                    app.ssh.challenge = None;
                     app.ssh.remove = None;
                     app.ssh.error = None;
                     cx.notify();
@@ -1846,54 +1888,6 @@ impl Fintwind {
                 .into_any_element(),
             );
         }
-        if let Some((id, fingerprint)) = self.ssh.challenge.as_ref()
-            && let Some(profile) = self.ssh.profiles.iter().find(|profile| profile.id == *id)
-        {
-            let id = *id;
-            let fingerprint = fingerprint.clone();
-            let focus = self.transcript_control_focus("ssh-trust", cx);
-            let trust = ssh_wait_button(
-                cx,
-                theme,
-                "ssh-trust",
-                &focus,
-                tr!("ssh.trust"),
-                ButtonVariant::Primary,
-                !busy && !showing,
-                busy || showing,
-                showing,
-                {
-                    let fingerprint = fingerprint.clone();
-                    move |app, cx| {
-                        let mut profiles = app.ssh.profiles.clone();
-                        if let Some(profile) = profiles.iter_mut().find(|profile| profile.id == id)
-                        {
-                            profile.fingerprint = Some(fingerprint.clone());
-                            app.persist_ssh_profiles(profiles, Some(id), true, cx);
-                        }
-                    }
-                },
-            );
-            return Some(
-                Dialog::new("ssh-verify-dialog", tr!("ssh.verify"), close)
-                    .detail(tr!("ssh.verify_body", host = profile.host))
-                    .child(
-                        div()
-                            .bg(theme.inset)
-                            .rounded(px(6.0))
-                            .p(px(10.0))
-                            .child(fingerprint),
-                    )
-                    .action(move |close| {
-                        Button::new("ssh-trust-cancel", tr!("common.cancel"))
-                            .variant(ButtonVariant::Outline)
-                            .disabled(busy)
-                            .on_click(move |_, window, cx| close(window, cx))
-                    })
-                    .action(move |_| trust)
-                    .into_any_element(),
-            );
-        }
         if let Some(id) = self.ssh.remove
             && let Some(profile) = self.ssh.profiles.iter().find(|profile| profile.id == id)
         {
@@ -1995,7 +1989,6 @@ impl Fintwind {
             let select = move |this: &mut Self, cx: &mut Context<Self>| {
                 if !this.ssh.busy {
                     this.ssh.selected = Some(id);
-                    this.ssh.challenge = None;
                     this.ssh.error = None;
                     this.ssh.remove = None;
                     cx.notify();
@@ -2135,7 +2128,7 @@ impl Fintwind {
                 tr!("ssh.ready")
             } else if backend_error.is_some() {
                 tr!("ssh.backend_unavailable")
-            } else if matches!(deployment, Some(Deployment::Upload(_))) {
+            } else if matches!(deployment, Some(Deployment::Upload)) {
                 tr!("ssh.deploy_missing")
             } else {
                 tr!("ssh.not_connected")
@@ -2309,7 +2302,7 @@ impl Fintwind {
                                     "ssh-deploy",
                                     &deploy_focus,
                                     match deployment {
-                                        Deployment::Upload(_) => tr!("ssh.deploy_daemon"),
+                                        Deployment::Upload => tr!("ssh.deploy_daemon"),
                                         Deployment::Start => tr!("ssh.start_daemon"),
                                     },
                                     ButtonVariant::Outline,
@@ -2377,4 +2370,29 @@ impl Fintwind {
             .child(list)
             .child(detail)
     }
+}
+
+pub(crate) const SSH_PROJECT_READY: &str = "fintwind-ssh-project-ready";
+
+pub(super) async fn wait_for_ssh_project(mut child: smol::process::Child) -> Result<()> {
+    use futures_lite::io::{AsyncBufReadExt as _, BufReader};
+
+    let stdout = child.stdout.take().context("missing SSH project startup output")?;
+    let startup = async {
+        let mut lines = BufReader::new(stdout).lines();
+        use futures_lite::StreamExt as _;
+        while let Some(line) = lines.next().await.transpose()? {
+            if line == SSH_PROJECT_READY {
+                return Ok(());
+            }
+            if let Some(error) = line.strip_prefix("fintwind-ssh-project-error ") {
+                anyhow::bail!("{}", serde_json::from_str::<String>(error)?);
+            }
+        }
+        anyhow::bail!("{}", tr!("project.open_remote_failed"));
+    };
+    futures_lite::future::race(startup, async {
+        smol::Timer::after(Duration::from_secs(45)).await;
+        anyhow::bail!("{}", tr!("project.open_remote_timeout"));
+    }).await
 }

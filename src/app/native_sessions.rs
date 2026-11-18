@@ -315,7 +315,6 @@ impl Fintwind {
         self.probes
             .first()
             .and_then(|probe| probe.path.clone())
-            .filter(|path| path.is_file())
     }
 
     /// The workspace directory whose native surface a session talks to: its

@@ -203,6 +203,7 @@ struct MenuState {
 pub struct ContextMenuHandle {
     state: Rc<RefCell<MenuState>>,
     scroll: ScrollHandle,
+    priority: usize,
     /// Stable focus identity shared by dropdown and keyboard context triggers.
     trigger_focus: FocusHandle,
     focus: FocusHandle,
@@ -221,11 +222,17 @@ impl ContextMenuHandle {
         Self {
             state: Rc::new(RefCell::new(MenuState::default())),
             scroll: ScrollHandle::new(),
+            priority: 1,
             trigger_focus: cx.focus_handle(),
             focus: cx.focus_handle(),
             trigger_bounds: Rc::new(Cell::new(None)),
             on_toggle: Rc::new(Vec::new()),
         }
+    }
+
+    pub fn with_priority(mut self, priority: usize) -> Self {
+        self.priority = priority;
+        self
     }
 
     /// Observe open/close transitions. Called only on an actual change, in the
@@ -869,7 +876,7 @@ where
     );
     surface.cover_trigger = cover_trigger;
     trigger
-        .child(deferred(surface).with_priority(1))
+        .child(deferred(surface).with_priority(handle.priority))
         .into_any_element()
 }
 
@@ -1091,6 +1098,7 @@ impl RenderOnce for MenuCard {
                         self.handle.clone(),
                         (!disabled).then_some(on_click),
                     )
+                    .debug_selector(|| format!("menu-entry {label}"))
                     .text_color(color)
                     .when(selected, |element| element.font_weight(FontWeight::MEDIUM))
                     .when_some(item_icon, |element, path| {

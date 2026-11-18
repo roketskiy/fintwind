@@ -759,15 +759,21 @@ impl Fintwind {
     /// is active. Every full-window surface (workspace and settings alike)
     /// must include this, or a toast raised there stays invisible until the
     /// user navigates away.
-    fn render_active_toast(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn render_active_toast(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         self.start_toast_dismiss_timer(cx);
         let toast = self
             .toast
             .as_ref()
             .map(|toast| (toast.message.clone(), toast.tone, toast.id));
         toast.map(|(message, tone, generation)| {
-            self.render_toast(message, tone, generation, cx)
-                .into_any_element()
+            let toast = self.render_toast(message, tone, generation, cx);
+            if self.add_project_dialog.is_some() {
+                gpui::deferred(toast)
+                    .with_priority(super::add_project_dialog::ADD_PROJECT_LAYER_PRIORITY + 2)
+                    .into_any_element()
+            } else {
+                toast.into_any_element()
+            }
         })
     }
 
@@ -782,6 +788,7 @@ impl Fintwind {
         let (status_icon, status_color) = match tone {
             ToastTone::Alert => ("icons/alert.svg", theme.danger),
             ToastTone::Success => ("icons/check.svg", theme.success),
+            ToastTone::Progress(_) => ("icons/loader-circle.svg", theme.accent),
         };
         let palette = MarkdownPalette::from_theme(&theme);
         let text_ctx = MarkdownCtx::new(
@@ -799,6 +806,7 @@ impl Fintwind {
         );
         let dismiss = div()
             .id(SharedString::from(format!("dismiss-toast-{generation}")))
+            .debug_selector(|| "dismiss-notification-toast".into())
             .tab_index(0)
             .size(px(26.0))
             .flex_none()
@@ -858,8 +866,17 @@ impl Fintwind {
                     }))
                     .on_click(|_, _, cx| cx.stop_propagation())
                     .child(md::render::frame_reset(self.toast_selection.clone()))
-                    .child(icon(status_icon, 14.0, status_color))
-                    .child(div().flex_1().min_w_0().whitespace_normal().child(message))
+                    .child(if matches!(tone, ToastTone::Progress(_)) {
+                        crate::ui::motion::spin(icon(status_icon, 14.0, status_color))
+                    } else {
+                        icon(status_icon, 14.0, status_color).into_any_element()
+                    })
+                    .child(div().flex_1().min_w_0().whitespace_normal().flex().flex_col().gap(px(5.0)).child(message)
+                        .when_some(match tone { ToastTone::Progress(percent) => percent, _ => None }, |content, percent| {
+                            content.child(ely_gpui_component::motion::ProgressBar::new(
+                                "toast-operation-progress", f32::from(percent) / 100.0,
+                            ))
+                        }))
                     .child(dismiss)
                     .child(self.toast_selection_input()),
             )

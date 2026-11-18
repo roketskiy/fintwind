@@ -325,6 +325,7 @@ struct ToastState {
 enum ToastTone {
     Alert,
     Success,
+    Progress(Option<u8>),
 }
 
 fn paused_toast_duration(remaining: Duration, elapsed: Duration) -> Duration {
@@ -2784,7 +2785,7 @@ impl Fintwind {
         let Some(toast) = self.toast.as_mut() else {
             return;
         };
-        if toast.hovered || toast.timer_started.is_some() {
+        if matches!(toast.tone, ToastTone::Progress(_)) || toast.hovered || toast.timer_started.is_some() {
             return;
         }
 

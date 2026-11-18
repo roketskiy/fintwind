@@ -10,6 +10,7 @@ import queue
 import secrets
 import shlex
 import signal
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,27 @@ import time
 MODEL = "fixture/fixture-model"
 PROMPT = "Reply with a short greeting in plain text. Do not use tools."
 PARTS = ("Hello from the ", "SSH stream fixture.")
+LIVE_MODEL = "alibaba-token-plan-cn/qwen4-max-preview"
+
+
+def prepare_live_provider(env):
+    source_data = Path(os.getenv("XDG_DATA_HOME") or Path.home() / ".local/share")
+    source = source_data / "opencode/opencode.db"
+    target = Path(env["XDG_DATA_HOME"]) / "opencode/opencode.db"
+    target.parent.mkdir(parents=True)
+    with sqlite3.connect(source.as_uri() + "?mode=ro", uri=True, timeout=5) as existing:
+        schema = existing.execute("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY type != 'table'").fetchall()
+        migrations = existing.execute("SELECT * FROM migration").fetchall()
+        rows = existing.execute("SELECT * FROM credential WHERE integration_id = ? AND active = 1",
+                                ("alibaba-token-plan-cn",)).fetchall()
+    if len(rows) != 1:
+        raise RuntimeError("The active Alibaba subscription is missing")
+    with sqlite3.connect(target, timeout=5) as isolated:
+        for (statement,) in schema:
+            isolated.execute(statement)
+        placeholders = ",".join("?" for _ in migrations[0])
+        isolated.executemany(f"INSERT INTO migration VALUES ({placeholders})", migrations)
+        isolated.executemany("INSERT INTO credential VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
 
 
 class Provider(BaseHTTPRequestHandler):
@@ -96,6 +118,7 @@ def remote(daemon, opencode):
         raise RuntimeError("isolated daemon token missing")
     daemon = str(Path(daemon).resolve(strict=True))
     opencode = str(Path(opencode).resolve(strict=True)) if opencode else None
+    live = os.getenv("FINTWIND_SSH_LIVE_MODEL") == "1"
     os.umask(0o077)
     with tempfile.TemporaryDirectory(prefix="run-", dir=os.getcwd()) as directory:
         root = Path(directory)
@@ -119,7 +142,13 @@ def remote(daemon, opencode):
             subprocess.run(git + list(args), cwd=cwd, env=env, check=True, timeout=5)
 
         with ThreadingHTTPServer(("127.0.0.1", 0), Provider) as provider:
-            if opencode:
+            if live:
+                prepare_live_provider(env)
+                config = root / "config/opencode/opencode.json"
+                config.parent.mkdir(parents=True, exist_ok=True)
+                config.write_text(json.dumps({"model": LIVE_MODEL, "small_model": LIVE_MODEL,
+                                              "update": "disable"}), encoding="utf-8")
+            elif opencode:
                 threading.Thread(target=provider.serve_forever, daemon=True).start()
                 config = root / "config/opencode/opencode.json"
                 config.parent.mkdir(parents=True)
@@ -298,6 +327,7 @@ def local():
     parser.add_argument("remote_dir", help="existing isolated remote build directory")
     parser.add_argument("--opencode", help="remote OpenCode V2 binary relative to remote_dir")
     parser.add_argument("--desktop-test", type=Path, help="run the desktop Rust test binary instead of the probe")
+    parser.add_argument("--live-model", action="store_true", help="send one real Alibaba Qwen4 Max task from an isolated desktop and daemon")
     parser.add_argument("--native-app", type=Path, help="open a debug desktop executable with isolated data; report is a new artifact directory")
     parser.add_argument("--native-mcp-oauth", action="store_true", help="verify MCP after the isolated native browser sign-in")
     parser.add_argument("--native-provider-oauth", action="store_true", help="run the dual-daemon provider OAuth fixture")
@@ -312,6 +342,11 @@ def local():
            "-i", str(ns.key), "-p", str(ns.port), f"{ns.user}@{ns.host}"]
     command = ["timeout", "-k", "10s", "200s", "python3", "-u", "daemon-e2e.py",
                "--remote", "target/debug/fintwind-daemon", ns.opencode or ""]
+    if ns.live_model:
+        if not ns.desktop_test or not ns.opencode:
+            parser.error("--live-model requires --desktop-test and --opencode")
+        command[3] = "335s"
+        command = ["env", "FINTWIND_SSH_LIVE_MODEL=1", *command]
     if ns.native_app:
         if not ns.opencode:
             parser.error("--native-app requires --opencode")
@@ -362,7 +397,7 @@ def local():
                 ssh_process.stdin.flush()
             else:
                 ns.provider_stage = provider_stage
-            ready = receive(25)
+            ready = receive(40 if ns.live_model else 25)
             if ns.native_provider_oauth:
                 ready["browser_port"] = port
             if ns.desktop_test or ns.native_app:
@@ -406,13 +441,16 @@ def local():
                                             "daemon_port": ready["port"], "token_file": ready["token_file"]},
                                "workspace": ready["workspace"], "binary": ready["opencode"],
                                "state_dir": str(root / "state"), "proof": str(proof)}
+                    if ns.live_model:
+                        fixture["live_model"] = LIVE_MODEL
                     allowed = {"SYSTEMROOT", "WINDIR", "PATH", "PATHEXT", "COMSPEC"}
                     env = {k: v for k, v in os.environ.items() if k.upper() in allowed}
                     env.update({k: str(home) for k in ("USERPROFILE", "HOME", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP")})
+                    env["FINTWIND_DEBUG_DATA_DIR"] = str(root / "desktop-data")
                     env["FINTWIND_SSH_DESKTOP_FIXTURE"] = json.dumps(fixture)
                     result = subprocess.run([str(ns.desktop_test.resolve()),
                                              "app::ssh_page::e2e::desktop_ssh_project_streams", "--exact", "--ignored", "--nocapture"],
-                                            env=env, cwd=home, timeout=100)
+                                            env=env, cwd=home, timeout=270 if ns.live_model else 100)
                 if result.returncode == 0 and not proof.is_file():
                     raise RuntimeError("desktop test did not write a proof report")
                 sys.exit(result.returncode)

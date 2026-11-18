@@ -293,29 +293,36 @@ async fn verify_project_creation(
     parent: &std::path::Path,
     report: &std::sync::mpsc::Sender<Check>,
 ) -> Result<()> {
-    use fintwind_client::ssh::{ProjectCreation, create_project};
+    use fintwind_client::ssh::{GitCloneStage, ProjectCreation, create_project};
     let parent = parent.to_str().context("invalid fixture path")?;
-    let repo = Some("https://github.com/octocat/Hello-World");
+    let repository_url = "https://github.com/BurntSushi/ripgrep.git";
+    let repo = Some(repository_url);
+    let mut received_objects = None;
     for (name, source) in [("empty-fixture", None), ("clone-fixture", repo)] {
-        let created = create_project(session, parent, name, source).await?;
+        let created = create_project(session, parent, name, source, |progress| {
+            if progress.stage == GitCloneStage::Receiving {
+                received_objects = Some(progress.percent);
+            }
+        }).await?;
         ensure!(
             matches!(created, ProjectCreation::Created(ref path) if path == &format!("{parent}/{name}")),
             "creation failed: {created:?}"
         );
-        let collision = create_project(session, parent, name, repo).await?;
+        let collision = create_project(session, parent, name, repo, |_| {}).await?;
         ensure!(
             matches!(collision, ProjectCreation::Exists),
             "clone did not refuse existing directory: {collision:?}"
         );
-        let collision = create_project(session, parent, name, None).await?;
+        let collision = create_project(session, parent, name, None, |_| {}).await?;
         ensure!(
             matches!(collision, ProjectCreation::Exists),
             "mkdir did not refuse existing directory: {collision:?}"
         );
     }
+    ensure!(received_objects == Some(100), "Git checkout did not report receiving all objects: {received_objects:?}");
     let quote = |value: &str| format!("'{}'", value.replace('\'', "'\"'\"'"));
     let mut channel = session.channel_open_session().await?;
-    channel.exec(true, format!("cd {} && test -z \"$(ls -A empty-fixture)\" && test \"$(git -C clone-fixture remote get-url origin)\" = https://github.com/octocat/Hello-World.git && git -C clone-fixture diff --exit-code && git -C clone-fixture rev-parse --verify HEAD >/dev/null", quote(parent))).await?;
+    channel.exec(true, format!("cd {} && test -z \"$(ls -A empty-fixture)\" && test \"$(git -C clone-fixture remote get-url origin)\" = {} && git -C clone-fixture diff --exit-code && git -C clone-fixture rev-parse --verify HEAD >/dev/null", quote(parent), quote(repository_url))).await?;
     let mut status = None;
     while let Some(message) = channel.wait().await {
         if let russh::ChannelMsg::ExitStatus { exit_status } = message {
@@ -326,7 +333,7 @@ async fn verify_project_creation(
         status == Some(0),
         "remote folder or Git checkout was not preserved"
     );
-    let detail = "remote mkdir and GitHub checkout succeeded; both operations refused existing directories; empty folder and checkout remained intact";
+    let detail = "remote mkdir and GitHub checkout succeeded; received Git's 100% object transfer update; both operations refused existing directories";
     println!("PASS remote_project_creation: {detail}");
     let _ = report.send(Check {
         name: "remote_project_creation",
@@ -562,6 +569,13 @@ fn stream_agent(
                     sequences.push(event.sequence);
                     if sequences.len() == 1 {
                         client = interrupt()?;
+                        let attached = client
+                            .request_with_timeout(id, Uuid::nil(), Command::AttachSession, RPC)
+                            .context("reattach to the remote runtime after disconnect")?;
+                        ensure!(
+                            matches!(attached, ResponsePayload::SessionRuntime { runtime_id: Some(active), .. } if active == runtime),
+                            "original runtime did not survive disconnect: {attached:?}"
+                        );
                         events = client.subscribe(id, runtime);
                     }
                 }
@@ -579,7 +593,7 @@ fn stream_agent(
                 return Ok((
                     client,
                     format!(
-                        "received expected text across delta sequences {sequences:?} spanning SSH reconnect before successful turn completion"
+                        "reattached to the original runtime and received expected text across delta sequences {sequences:?} before successful turn completion"
                     ),
                 ));
             }

@@ -264,8 +264,6 @@ ssh.remove_title:
   en: Remove connection?
 ssh.remove_body:
   en: Remove the connection profile for %{name} from this device. Remote projects and private keys are kept.
-ssh.verify_body:
-  en: First connection to %{host}. Verify the fingerprint with your administrator or hosting platform.
 ssh.edit_connection:
   en: Edit connection
 ssh.remove_connection:
@@ -308,10 +306,6 @@ ssh.saved:
   en: Saved connections
 ssh.new:
   en: New connection
-ssh.verify:
-  en: Compare this fingerprint with a trusted copy before continuing.
-ssh.trust:
-  en: Trust fingerprint
 ssh.last_read:
   en: Last read
 ssh.system:
@@ -392,6 +386,28 @@ project.create_and_add:
   en: Create and add
 project.clone_and_add:
   en: Clone and add
+project.cloning:
+  en: Cloning repository…
+project.clone_counting:
+  en: Counting objects · %{percent}%
+project.clone_compressing:
+  en: Compressing objects · %{percent}%
+project.clone_receiving:
+  en: Receiving objects · %{percent}%
+project.clone_resolving:
+  en: Resolving deltas · %{percent}%
+project.clone_updating:
+  en: Checking out files · %{percent}%
+project.opening_remote:
+  en: Opening remote project…
+project.added:
+  en: Project added
+project.add_failed:
+  en: "Could not add project: %{error}"
+project.open_remote_failed:
+  en: The remote project window did not open.
+project.open_remote_timeout:
+  en: Timed out waiting for the remote project window.
 project.target_exists:
   en: A file or folder already exists at the target. Nothing was overwritten.
 project.creation_failed:

@@ -942,6 +942,26 @@ impl Fintwind {
                     let (session, _) =
                         tokio::time::timeout(Duration::from_secs(20), authenticate(&profile))
                             .await??;
+                    #[cfg(test)]
+                    if name == "interrupted-clone" && std::env::var_os("FINTWIND_SSH_E2E_CLONE_DISCONNECT").is_some() {
+                        let (signal, started) = tokio::sync::oneshot::channel();
+                        let mut signal = Some(signal);
+                        let operation = tunnel::create_project(&session, &parent, &name, repository.as_deref(), |update| {
+                            progress.publish(update);
+                            if let Some(signal) = signal.take() {
+                                let _ = signal.send(());
+                            }
+                        });
+                        tokio::pin!(operation);
+                        return tokio::select! {
+                            biased;
+                            Ok(()) = started => {
+                                session.disconnect(russh::Disconnect::ByApplication, "SSH clone test", "en").await?;
+                                operation.await
+                            }
+                            result = &mut operation => result,
+                        };
+                    }
                     tunnel::create_project(&session, &parent, &name, repository.as_deref(), |update| progress.publish(update)).await
                 })?;
                 match result {

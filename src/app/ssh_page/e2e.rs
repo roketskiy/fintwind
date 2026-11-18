@@ -313,6 +313,38 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
             assert_eq!(folder.read(cx).content(), "new-remote-project");
         });
     }
+    let clone_disconnect = std::env::var_os("FINTWIND_SSH_E2E_CLONE_DISCONNECT").is_some();
+    if clone_disconnect {
+        picker_cx.update(|_, cx| {
+            repository.update(cx, |input, cx| input.set_content("https://github.com/git/git", cx));
+            folder.update(cx, |input, cx| input.set_content("interrupted-clone", cx));
+        });
+        picker_cx.simulate_click(submit.center(), gpui::Modifiers::none());
+        let deadline = Instant::now() + Duration::from_secs(135);
+        let executor = picker_cx.update(|_, cx| cx.background_executor().clone());
+        loop {
+            for _ in 0..32 {
+                if !executor.scheduler_executor().scheduler().as_test().unwrap().tick() {
+                    break;
+                }
+            }
+            if picker_cx.read_entity(&picker, |app, _| app.toast.as_ref().is_some_and(|toast| {
+                toast.tone == ToastTone::Alert && toast.message.contains(&tr!("project.creation_unknown"))
+            })) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "interrupted clone did not report an unconfirmed outcome");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        picker_cx.update(|_, cx| {
+            assert_eq!(repository.read(cx).content(), "https://github.com/git/git");
+            assert_eq!(input.read(cx).content(), fixture.workspace);
+            assert_eq!(folder.read(cx).content(), "interrupted-clone");
+        });
+        let dismiss = picker_cx.debug_bounds("dismiss-notification-toast").unwrap();
+        picker_cx.simulate_click(dismiss.center(), gpui::Modifiers::none());
+        picker_cx.run_until_parked();
+    }
     let registration_retry = std::env::var_os("FINTWIND_SSH_E2E_REGISTRATION_RETRY").is_some();
     if registration_retry {
         picker_cx.update(|_, cx| {
@@ -733,6 +765,7 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
                 "cloneProgressToast": true, "cloneErrorToastDismissibleOverDialog": true,
                 "sshAuthenticationErrorToastAndRetry": true,
                 "reusedCloneAfterRegistrationFailure": registration_retry,
+                "interruptedCloneReportedUnconfirmed": clone_disconnect,
                 "openedLocalSidebarSession": switched_during_stream,
                 "switchedBetweenRemoteDaemons": peer_verified
             })).unwrap()).unwrap();

@@ -266,7 +266,10 @@ pub async fn create_project<H: client::Handler>(
                     bytes.extend_from_slice(&data);
                 }
                 ChannelMsg::ExitStatus { exit_status } => status = Some(exit_status),
-                ChannelMsg::ExtendedData { data, .. } => progress_reader.push(&data, &mut progress),
+                ChannelMsg::ExtendedData { data, .. } => {
+                    progress_reader.push(&data, &mut progress);
+                    tokio::task::yield_now().await;
+                }
                 _ => {}
             }
         }

@@ -989,7 +989,7 @@ impl Fintwind {
     /// The detail pane while the first load is in flight or has failed: a
     /// skeleton after the shared loading delay, or the error in the pane's
     /// own place with a retry. The add form stays reachable from the list.
-    fn render_mcp_load_placeholder(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_mcp_load_placeholder(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         if self.mcp_adding {
             return self.render_mcp_form(theme, cx);
         }

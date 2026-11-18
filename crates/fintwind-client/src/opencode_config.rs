@@ -209,9 +209,14 @@ pub fn config_path() -> PathBuf {
             directory.join("opencode.json")
         };
     }
-    let json = dirs::home_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join(".config")
+    let json = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|directory| directory.is_absolute())
+        .unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(std::env::temp_dir)
+                .join(".config")
+        })
         .join("opencode")
         .join("opencode.json");
     let jsonc = json.with_extension("jsonc");
@@ -226,7 +231,9 @@ pub fn load_providers() -> io::Result<Vec<CustomProvider>> {
 }
 
 pub fn load_providers_at(path: &Path) -> io::Result<Vec<CustomProvider>> {
-    let bytes = std::fs::read(path)?;
+    let Some(bytes) = read_optional_config(path)? else {
+        return Ok(Vec::new());
+    };
     let document = parse_provider_document(&bytes)?;
     let disabled: HashSet<String> = document
         .get("disabled_providers")
@@ -728,6 +735,14 @@ fn parse_provider_document(bytes: &[u8]) -> io::Result<Value> {
 }
 
 fn write_provider_document(path: &Path, document: &Value) -> io::Result<()> {
+    write_config_document(
+        path,
+        document,
+        &["provider", "providers", "disabled_providers", "$schema"],
+    )
+}
+
+fn write_config_document(path: &Path, document: &Value, keys: &[&str]) -> io::Result<()> {
     use jsonc_parser::cst::{CstInputValue, CstRootNode};
     fn input(value: &Value) -> CstInputValue {
         match value {
@@ -756,7 +771,7 @@ fn write_provider_document(path: &Path, document: &Value) -> io::Result<()> {
     let object = root
         .object_value()
         .ok_or_else(|| io::Error::other("Invalid OpenCode configuration"))?;
-    for key in ["provider", "providers", "disabled_providers", "$schema"] {
+    for &key in keys {
         if old.get(key) == document.get(key) {
             continue;
         }
@@ -1088,9 +1103,10 @@ pub fn load_mcp_servers() -> io::Result<Vec<McpServer>> {
 }
 
 pub fn load_mcp_servers_at(path: &Path) -> io::Result<Vec<McpServer>> {
-    let bytes = std::fs::read(path)?;
-    let document: Value = serde_json::from_slice(&bytes)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let Some(bytes) = read_optional_config(path)? else {
+        return Ok(Vec::new());
+    };
+    let document = parse_provider_document(&bytes)?;
     let servers = match document.get("mcp").and_then(Value::as_object) {
         Some(mcp) => {
             let (entries, nested) = match mcp.get("servers").and_then(Value::as_object) {
@@ -1228,10 +1244,12 @@ pub fn save_mcp_servers(servers: &[McpServer]) -> io::Result<()> {
 }
 
 pub fn save_mcp_servers_at(path: &Path, servers: &[McpServer]) -> io::Result<()> {
-    let mut document: Map<String, Value> = match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+    let mut document = match read_optional_config(path)? {
+        Some(bytes) => parse_provider_document(&bytes)?
+            .as_object()
+            .cloned()
+            .expect("configuration is an object"),
+        None => {
             let mut document = Map::new();
             document.insert(
                 "$schema".into(),
@@ -1239,7 +1257,6 @@ pub fn save_mcp_servers_at(path: &Path, servers: &[McpServer]) -> io::Result<()>
             );
             document
         }
-        Err(error) => return Err(error),
     };
 
     let mut mcp = match document.remove("mcp") {
@@ -1260,7 +1277,7 @@ pub fn save_mcp_servers_at(path: &Path, servers: &[McpServer]) -> io::Result<()>
         document.insert("mcp".into(), Value::Object(mcp));
     }
 
-    write_json_atomically(path, &Value::Object(document))
+    write_config_document(path, &Value::Object(document), &["mcp", "$schema"])
 }
 
 /// The server entry as it should sit in the configuration: the original
@@ -1338,20 +1355,6 @@ fn set_or_remove_string_table(
     }
 }
 
-fn write_json_atomically(path: &Path, document: &Value) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mut bytes = serde_json::to_vec_pretty(document)?;
-    bytes.push(b'\n');
-    let temporary = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
-    std::fs::write(&temporary, bytes)?;
-    let result = std::fs::rename(&temporary, path);
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
-    }
-    result
-}
 
 /// One-time migration from the pre-sync design: the app used to mirror its
 /// own provider roster into an `opencode-providers.json` file beside the app

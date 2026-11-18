@@ -1522,6 +1522,34 @@ impl Backend for FintwindBackend {
             Command::GetSettings => Ok(ResponsePayload::Settings {
                 settings: self.settings.get(),
             }),
+            Command::LoadOpenCodeProviders => Ok(ResponsePayload::Json {
+                value: serde_json::to_value(fintwind_client::opencode_config::load_providers()?
+                    .into_iter().map(fintwind_client::opencode_config::ProviderConfigEntry::from).collect::<Vec<_>>())?,
+            }),
+            Command::SaveOpenCodeProviders { providers, catalog, workspace } => {
+                use fintwind_client::opencode_config;
+                let providers = serde_json::from_value::<Vec<opencode_config::ProviderConfigEntry>>(providers)?
+                    .into_iter().map(Into::into).collect::<Vec<_>>();
+                let catalog = catalog.map(serde_json::from_value).transpose()?;
+                let saved = opencode_config::save_providers_with_credentials_at(
+                    &opencode_config::config_path(), &providers, catalog.as_ref(), |id, key| {
+                        let (binary, directory) = workspace.as_ref()
+                            .ok_or_else(|| std::io::Error::other("OpenCode is unavailable"))?;
+                        let server = crate::opencode_pool::acquire(binary, directory)
+                            .map_err(std::io::Error::other)?;
+                        crate::custom_provider_credentials::store(&server, id, key).map_err(std::io::Error::other)
+                    },
+                )?;
+                Ok(ResponsePayload::Json { value: serde_json::to_value(saved.into_iter().map(opencode_config::ProviderConfigEntry::from).collect::<Vec<_>>())? })
+            }
+            Command::LoadOpenCodeMcp => Ok(ResponsePayload::Json {
+                value: serde_json::to_value(fintwind_client::opencode_config::load_mcp_servers()?)?,
+            }),
+            Command::SaveOpenCodeMcp { servers } => {
+                let servers: Vec<_> = serde_json::from_value(servers)?;
+                fintwind_client::opencode_config::save_mcp_servers(&servers)?;
+                Ok(ResponsePayload::Ack)
+            }
             Command::UpdateSettings { settings } => {
                 let _gate = self.settings_update_gate.lock();
                 let data_directory = self
@@ -3176,6 +3204,10 @@ fn handle_driver_command(
         | Command::AbandonSubmission { .. }
         | Command::Start { .. }
         | Command::GetSettings
+        | Command::LoadOpenCodeProviders
+        | Command::SaveOpenCodeProviders { .. }
+        | Command::LoadOpenCodeMcp
+        | Command::SaveOpenCodeMcp { .. }
         | Command::UpdateSettings { .. }
         | Command::ProbeProvider { .. }
         | Command::CheckOpenCodeUpdate

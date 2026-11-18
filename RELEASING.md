@@ -38,7 +38,7 @@ draft GitHub release. Review the draft, then publish it.
 | beta | **local builds only** (`bun scripts/bundle-windows.ts --channel=beta`) | `Fintwind` — the same directory as stable | disabled — there is no beta feed |
 | dev | plain `cargo build` (debug), for agent development | `Fintwind Debug` (isolated) | disabled |
 
-Every channel packages only `fintwind.exe` and `fintwind-daemon.exe`.
+Windows 包包含 `fintwind.exe` 和 `fintwind-daemon.exe`。GitHub 稳定版流程还会用同一份源码编译 Linux x86_64 和 ARM64 的 daemon，并将它们放进安装包和便携包。连接 Linux 服务器时，Fintwind 按服务器架构自动选用对应副本。
 
 GitHub builds and publishes the **stable channel only**: the Release workflow
 passes `--channel=stable` explicitly, and there is no beta job, input, tag,

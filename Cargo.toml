@@ -25,6 +25,7 @@ members = [
     "crates/fintwind-diagram",
     "crates/fintwind-protocol",
     "crates/fintwind-remote",
+    "crates/fintwind-ssh-probe",
 ]
 default-members = [
     ".",
@@ -45,6 +46,8 @@ base64 = "0.22"
 chrono = "0.4"
 crossbeam-channel = "0.5"
 dirs = "6.0"
+russh = { version = "0.65.2", default-features = false, features = ["ring", "rsa"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 # The GPUI crates.io snapshot family (`gpui-pre` = zed@279fe07), shared with
 # gpui-kit 0.7.1. The `vendor/gpui-pre` copies are patched with zed PR #61945
 # (layered scene rendering) so GPUI menus, tooltips and popovers keep drawing
@@ -71,7 +74,7 @@ unicode-segmentation = "1.12"
 unicode-linebreak = "0.1.5"
 url = "2"
 uuid = { version = "1.18", features = ["v4", "serde"] }
-fintwind-client = { path = "crates/fintwind-client" }
+fintwind-client = { path = "crates/fintwind-client", features = ["ssh"] }
 fintwind-diagram = { path = "crates/fintwind-diagram" }
 fintwind-protocol = { path = "crates/fintwind-protocol" }
 fintwind-remote = { path = "crates/fintwind-remote" }

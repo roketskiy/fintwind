@@ -184,6 +184,12 @@ const SETTINGS_PAGES: &[(SettingsPage, &str, &str, &str)] = &[
         "icons/sparkle.svg",
         "settings.mcp_market_keywords",
     ),
+    (
+        SettingsPage::Ssh,
+        "settings.ssh",
+        "icons/terminal.svg",
+        "settings.ssh",
+    ),
 ];
 
 /// Bind the search field's list-navigation keys. Called once at startup.
@@ -310,6 +316,7 @@ impl Fintwind {
     pub(super) fn open_settings_page(&mut self, page: SettingsPage, cx: &mut Context<Self>) {
         self.mode = WorkspaceMode::Settings;
         self.settings_page = page;
+        self.load_ssh_profiles(cx);
         // Each page starts at its own top; a scroll position carried over
         // from the previous page would land mid-content.
         self.settings_scroll.set_offset(gpui::Point::default());
@@ -330,11 +337,14 @@ impl Fintwind {
             self.load_image_generate(cx);
             self.manage_opencode(OpenCodeManagementAction::Check, cx);
         }
-        if page == SettingsPage::McpServers {
+        if page == SettingsPage::McpServers || page == SettingsPage::McpMarket {
             // Same contract as Providers: transient editors drop, the roster
             // selection survives, and the config is re-read so entries added
             // with the CLI are already on the list.
             self.reset_mcp_page(cx);
+            if page == SettingsPage::McpServers && self.settings_machine_selected() {
+                self.load_ssh_mcp(cx);
+            }
         }
         if page == SettingsPage::McpMarket {
             self.mcp_list_scroll.set_offset(gpui::Point::default());
@@ -342,6 +352,30 @@ impl Fintwind {
             self.load_mcp_servers_from_config(cx);
         }
         cx.notify();
+    }
+
+    pub(super) fn reset_settings_rosters(&mut self, cx: &mut Context<Self>) {
+        if self.mcp_commit_generation != 0 {
+            self.mcp_commit_generation = 0;
+            self.commit_mcp_servers(cx);
+        }
+        self.mcp_load_generation += 1;
+        self.mcp_load_pending = false;
+        self.mcp_load_error = None;
+        *self.mcp_loading.borrow_mut() = None;
+        self.mcp_status_generation += 1;
+        self.mcp_status_pending = false;
+        self.mcp_status_error = None;
+        self.mcp_servers.clear();
+        self.mcp_selected = None;
+        self.mcp_statuses = None;
+        self.mcp_oauth_auth_generation += 1;
+        self.mcp_oauth_auth_name = None;
+        self.ssh.mcp_loaded = false;
+        self.providers_load_generation += 1;
+        self.ssh.providers.clear();
+        self.ssh.providers_loaded = false;
+        self.providers_selected = None;
     }
 
     /// The usage page as its own rail mode: on entry it serves a fresh
@@ -509,6 +543,11 @@ impl Fintwind {
                 .child(div().flex_1().min_h_0().child(match page {
                     SettingsPage::RemoteControl => self.render_remote_control(window, cx),
                     SettingsPage::Skills => self.render_skills_settings(window, cx),
+                    SettingsPage::McpServers | SettingsPage::McpMarket | SettingsPage::Providers
+                        if self.settings_daemon().is_none() => div().p(px(24.0)).child(tr!("ssh.offline")).into_any_element(),
+                    SettingsPage::McpServers | SettingsPage::McpMarket
+                        if self.settings_machine_selected() && !self.ssh.mcp_loaded => div().into_any_element(),
+                    SettingsPage::Providers if self.settings_machine_selected() && !self.ssh.providers_loaded => div().into_any_element(),
                     SettingsPage::McpServers => self.render_mcp_page(window, cx),
                     SettingsPage::McpMarket => self.render_mcp_market_page(cx),
                     _ => self.render_providers_page(cx),
@@ -521,9 +560,9 @@ impl Fintwind {
 
         let inner = div()
             .w_full()
-            .max_w(px(SETTINGS_CONTENT_MAX_WIDTH))
+            .when(page != SettingsPage::Ssh, |inner| inner.max_w(px(SETTINGS_CONTENT_MAX_WIDTH)))
             .mx_auto()
-            .child(
+            .when(page != SettingsPage::Ssh, |inner| inner.child(
                 div()
                     .pt(px(6.0))
                     .flex_none()
@@ -532,6 +571,7 @@ impl Fintwind {
                     .text_color(theme.text)
                     .child(match page {
                         SettingsPage::General => tr!("settings.general"),
+                        SettingsPage::Ssh => tr!("settings.ssh"),
                         SettingsPage::RemoteControl => tr!("remote.title"),
                         SettingsPage::Providers => tr!("settings.providers"),
                         SettingsPage::Skills => tr!("settings.skills"),
@@ -539,9 +579,11 @@ impl Fintwind {
                         SettingsPage::McpMarket => tr!("settings.mcp_market"),
                         SettingsPage::Appearance => tr!("settings.appearance"),
                     }),
-            )
+            ))
             .child(match page {
+                SettingsPage::General if self.settings_machine_selected() => self.render_ssh_general(cx),
                 SettingsPage::General => self.render_general_settings(window, cx),
+                SettingsPage::Ssh => self.render_ssh_page(cx),
                 SettingsPage::RemoteControl => self.render_remote_control(window, cx),
                 SettingsPage::Providers => self.render_providers_page(cx),
                 SettingsPage::Skills => self.render_skills_settings(window, cx),
@@ -1444,11 +1486,23 @@ impl Fintwind {
         let busy = self.opencode_management_action.is_some() || self.opencode_binary_busy;
         let status = self.opencode_update_status.as_ref();
         let installed = status.is_some_and(|status| status.path.is_some());
-        let detail = match self.opencode_management_action {
-            Some(OpenCodeManagementAction::Check) => tr!("settings.opencode_checking"),
-            Some(OpenCodeManagementAction::Install) => tr!("settings.opencode_installing"),
-            Some(OpenCodeManagementAction::Update) => tr!("settings.opencode_updating"),
-            None => match status {
+        let loading_action = self.opencode_management_action.or_else(|| {
+            self.opencode_management_loading.borrow().as_ref().map(|loading| *loading.key())
+        });
+        let phase = if let Some(action) = loading_action {
+            super::ssh_page::ssh_wait_phase(
+                &self.opencode_management_loading,
+                action,
+                self.opencode_management_action.is_some(),
+                cx,
+            )
+        } else {
+            crate::ui::loading::LoadingPhase::Done
+        };
+        let detail = if status.is_none() && self.opencode_management_error.is_none() {
+            None
+        } else {
+            Some(match status {
                 None => tr!("settings.opencode_check_failed_short"),
                 Some(status) if status.path.is_none() => tr!("settings.opencode_not_installed"),
                 Some(status) => {
@@ -1471,50 +1525,56 @@ impl Fintwind {
                         tr!("settings.opencode_up_to_date", current = current)
                     }
                 }
-            },
+            })
         };
-        settings_row(
+        let row = settings_row(
             "icons/provider-opencode.svg",
             "OpenCode".to_owned(),
-            Some(detail),
+            detail,
             theme,
         )
         .when(status.is_some_and(|status| status.path.is_none()), |row| {
-                row.child(
-                    Button::new("opencode-install", tr!("settings.opencode_install"))
-                        .variant(ButtonVariant::Secondary)
-                        .size(ControlSize::Sm)
-                        .disabled(busy)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.manage_opencode(OpenCodeManagementAction::Install, cx)
-                        })),
-                )
+                let focus = self.transcript_control_focus("opencode-install", cx);
+                let active = self.opencode_management_action == Some(OpenCodeManagementAction::Install);
+                let showing = loading_action == Some(OpenCodeManagementAction::Install) && phase == crate::ui::loading::LoadingPhase::Visible;
+                row.child(super::ssh_page::ssh_wait_button(cx, theme, "opencode-install", &focus,
+                    tr!("settings.opencode_install"), ButtonVariant::Secondary, !busy && !showing, active || showing,
+                    showing,
+                    |this, cx| this.manage_opencode(OpenCodeManagementAction::Install, cx)))
             })
             .when(installed || status.is_none(), |row| {
-                row.child(
-                    Button::new("opencode-check-update", tr!("settings.opencode_check"))
-                        .variant(ButtonVariant::Secondary)
-                        .size(ControlSize::Sm)
-                        .disabled(busy)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.manage_opencode(OpenCodeManagementAction::Check, cx)
-                        })),
-                )
+                let focus = self.transcript_control_focus("opencode-check-update", cx);
+                let active = self.opencode_management_action == Some(OpenCodeManagementAction::Check);
+                let showing = loading_action == Some(OpenCodeManagementAction::Check) && phase == crate::ui::loading::LoadingPhase::Visible;
+                row.child(super::ssh_page::ssh_wait_button(cx, theme, "opencode-check-update", &focus,
+                    tr!("settings.opencode_check"), ButtonVariant::Secondary, !busy && !showing, active || showing,
+                    showing,
+                    |this, cx| this.manage_opencode(OpenCodeManagementAction::Check, cx)))
             })
             .when(
                 status.is_some_and(|status| status.update_available),
                 |row| {
-                    row.child(
-                        Button::new("opencode-update", tr!("settings.opencode_update"))
-                            .variant(ButtonVariant::Secondary)
-                            .size(ControlSize::Sm)
-                            .disabled(busy)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.manage_opencode(OpenCodeManagementAction::Update, cx)
-                            })),
-                    )
+                    let focus = self.transcript_control_focus("opencode-update", cx);
+                    let active = self.opencode_management_action == Some(OpenCodeManagementAction::Update);
+                    let showing = loading_action == Some(OpenCodeManagementAction::Update) && phase == crate::ui::loading::LoadingPhase::Visible;
+                    row.child(super::ssh_page::ssh_wait_button(cx, theme, "opencode-update", &focus,
+                        tr!("settings.opencode_update"), ButtonVariant::Secondary, !busy && !showing, active || showing,
+                        showing,
+                        |this, cx| this.manage_opencode(OpenCodeManagementAction::Update, cx)))
                 },
-            )
+            );
+        div()
+            .flex()
+            .flex_col()
+            .child(row)
+            .children(self.opencode_management_error.as_ref().map(|error| {
+                div()
+                    .px(px(20.0))
+                    .pb(px(10.0))
+                    .text_size(ui_px(12.0))
+                    .text_color(theme.danger_text)
+                    .child(error.clone())
+            }))
     }
 
     fn manage_opencode(&mut self, action: OpenCodeManagementAction, cx: &mut Context<Self>) {
@@ -1641,34 +1701,83 @@ impl Fintwind {
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_default();
         let custom = self.state.general_workspace_path().is_some();
-        settings_row(
+        let phase = super::ssh_page::ssh_wait_phase(
+            &self.general_workspace_loading,
+            self.general_workspace_resetting,
+            self.general_workspace_busy,
+            cx,
+        );
+        let choose_focus = self.transcript_control_focus("general-workspace-choose", cx);
+        let reset_focus = self.transcript_control_focus("general-workspace-reset", cx);
+        let showing = phase == crate::ui::loading::LoadingPhase::Visible;
+        let choosing = self.general_workspace_busy && !self.general_workspace_resetting;
+        let resetting = self.general_workspace_busy && self.general_workspace_resetting;
+        let row = settings_row(
             "icons/folder.svg",
             tr!("settings.general_workspace"),
             Some(path),
             theme,
         )
         .child(
-            Button::new(
+            super::ssh_page::ssh_wait_button(
+                cx,
+                theme,
                 "general-workspace-choose",
+                &choose_focus,
                 tr!("settings.general_workspace_choose"),
-            )
-                .variant(ButtonVariant::Outline)
-                .size(ControlSize::Sm)
-                .disabled(self.general_workspace_busy || self.daemon.is_remote())
-                .on_click(cx.listener(|this, _, _, cx| this.choose_general_workspace(cx))),
+                ButtonVariant::Outline,
+                !self.general_workspace_busy && !(showing && !self.general_workspace_resetting) && !self.daemon.is_remote(),
+                choosing || (showing && !self.general_workspace_resetting),
+                showing && !self.general_workspace_resetting,
+                |this, cx| this.choose_general_workspace(cx),
+            ),
             )
             .when(custom, |element| {
                 element.child(
-                    Button::new(
+                    super::ssh_page::ssh_wait_button(
+                        cx,
+                        theme,
                         "general-workspace-reset",
+                        &reset_focus,
                         tr!("settings.general_workspace_reset"),
-                    )
-                    .variant(ButtonVariant::Ghost)
-                    .size(ControlSize::Sm)
-                    .disabled(self.general_workspace_busy)
-                    .on_click(cx.listener(|this, _, _, cx| this.set_general_workspace(None, cx))),
+                        ButtonVariant::Ghost,
+                        !self.general_workspace_busy && !(showing && self.general_workspace_resetting),
+                        resetting || (showing && self.general_workspace_resetting),
+                        showing && self.general_workspace_resetting,
+                        |this, cx| this.set_general_workspace(None, cx),
+                    ),
                 )
-            })
+            });
+        div().w_full().flex().flex_col().child(row).children(
+            self.general_workspace_error.as_ref().map(|(error, retry)| {
+                let retry = retry.clone();
+                div()
+                    .px(px(20.0))
+                    .pb(px(12.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .text_size(ui_px(12.0))
+                    .child(div().flex_1().text_color(theme.danger_text).child(error.clone()))
+                    .child(
+                        div()
+                            .id("general-workspace-retry")
+                            .role(gpui::Role::Button)
+                            .tab_index(0)
+                            .text_color(theme.text_secondary)
+                            .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
+                            .child(tr!("common.retry"))
+                            .on_activation(cx, move |this, _, cx| {
+                                if !this.general_workspace_busy && !showing {
+                                    match retry.clone() {
+                                        GeneralWorkspaceRetry::Save(path) => this.set_general_workspace(path, cx),
+                                        GeneralWorkspaceRetry::Choose => this.choose_general_workspace(cx),
+                                    }
+                                }
+                            }),
+                    )
+            }),
+        )
     }
 
     fn choose_general_workspace(&mut self, cx: &mut Context<Self>) {

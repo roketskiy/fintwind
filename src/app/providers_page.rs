@@ -241,6 +241,10 @@ impl Fintwind {
         &self,
         id: &str,
     ) -> Vec<fintwind_protocol::provider_session::IntegrationOAuthMethod> {
+        if self.settings_machine_selected() {
+            return self.ssh.provider_integrations.iter().find(|row| row.id == id)
+                .map(|row| row.oauth_methods.clone()).unwrap_or_default();
+        }
         self.providers_oauth_methods
             .get(id)
             .cloned()
@@ -362,14 +366,17 @@ impl Fintwind {
                 }
                 match loaded {
                     Ok(providers) => {
+                        if this.settings_machine_selected() { this.ssh.providers_loaded = true; }
                         let selected_missing =
                             this.providers_selected.as_deref().is_some_and(|id| {
                                 id != OPENCODE_PROVIDER
                                     && !providers.iter().any(|provider| provider.id == id)
                             });
                         let page_reload = this.providers_selected.is_some();
-                        this.providers_store = providers;
-                        this.rebuild_image_models(cx);
+                        *this.settings_providers_mut() = providers;
+                        if !this.settings_machine_selected() {
+                            this.rebuild_image_models(cx);
+                        }
                         if selected_missing {
                             this.providers_selected = None;
                             this.providers_adding = false;
@@ -406,21 +413,29 @@ impl Fintwind {
     /// without a restart. Thinking variants come from the models.dev table
     /// the session holds; a commit before any fetch keeps raw variants only.
     pub(super) fn commit_custom_providers(&mut self, cx: &mut Context<Self>) {
+        if self.settings_machine_selected() && !self.ssh.providers_loaded { return; }
+        let Some(daemon) = self.settings_daemon() else { return; };
         self.providers_load_generation += 1;
         if self.providers_save_in_flight {
             self.providers_save_pending = true;
             return;
         }
         self.providers_save_in_flight = true;
-        let providers = self.providers_store.clone();
+        let providers = self.settings_providers().to_vec();
         let submitted = providers.clone();
         let catalog = self.models_dev_table.clone();
-        let workspace = self.provider_workspace();
-        let daemon = self.daemon.clone();
+        let workspace = self.provider_auth_target().map(|(_, workspace)| workspace);
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
+                    if daemon.is_remote() {
+                        return Self::settings_json::<Vec<fintwind_client::opencode_config::ProviderConfigEntry>>(&daemon, fintwind_client::Command::SaveOpenCodeProviders {
+                            providers: serde_json::to_value(providers.into_iter().map(fintwind_client::opencode_config::ProviderConfigEntry::from).collect::<Vec<_>>())?,
+                            catalog: catalog.as_deref().map(serde_json::to_value).transpose()?,
+                            workspace,
+                        }).map(|entries| entries.into_iter().map(Into::into).collect());
+                    }
                     let store = fintwind_client::persistence::StateStore::remote(daemon);
                     fintwind_client::opencode_config::save_providers_with_credentials_at(
                         &fintwind_client::opencode_config::config_path(),
@@ -1015,9 +1030,17 @@ impl Fintwind {
         cx.notify();
     }
 
+    pub(super) fn settings_providers(&self) -> &[CustomProvider] {
+        if self.settings_machine_selected() { &self.ssh.providers } else { &self.providers_store }
+    }
+
+    pub(super) fn settings_providers_mut(&mut self) -> &mut Vec<CustomProvider> {
+        if self.settings_machine_selected() { &mut self.ssh.providers } else { &mut self.providers_store }
+    }
+
     pub(super) fn selected_custom_provider(&self) -> Option<CustomProvider> {
         let selected = self.providers_selected.clone();
-        self.providers_store
+        self.settings_providers()
             .iter()
             .find(|provider| Some(&provider.id) == selected.as_ref())
             .cloned()

@@ -52,9 +52,41 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: bun scripts/release-ci.ts checks
 
+  ssh-daemon:
+    name: Linux SSH daemon ${{ matrix.arch }}
+    needs: version
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build Linux daemon
+        env:
+          SSH_ARCH: ${{ matrix.arch }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          toolchain=$(cat .github/rust-version)
+          target="$SSH_ARCH-unknown-linux-musl"
+          rustup toolchain install "$toolchain" --profile minimal --target "$target"
+          CC=musl-gcc cargo "+$toolchain" build --locked --release --target "$target" -p fintwind-daemon --bin fintwind-daemon
+          mkdir -p ssh-daemons
+          cp "target/$target/release/fintwind-daemon" "ssh-daemons/fintwind-daemon-linux-$SSH_ARCH"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ssh-daemon-${{ matrix.arch }}
+          path: ssh-daemons/*
+          if-no-files-found: error
+
   windows:
     name: Windows ${{ matrix.arch }}
-    needs: version
+    needs: [version, ssh-daemon]
     strategy:
       fail-fast: false
       matrix:
@@ -82,12 +114,19 @@ jobs:
       - name: Install Inno Setup
         run: choco install innosetup --yes --no-progress
 
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: ssh-daemon-*
+          path: target/release
+          merge-multiple: true
+
       - name: Bundle
         env:
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
           # CI publishes the stable channel only; beta is a local build.
           FINTWIND_CHANNEL: stable
+          FINTWIND_REQUIRE_SSH_DAEMONS: "1"
         run: bun scripts/bundle-windows.ts --channel=stable
 
       - uses: actions/upload-artifact@v7

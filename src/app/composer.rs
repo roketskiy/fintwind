@@ -2762,22 +2762,21 @@ impl Fintwind {
         let has_draft = !self.composer.read(cx).content().trim().is_empty()
             || !self.composer_attachments.is_empty()
             || !self.composer_references.is_empty();
+        let can_send = has_draft && !self.composer_attachments_unresolved();
         // Stop stands in for send, and with a draft waiting it is a pair of        // buttons — the row's budget has to pay for whichever it draws.
         let paired_send = matches!(submit_action, ComposerSubmitAction::Stop) && has_draft;
         let traits = self.model_traits_for_session();
         let plan = self.composer_row_plan(window, traits.as_ref(), paired_send);
         let autocomplete = self.render_composer_autocomplete(window, cx);
         let autocomplete_open = autocomplete.is_some();
-        // The chat column accepts the drop and stages attachment chips. The
-        // card highlights both under the pointer and while the pointer is
-        // anywhere else in that column, so a drag over the transcript reads
-        // as the same target. The wash arrives pre-blended because a
-        // drag-over refinement replaces the card's fill rather than
-        // compositing over it.
-        let drop_wash = theme.composer.blend(theme.overlay_strong);
-        let drop_ring = theme.accent.opacity(0.7);
+        let attachment_loading = super::ssh_page::ssh_wait_phase(
+            &self.composer_attachment_loading,
+            self.selected_composer_draft_key(),
+            self.composer_attachments_importing(),
+            cx,
+        ) == crate::ui::loading::LoadingPhase::Visible;
         let container = div().flex_none().px(px(20.0)).flex().flex_col().when(
-            self.selected_workspace_path().is_some(),
+            dock_capsule && self.selected_workspace_path().is_some(),
             |composer| {
                 composer.child(
                     div()

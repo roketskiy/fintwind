@@ -91,15 +91,28 @@ impl Fintwind {
         if !force && fresh {
             return;
         }
+        let host = self.settings_ssh_host();
+        let daemon = match host {
+            Some(id) => {
+                let Some(client) = self.ssh_client_for(id) else {
+                    return;
+                };
+                client
+            }
+            None => self.daemon.client(),
+        };
         self.skills_scan_pending = true;
+        self.skills_scan_error = None;
         self.skills_scan_generation += 1;
         let generation = self.skills_scan_generation;
         let projects = self.skill_scan_projects();
-        let daemon = self.daemon.client();
         cx.spawn(async move |this, cx| {
             let catalog = cx
                 .background_executor()
                 .spawn(async move {
+                    if host.is_some() {
+                        return fintwind_client::ssh::load_skills(&daemon);
+                    }
                     match daemon.request(
                         Uuid::nil(),
                         Uuid::nil(),
@@ -139,6 +152,71 @@ impl Fintwind {
         self.ensure_skills_catalog(true, cx);
     }
 
+    pub(super) fn reset_skills_machine(&mut self, cx: &mut Context<Self>) {
+        self.skills_catalog = None;
+        self.skills_scanned_at = None;
+        self.skills_selected = None;
+        self.skills_delete_arming = None;
+        self.skills_scan_generation += 1;
+        self.skills_scan_pending = false;
+        self.skills_scan_error = None;
+        if self.mode == WorkspaceMode::Settings && self.settings_page == SettingsPage::Skills {
+            self.ensure_skills_catalog(true, cx);
+        }
+    }
+
+    fn change_remote_skill(
+        &mut self,
+        id: Uuid,
+        path: &Path,
+        enabled: Option<bool>,
+        cx: &mut Context<Self>,
+    ) {
+        let key = (id, path.to_path_buf());
+        if self.skills_remote_pending.contains_key(&key) {
+            return;
+        }
+        let Some(client) = self.ssh_client_for(id) else {
+            return;
+        };
+        let Some(skill) = self.skills_catalog.as_ref().and_then(|catalog| {
+            catalog
+                .skills
+                .iter()
+                .find(|entry| entry.primary().dir == path)
+        }) else {
+            return;
+        };
+        let dirs = skill
+            .installs
+            .iter()
+            .map(|install| install.dir.clone())
+            .collect();
+        self.skills_remote_pending.insert(key.clone(), enabled);
+        self.skills_remote_errors.remove(&key);
+        self.skills_delete_arming = None;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(
+                    async move { fintwind_client::ssh::change_skill(Some(&client), dirs, enabled) },
+                )
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                app.skills_remote_pending.remove(&key);
+                if let Err(error) = result {
+                    app.skills_remote_errors.insert(key, (enabled, error.to_string()));
+                }
+                if app.settings_ssh_host() == Some(id) {
+                    app.invalidate_skills_catalog(cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
     /// `(display name, path)` per scannable project. Projectless workspaces
     /// are generated directories that never hold curated skills.
     fn skill_scan_projects(&self) -> Vec<(String, PathBuf)> {
@@ -157,6 +235,10 @@ impl Fintwind {
         enabled: bool,
         cx: &mut Context<Self>,
     ) {
+        if let Some(id) = self.settings_ssh_host() {
+            self.change_remote_skill(id, &primary_dir, Some(enabled), cx);
+            return;
+        }
         let skill = self.skills_catalog.as_ref().and_then(|catalog| {
             catalog
                 .skills
@@ -238,6 +320,10 @@ impl Fintwind {
 
     /// Trash every copy of the skill keyed by `primary_dir`.
     fn delete_skill(&mut self, primary_dir: PathBuf, cx: &mut Context<Self>) {
+        if let Some(id) = self.settings_ssh_host() {
+            self.change_remote_skill(id, &primary_dir, None, cx);
+            return;
+        }
         let entry = self.skills_catalog.as_ref().and_then(|catalog| {
             catalog
                 .skills
@@ -362,16 +448,69 @@ impl Fintwind {
         let catalog = self.skills_catalog.clone();
         let query = self.skills_search.read(cx).content().trim().to_lowercase();
 
-        let Some(catalog) = catalog else {
-            // The startup prefetch makes this a first-frames-only state.
+        let phase = if self.skills_scan_error.is_none() && self.settings_ssh_host_ready() {
+            let (phase, wake) = crate::ui::loading::LoadingDelay::observe(
+                &mut self.skills_loading.borrow_mut(),
+                self.settings_ssh_host(),
+                catalog.is_none() && self.skills_scan_pending,
+            );
+            if let Some(wake) = wake {
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(wake.delay()).await;
+                    wake.fired();
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                })
+                .detach();
+            }
+            phase
+        } else {
+            *self.skills_loading.borrow_mut() = None;
+            crate::ui::loading::LoadingPhase::Done
+        };
+        if phase != crate::ui::loading::LoadingPhase::Done {
             return div()
                 .size_full()
                 .pt(px(12.0))
-                .child(skills_status_row(&theme, tr!("skills.scanning")))
+                .when(phase == crate::ui::loading::LoadingPhase::Visible, |body| {
+                    body.px(px(12.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(12.0))
+                        .children((0..5).map(|index| {
+                            div()
+                                .h(px(38.0))
+                                .w(px(if index % 2 == 0 { 210.0 } else { 170.0 }))
+                                .rounded(px(5.0))
+                                .bg(theme.overlay_strong)
+                        }))
+                })
+                .into_any_element();
+        }
+        let Some(catalog) = catalog else {
+            return div()
+                .size_full()
+                .pt(px(12.0))
+                .child(if let Some(error) = &self.skills_scan_error {
+                    skills_scan_error(error, &theme, cx)
+                } else if !self.settings_ssh_host_ready() {
+                    skills_status_row(&theme, tr!("ssh.offline"))
+                } else {
+                    div()
+                })
                 .into_any_element();
         };
         if catalog.skills.is_empty() {
-            return skills_empty_state(&theme).into_any_element();
+            return div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .children(
+                    self.skills_scan_error
+                        .as_ref()
+                        .map(|error| skills_scan_error(error, &theme, cx)),
+                )
+                .child(skills_empty_state(&theme))
+                .into_any_element();
         }
 
         let indices = self.visible_skill_indices(&catalog, &query);
@@ -415,7 +554,22 @@ impl Fintwind {
             .min_h_0()
             .flex()
             .child(self.render_skills_list_column(&catalog, &query, &rows, &theme, cx))
-            .child(div().flex_1().min_w_0().flex().flex_col().child(detail))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .when(!self.settings_ssh_host_ready(), |el| {
+                        el.child(skills_status_row(&theme, tr!("ssh.settings_cached")))
+                    })
+                    .children(
+                        self.skills_scan_error
+                            .as_ref()
+                            .map(|error| skills_scan_error(error, &theme, cx)),
+                    )
+                    .child(detail),
+            )
             .into_any_element()
     }
 
@@ -874,6 +1028,29 @@ impl Fintwind {
         let skill_file = skill.primary().skill_file.clone();
         let enabled = skill.enabled;
         let armed = self.skills_delete_arming.as_ref() == Some(&dir);
+        let remote_key = self.settings_ssh_host().map(|id| (id, dir.clone()));
+        let pending_action = remote_key.as_ref().and_then(|key| self.skills_remote_pending.get(key));
+        let pending = pending_action.is_some();
+        let indicator_action = pending_action.copied().or_else(|| {
+            let loading = self.skills_remote_loading.borrow();
+            loading.as_ref().and_then(|loading| {
+                let (host, path, action) = loading.key();
+                (remote_key.as_ref() == Some(&(*host, path.clone()))).then_some(*action)
+            })
+        });
+        let pending_phase = if let Some(key) = remote_key.as_ref() {
+            super::ssh_page::ssh_wait_phase(
+                &self.skills_remote_loading,
+                (key.0, key.1.clone(), indicator_action.flatten()),
+                pending,
+                cx,
+            )
+        } else {
+            *self.skills_remote_loading.borrow_mut() = None;
+            crate::ui::loading::LoadingPhase::Done
+        };
+        let operation_busy = pending || pending_phase == crate::ui::loading::LoadingPhase::Visible;
+        let remote_error = remote_key.as_ref().and_then(|key| self.skills_remote_errors.get(key));
 
         let scope_caption = match &skill.project {
             Some(project) => tr!("skills.scope_in_project", project = project),
@@ -884,7 +1061,7 @@ impl Fintwind {
         let toggle = toggle_switch(
             SharedString::from(format!("skill-enabled-{}", skill.row_key)),
             enabled,
-            false,
+            !self.settings_ssh_host_ready() || operation_busy,
             *theme,
             window,
             cx,
@@ -1080,6 +1257,9 @@ impl Fintwind {
             .on_click(cx.listener({
                 let dir = dir.clone();
                 move |this, _, _, cx| {
+                    if operation_busy || this.settings_ssh_host().is_some_and(|id| this.skills_remote_pending.contains_key(&(id, dir.clone()))) {
+                        return;
+                    }
                     if this.skills_delete_arming.as_ref() == Some(&dir) {
                         this.delete_skill(dir.clone(), cx);
                     } else {
@@ -1220,8 +1400,30 @@ impl Fintwind {
                                     .child(SharedString::from(caption)),
                             ),
                     )
-                    .child(toggle),
+                    .child(toggle)
+                    .when(indicator_action.is_some_and(|action| action.is_some()) && pending_phase == crate::ui::loading::LoadingPhase::Visible, |row| {
+                        row.child(motion::spin_slow(icon("icons/loader-circle.svg", 12.0, theme.text_tertiary)))
+                    }),
             )
+            .children(remote_error.map(|(retry, error)| {
+                let retry = *retry;
+                let dir = dir.clone();
+                let host = remote_key.as_ref().map(|key| key.0);
+                div().mt(px(10.0)).flex().items_center().gap(px(8.0))
+                    .text_size(ui_px(11.0)).text_color(theme.danger_text)
+                    .child(div().flex_1().min_w_0().child(error.clone()))
+                    .children(retry.map(|enabled| {
+                        div().id("remote-skill-retry").role(gpui::Role::Button).tab_index(0)
+                            .text_color(theme.text_secondary)
+                            .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
+                            .child(tr!("common.retry"))
+                            .on_activation(cx, move |this, _, cx| {
+                                if !operation_busy && let Some(id) = host.filter(|id| this.settings_ssh_host() == Some(*id)) {
+                                    this.change_remote_skill(id, &dir, Some(enabled), cx);
+                                }
+                            })
+                    }))
+            }))
             .child(
                 div()
                     .mt(px(14.0))
@@ -1262,11 +1464,12 @@ impl Fintwind {
                     .items_center()
                     .flex_wrap()
                     .gap(px(7.0))
-                    .child(open_button)
-                    .child(reveal_button)
+                    .when(!self.settings_machine_selected(), |el| {
+                        el.child(open_button).child(reveal_button)
+                    })
                     .child(copy_button)
                     .child(div().flex_1())
-                    .child(delete_button),
+                    .when(self.settings_ssh_host_ready(), |el| el.child(delete_button)),
             )
             .children(document)
             .children(selection_input);

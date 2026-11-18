@@ -51,6 +51,36 @@ const DEFAULT_OUTPUT_LIMIT: u64 = 32_000;
 // not interleave with another migration or provider save in this client.
 static PROVIDER_SAVE_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct ProviderConfigEntry {
+    provider: CustomProvider,
+    raw: Value,
+    native: bool,
+    npm_touched: bool,
+}
+
+impl From<CustomProvider> for ProviderConfigEntry {
+    fn from(mut provider: CustomProvider) -> Self {
+        Self {
+            raw: std::mem::take(&mut provider.raw),
+            native: provider.native,
+            npm_touched: provider.npm_touched,
+            provider,
+        }
+    }
+}
+
+impl From<ProviderConfigEntry> for CustomProvider {
+    fn from(entry: ProviderConfigEntry) -> Self {
+        Self {
+            raw: entry.raw,
+            native: entry.native,
+            npm_touched: entry.npm_touched,
+            ..entry.provider
+        }
+    }
+}
+
 pub fn is_key_reference(key: &str) -> bool {
     key.contains("{env:") || key.contains("{file:")
 }
@@ -991,7 +1021,7 @@ fn set_or_remove_modalities(spec: &mut Map<String, Value>, key: &str, values: &[
 /// `timeout`, …) which ride along in [`McpServer::raw`]. V1 files that still
 /// place server names directly under `mcp` are read and rewritten into
 /// `mcp.servers`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct McpServer {
     /// The entry's key in `mcp.servers` — also its display name.
     pub name: String,
@@ -1015,7 +1045,7 @@ pub struct McpServer {
     pub raw: Value,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum McpServerKind {
     #[default]
     Local,
@@ -1023,7 +1053,7 @@ pub enum McpServerKind {
 }
 
 /// How a remote MCP server authenticates over OAuth.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum McpOAuthMode {
     /// Omit `oauth` so OpenCode auto-detects a 401 and runs the flow.
     #[default]
@@ -1034,7 +1064,7 @@ pub enum McpOAuthMode {
     Custom,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct McpOAuth {
     pub mode: McpOAuthMode,
     pub client_id: String,

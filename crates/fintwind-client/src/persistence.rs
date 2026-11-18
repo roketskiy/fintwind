@@ -943,6 +943,7 @@ pub struct StateStore {
     app_settings_path: PathBuf,
     legacy_settings_paths: Vec<PathBuf>,
     daemon: DaemonSupervisor,
+    publish_daemon_settings: bool,
     /// A task snapshot may only be written after this client has successfully
     /// loaded the daemon's authoritative state. Falling back to an empty UI
     /// after a transient RPC failure must never turn the next ordinary save
@@ -988,6 +989,9 @@ impl Default for DesktopSaves {
 impl StateStore {
     pub fn default_path() -> PathBuf {
         if cfg!(debug_assertions) {
+            if let Some(root) = debug_data_directory() {
+                return root.join("app.db");
+            }
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .parent()
                 .and_then(Path::parent)
@@ -1009,6 +1013,7 @@ impl StateStore {
             legacy_settings_paths: default_legacy_settings_paths(),
             path: Self::default_path(),
             daemon,
+            publish_daemon_settings: true,
             task_state_loaded: Arc::new(AtomicBool::new(false)),
             saves: Arc::new(DesktopSaves::default()),
         }
@@ -1022,6 +1027,16 @@ impl StateStore {
         store.app_settings_path = directory.join("app.json");
         store.legacy_settings_paths = Vec::new();
         store
+    }
+
+    pub fn ssh_workspace(daemon: DaemonSupervisor, directory: &Path) -> Self {
+        let mut store = Self::remote_in(daemon, directory);
+        store.publish_daemon_settings = false;
+        store
+    }
+
+    pub fn publishes_daemon_settings(&self) -> bool {
+        self.publish_daemon_settings
     }
 
     pub fn set_save_wake(&self, wake: smol::channel::Sender<()>) {
@@ -1893,9 +1908,9 @@ impl StateStore {
                 saved.1 = navigation;
             }
         }
-        self.daemon
-            .update_settings(snapshot.daemon_settings.clone())
-            .map_err(to_io_error)?;
+        if self.publish_daemon_settings {
+            self.daemon.update_settings(snapshot.daemon_settings).map_err(to_io_error)?;
+        }
         // Waiting for the COMMIT, not merely a socket enqueue, is the memory
         // bound. The response contains only lightweight catalog projections.
         match self
@@ -1955,6 +1970,15 @@ impl StateStore {
     fn write_app_state(&self, state: &AppState) -> io::Result<()> {
         write_json_atomically(&self.app_state_path, state)
     }
+}
+
+pub fn debug_data_directory() -> Option<PathBuf> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    std::env::var_os("FINTWIND_DEBUG_DATA_DIR")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
 }
 
 /// Fetches one daemon-owned session. Remote image materialization is kept

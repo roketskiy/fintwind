@@ -38,16 +38,26 @@ impl Fintwind {
     /// front — the merge targets it, not whichever provider is selected when
     /// the fetch lands.
     fn fetch_provider_models(&mut self, cx: &mut Context<Self>) {
-        if self.models_dev_fetching {
-            return;
-        }
         let Some(provider) = self.selected_custom_provider() else {
             return;
         };
         let provider_id = provider.id.clone();
+        if self.provider_models_fetching.contains_key(&provider_id)
+            || self.provider_models_loading.borrow().get(&provider_id)
+                .and_then(Option::as_ref).is_some_and(|loading| loading.is_visible())
+        {
+            return;
+        }
+        let requested_provider = provider.clone();
+        let requested_host = self.settings_ssh_host();
+        let Some((credentials, workspace)) = self.settings_provider_credentials() else { return; };
         self.models_dev_fetching = true;
-        let credentials = fintwind_client::persistence::StateStore::remote(self.daemon.clone());
-        let workspace = self.provider_workspace();
+        self.provider_connectivity_generation += 1;
+        let generation = self.provider_connectivity_generation;
+        self.provider_models_fetching.insert(provider_id.clone(), generation);
+        // Each provider keeps its own fetch error so concurrent fetches
+        // cannot overwrite each other on the shared slot.
+        self.provider_models_errors.remove(&provider_id);
         cx.notify();
 
         cx.spawn(async move |this, cx| {
@@ -67,17 +77,30 @@ impl Fintwind {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                this.models_dev_fetching = false;
+                let owns_entry =
+                    this.provider_models_fetching.get(&provider_id) == Some(&generation);
+                if owns_entry {
+                    this.provider_models_fetching.remove(&provider_id);
+                }
+                this.models_dev_fetching = !this.provider_models_fetching.is_empty();
+                if !owns_entry
+                    || this.settings_ssh_host() != requested_host
+                    || !this.settings_providers().iter().any(|current| current == &requested_provider)
+                {
+                    cx.notify();
+                    return;
+                }
                 let (api_models, table) = fetched;
                 match api_models {
                     Ok(api_models) => {
                         if let Some(table) = &table {
                             this.models_dev_table = Some(table.clone());
                         }
+                        this.provider_models_errors.remove(&provider_id);
                         this.apply_fetched_models(&provider_id, &api_models, table.as_deref(), cx);
                     }
                     Err(error) => {
-                        this.show_toast(tr!(
+                        this.provider_models_errors.insert(provider_id.clone(), tr!(
                             "providers.fetch_failed",
                             error = api_list_error_text(&error)
                         ));
@@ -641,10 +664,17 @@ impl Fintwind {
     /// Shared by page entry and credential changes. Starting a newer read
     /// supersedes older callbacks, including their loading/error state.
     fn fetch_provider_integrations(&mut self, report_failure: bool, cx: &mut Context<Self>) {
+        if let Some(host) = self.settings_ssh_host() {
+            self.fetch_ssh_provider_integrations(host, cx);
+            return;
+        }
         self.providers_integrations_generation =
             self.providers_integrations_generation.wrapping_add(1);
         let generation = self.providers_integrations_generation;
         self.providers_auth_loading = true;
+        // The last known authorized set stays on screen while the new read
+        // runs; the previous failure (if any) no longer describes it.
+        self.providers_auth_error = None;
         let workspace = self.provider_workspace();
         let requested_workspace = workspace.clone();
         let daemon = self.daemon.clone();
@@ -688,6 +718,69 @@ impl Fintwind {
             });
         })
         .detach();
+    }
+
+    /// Re-read the authorization integrations after an in-place failure.
+    /// The last known authorized set stays until the retry lands, so this
+    /// only starts when no read is already running.
+    pub(super) fn retry_provider_integrations(&mut self, cx: &mut Context<Self>) {
+        if self.providers_auth_loading {
+            return;
+        }
+        self.fetch_provider_integrations(false, cx);
+    }
+
+    pub(super) fn reset_provider_auth_target(&mut self, cx: &mut Context<Self>) {
+        self.tear_down_provider_oauth(cx);
+        self.providers_integrations_generation = self.providers_integrations_generation.wrapping_add(1);
+        self.providers_auth_loading = false;
+        self.providers_auth_error = None;
+        self.provider_form_api_key.update(cx, |input, cx| input.set_content(String::new(), cx));
+        self.clear_oauth_code_field(cx);
+        self.ssh.provider_workspace = None;
+        self.ssh.provider_integrations.clear();
+        self.apply_integrations(Vec::new());
+    }
+
+    pub(super) fn provider_auth_target(&self) -> Option<(fintwind_client::DaemonSupervisor, (PathBuf, PathBuf))> {
+        if self.settings_machine_selected() {
+            return Some((self.settings_ssh_supervisor()?, self.ssh.provider_workspace.clone()?));
+        }
+        Some((self.daemon.clone(), self.provider_workspace()?))
+    }
+
+    fn fetch_ssh_provider_integrations(&mut self, host: Uuid, cx: &mut Context<Self>) {
+        let Some(daemon) = self.settings_ssh_supervisor() else { return; };
+        self.providers_integrations_generation = self.providers_integrations_generation.wrapping_add(1);
+        let generation = self.providers_integrations_generation;
+        self.providers_auth_loading = true;
+        self.providers_auth_error = None;
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_executor().spawn(async move {
+                fintwind_client::ssh::provider_integrations(daemon)
+            }).await;
+            let _ = this.update(cx, |app, cx| {
+                if app.settings_ssh_host() != Some(host) || app.providers_integrations_generation != generation { return; }
+                app.providers_auth_loading = false;
+                match result {
+                    Ok((workspace, rows)) => {
+                        app.ssh.provider_workspace = Some(workspace);
+                        app.apply_integrations(rows.clone());
+                        app.ssh.provider_integrations = rows;
+                    }
+                    Err(error) => {
+                        app.providers_auth_error = Some(tr!(
+                            "providers.auth_load_failed",
+                            error = error.to_string()
+                        ));
+                        app.subscriptions_connections_failed();
+                        app.show_toast(tr!("providers.auth_load_failed", error = error.to_string()));
+                    }
+                }
+                cx.notify();
+            });
+        }).detach();
+        cx.notify();
     }
 
     /// Store one integration fetch: the authorized set, the key-method set,
@@ -790,11 +883,12 @@ impl Fintwind {
         if key.is_empty() {
             return;
         }
-        let Some(workspace) = self.provider_workspace() else {
+        let Some((daemon, workspace)) = self.provider_auth_target() else {
             return;
         };
+        let host = self.settings_ssh_host();
+        let generation = self.providers_integrations_generation;
         self.providers_auth_loading = true;
-        let daemon = self.daemon.clone();
         cx.spawn(async move |this, cx| {
             let outcome = cx
                 .background_executor()
@@ -812,15 +906,20 @@ impl Fintwind {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                if this.settings_ssh_host() != host || this.providers_integrations_generation != generation { return; }
                 this.providers_auth_loading = false;
                 match outcome {
                     Ok(provider_id) => {
                         // The server is the truth: re-read its connection
                         // list instead of assuming the connect took.
-                        this.providers_authorized.insert(provider_id.clone());
-                        this.providers_key_methods.insert(provider_id.clone());
-                        this.exit_provider_form(cx);
-                        this.select_provider(builtin_selection_id(&provider_id), cx);
+                        if host.is_none() {
+                            this.providers_authorized.insert(provider_id.clone());
+                            this.providers_key_methods.insert(provider_id.clone());
+                            this.exit_provider_form(cx);
+                            this.select_provider(builtin_selection_id(&provider_id), cx);
+                        } else {
+                            this.provider_form_api_key.update(cx, |input, cx| input.set_content(String::new(), cx));
+                        }
                         this.show_success_toast(tr!("providers.authorized_toast"));
                     }
                     Err(error) => this
@@ -837,13 +936,14 @@ impl Fintwind {
     /// logout. The page then shows the provider as unauthorized; its stale
     /// probe verdict is dropped.
     pub(super) fn logout_builtin_provider(&mut self, provider_id: String, cx: &mut Context<Self>) {
-        let Some(workspace) = self.provider_workspace() else {
+        let Some((daemon, workspace)) = self.provider_auth_target() else {
             return;
         };
+        let host = self.settings_ssh_host();
+        let generation = self.providers_integrations_generation;
         self.providers_auth_loading = true;
         self.invalidate_subscriptions();
         self.providers_delete_arming = None;
-        let daemon = self.daemon.clone();
         cx.spawn(async move |this, cx| {
             let removed = cx
                 .background_executor()
@@ -855,10 +955,11 @@ impl Fintwind {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                if this.settings_ssh_host() != host || this.providers_integrations_generation != generation { return; }
                 this.providers_auth_loading = false;
                 match removed {
                     Ok(provider_id) => {
-                        this.providers_authorized.remove(provider_id.as_str());
+                        if host.is_none() { this.providers_authorized.remove(provider_id.as_str()); }
                         if this.providers_builtin_catalog_check_id.as_deref()
                             == Some(provider_id.as_str())
                         {

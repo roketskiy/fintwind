@@ -362,7 +362,10 @@ def local():
     parser.add_argument("--settings-local-daemon", type=Path, help="verify settings against a separate local daemon")
     parser.add_argument("--skills-local-daemon", type=Path, help="verify skill isolation against a separate local daemon")
     parser.add_argument("--provider-isolation", action="store_true")
+    parser.add_argument("--peer-profile", type=Path, help="JSON containing a separate SSH profile and workspace")
     ns = parser.parse_args()
+    if ns.peer_profile and (not ns.desktop_test or ns.provider_isolation or ns.quit_during_turn):
+        parser.error("--peer-profile requires a desktop test without the internal peer or restart mode")
     if ns.native_provider_oauth and (not ns.native_app or ns.native_mcp_oauth or ns.provider_isolation):
         parser.error("--native-provider-oauth requires --native-app and is a separate test mode")
     if ns.quit_during_turn and not ns.desktop_test:
@@ -479,6 +482,11 @@ def local():
                             "daemon_port": ready["peer"]["port"],
                             "token_file": ready["peer"]["token_file"]}
                         fixture["peer_workspace"] = ready["peer"]["workspace"]
+                    if ns.peer_profile:
+                        peer = json.loads(ns.peer_profile.read_text(encoding="utf-8-sig"))
+                        if peer["profile"]["host"] == ns.host:
+                            parser.error("--peer-profile must point to a different SSH host")
+                        fixture.update(peer_profile=peer["profile"], peer_workspace=peer["workspace"])
                     if ns.live_model:
                         fixture["live_model"] = LIVE_MODEL
                     allowed = {"SYSTEMROOT", "WINDIR", "PATH", "PATHEXT", "COMSPEC"}
@@ -502,9 +510,13 @@ def local():
                                                 cwd=home, timeout=55)
                 if result.returncode == 0 and not proof.is_file():
                     raise RuntimeError("desktop test did not write a proof report")
-                if result.returncode == 0 and ns.provider_isolation and not ns.quit_during_turn:
-                    if json.loads(proof.read_text(encoding="utf-8")).get("switchedBetweenRemoteDaemons") is not True:
+                if result.returncode == 0 and (ns.peer_profile or (ns.provider_isolation and not ns.quit_during_turn)):
+                    report = json.loads(proof.read_text(encoding="utf-8"))
+                    if report.get("switchedBetweenRemoteDaemons") is not True:
                         raise RuntimeError("desktop test did not verify switching between remote daemons")
+                    if ns.peer_profile:
+                        report["sshHosts"] = [ns.host, peer["profile"]["host"]]
+                        proof.write_text(json.dumps(report, indent=2), encoding="utf-8")
                 if result.returncode == 0 and ns.quit_during_turn:
                     restart_proof = json.loads(proof.read_text(encoding="utf-8"))
                     if not all(restart_proof.get(field) is True for field in (

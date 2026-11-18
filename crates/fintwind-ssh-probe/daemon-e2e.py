@@ -379,6 +379,7 @@ def local():
     parser.add_argument("--provider-isolation", action="store_true")
     parser.add_argument("--peer-profile", type=Path, help="JSON containing a separate SSH profile and workspace")
     parser.add_argument("--managed-upgrade", action="store_true", help="exercise desktop deployment on an isolated remote daemon")
+    parser.add_argument("--rejected-clone", action="store_true", help="verify retry after GitHub rejects a remote clone")
     ns = parser.parse_args()
     if ns.peer_profile and (not ns.desktop_test or ns.provider_isolation or ns.quit_during_turn):
         parser.error("--peer-profile requires a desktop test without the internal peer or restart mode")
@@ -514,6 +515,8 @@ def local():
                     env.update({k: str(home) for k in ("USERPROFILE", "HOME", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP")})
                     env["FINTWIND_DEBUG_DATA_DIR"] = str(root / "desktop-data")
                     env["FINTWIND_SSH_DESKTOP_FIXTURE"] = json.dumps(fixture)
+                    if ns.rejected_clone:
+                        env["FINTWIND_SSH_E2E_REJECTED_CLONE"] = "1"
                     if ready.get("deployment_root"):
                         env["FINTWIND_SSH_E2E_DEPLOY_ROOT"] = ready["deployment_root"]
                     if ns.quit_during_turn:
@@ -525,7 +528,7 @@ def local():
                     else:
                         result = subprocess.run(desktop_command,
                                             env=env, cwd=home,
-                                            timeout=270 if ns.live_model else 150 if ns.quit_during_turn else 100)
+                                            timeout=270 if ns.live_model else 180 if ns.rejected_clone else 150 if ns.quit_during_turn else 100)
                     if result.returncode == 0 and ns.quit_during_turn:
                         result = subprocess.run(desktop_command,
                                                 env={**env, "FINTWIND_SSH_RESTART_PHASE": "1"},

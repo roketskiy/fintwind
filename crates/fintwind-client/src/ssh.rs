@@ -235,8 +235,9 @@ pub async fn create_project<H: client::Handler>(
     let repo = repository.map(github_repository).transpose()?;
     let clone = repo.map_or(String::new(), |url| {
         format!(
-            "LC_ALL=C GIT_TERMINAL_PROMPT=0 git clone --progress -- {} . >/dev/null || exit 13; ",
-            shell_arg(&url)
+            "LC_ALL=C GIT_TERMINAL_PROMPT=0 git clone --progress -- {} . >/dev/null || {{ cd .. && rmdir -- {} 2>/dev/null; exit 13; }}; ",
+            shell_arg(&url),
+            shell_arg(name),
         )
     });
     let script = format!(

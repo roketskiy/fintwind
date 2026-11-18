@@ -289,6 +289,30 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
         assert_eq!(input.read(cx).content(), fixture.workspace);
         assert_eq!(folder.read(cx).content(), ".git");
     });
+    if std::env::var_os("FINTWIND_SSH_E2E_REJECTED_CLONE").is_some() {
+        let inaccessible = format!("https://github.com/octocat/fintwind-e2e-{}", Uuid::new_v4().simple());
+        picker_cx.update(|_, cx| {
+            repository.update(cx, |input, cx| input.set_content(inaccessible.clone(), cx));
+            folder.update(cx, |input, cx| input.set_content("new-remote-project", cx));
+        });
+        picker_cx.simulate_click(submit.center(), gpui::Modifiers::none());
+        let deadline = Instant::now() + Duration::from_secs(135);
+        loop {
+            picker_cx.run_until_parked();
+            if picker_cx.read_entity(&picker, |app, _| app.toast.as_ref().is_some_and(|toast| {
+                toast.tone == ToastTone::Alert && toast.message.contains(&tr!("project.creation_failed"))
+            })) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "inaccessible repository did not become an error toast");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        picker_cx.update(|_, cx| {
+            assert_eq!(repository.read(cx).content(), inaccessible);
+            assert_eq!(input.read(cx).content(), fixture.workspace);
+            assert_eq!(folder.read(cx).content(), "new-remote-project");
+        });
+    }
     let empty = picker_cx.debug_bounds("segment empty").unwrap();
     picker_cx.simulate_click(empty.center(), gpui::Modifiers::none());
     picker_cx.run_until_parked();

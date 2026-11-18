@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::ui::ActivationExt;
 use chrono::Datelike as _;
 use fintwind_protocol::provider_quota::{
     ProviderQuota, QuotaBalance, QuotaStatus, QuotaWindow, QuotaWindowKind, is_local_quota_source,
@@ -12,10 +13,8 @@ use fintwind_protocol::provider_quota::{
 
 use super::*;
 use ely_gpui_component::{
-    buttons::IconButton,
     feedback::InlineMessage,
-    primitives::{IconName, Severity},
-    theme::ControlSize,
+    primitives::Severity,
     typography::{Caption, Label, tabular},
 };
 
@@ -63,8 +62,10 @@ pub(super) struct SubscriptionBoard {
     generation: u64,
     refresh: Option<bool>,
     connection_error: bool,
+    connections_loaded: bool,
     workspace: Option<(std::path::PathBuf, std::path::PathBuf)>,
     entries: BTreeMap<String, SubscriptionEntry>,
+    refresh_spins: RefCell<BTreeMap<String, motion::ActionSpin>>,
 }
 
 impl Fintwind {
@@ -72,6 +73,9 @@ impl Fintwind {
     pub(super) fn invalidate_subscriptions(&mut self) {
         self.provider_quota.generation = self.provider_quota.generation.wrapping_add(1);
         self.provider_quota.entries.clear();
+        self.provider_quota.connections_loaded = false;
+        *self.usage_quota_loading.borrow_mut() = None;
+        self.provider_quota.refresh_spins.get_mut().clear();
         self.provider_quota.workspace = None;
     }
 
@@ -103,6 +107,7 @@ impl Fintwind {
         self.provider_quota.connection_error = false;
         let force = self.provider_quota.refresh.take().unwrap_or(false);
         self.sync_subscription_workspace();
+        self.provider_quota.connections_loaded = true;
         self.provider_quota.generation = self.provider_quota.generation.wrapping_add(1);
         let visible: Vec<_> = SUBSCRIPTION_ORDER
             .iter()
@@ -140,6 +145,10 @@ impl Fintwind {
 
     pub(super) fn subscriptions_connection_error(&self) -> bool {
         self.provider_quota.connection_error
+    }
+
+    pub(super) fn subscriptions_connections_loaded(&self) -> bool {
+        self.provider_quota.connections_loaded
     }
 
     pub(super) fn load_one_subscription(
@@ -289,6 +298,7 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let (balance_only, _) = subscription_layout(provider, reading);
+        let has_data = reading.is_some_and(|quota| !quota.windows.is_empty() || !quota.balances.is_empty());
         let mut body = div().flex().flex_col().gap_2();
         if let Some(reading) = reading {
             for balance in &reading.balances {
@@ -298,13 +308,11 @@ impl Fintwind {
                 body = body.child(quota_window(window, theme));
             }
         }
-        if loading && reading.is_none_or(|quota| quota.windows.is_empty() && quota.balances.is_empty()) {
+        if loading && !has_data {
             body = body.child(subscription_loading_body(balance_only, slots, *theme));
         }
         let mut footer = div().flex().items_center().justify_between().gap_2();
-        if loading {
-            footer = footer.child(Caption::new(tr!("providers.quota_loading")));
-        } else if let Some(status) = subscription_state_line(
+        if (!loading || has_data) && let Some(status) = subscription_state_line(
             reading.map(|quota| &quota.status).unwrap_or(&QuotaStatus::NoData), theme,
         ) {
             footer = footer.child(status);
@@ -315,7 +323,7 @@ impl Fintwind {
                 .child(div().flex_1().min_w_0().text_size(ui_px(15.0)).font_weight(FontWeight::MEDIUM)
                     .truncate().child(self.subscription_display_name(provider)))
                 .children(reading.and_then(|quota| quota.plan.as_ref()).filter(|plan| !plan.is_empty()).map(|plan| Caption::new(plan.clone())))
-                .child(self.subscription_refresh_button(provider, loading, cx)))
+                .child(self.subscription_refresh_button(provider, loading, loading && has_data, cx)))
             .children(reading.and_then(|quota| quota.account.as_ref()).filter(|account| !account.is_empty()).map(|account| Caption::new(account.clone())))
             .child(body)
             .child(footer)
@@ -326,30 +334,65 @@ impl Fintwind {
         &self,
         provider: &str,
         loading: bool,
+        spinning: bool,
         cx: &mut Context<Self>,
-    ) -> IconButton {
+    ) -> Stateful<Div> {
         let provider_key = provider.to_owned();
-        IconButton::new(
-            SharedString::from(format!("refresh-subscription-{provider}")),
-            IconName::RefreshCw,
-        )
-        .size(ControlSize::Sm)
-        .disabled(loading)
-        .tooltip(format!(
+        let theme = Theme::current(cx);
+        let focus = self.transcript_control_focus(format!("refresh-subscription-{provider}"), cx);
+        let label = format!(
             "{} · {}",
             self.subscription_display_name(provider),
             tr!("usage_page.refresh")
-        ))
-        .on_click(cx.listener(move |this, _, _, cx| {
-            if !this
+        );
+        let refresh_icon = {
+            let mut spins = self.provider_quota.refresh_spins.borrow_mut();
+            if spins.get_mut(provider).is_some_and(|spin| {
+                (!loading && cx.reduce_motion()) || !spin.observe(loading)
+            }) {
+                spins.remove(provider);
+            }
+            if let Some(spin) = spins.get(provider) {
+                if cx.reduce_motion() {
+                    icon("icons/rotate-cw.svg", 14.0, theme.text_tertiary).into_any_element()
+                } else {
+                    spin.render(icon("icons/rotate-cw.svg", 14.0, theme.text_tertiary))
+                }
+            } else if spinning {
+                motion::spin_slow(icon("icons/rotate-cw.svg", 14.0, theme.text_tertiary))
+            } else {
+                icon("icons/rotate-cw.svg", 14.0, theme.text_tertiary).into_any_element()
+            }
+        };
+        div()
+        .id(SharedString::from(format!("refresh-subscription-{provider}")))
+        .role(gpui::Role::Button)
+        .aria_label(label.clone())
+        .track_focus(&focus)
+        .tab_index(0)
+        .size(px(26.0))
+        .rounded(px(7.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
+        .hover(|style| style.bg(theme.overlay))
+        .tooltip(Tooltip::text(label))
+        .child(refresh_icon)
+        .on_activation(cx, move |this, _, cx| {
+            if !loading && !this
                 .provider_quota
                 .entries
                 .get(&provider_key)
                 .is_some_and(|entry| entry.loading)
             {
+                this.provider_quota.refresh_spins.get_mut().insert(
+                    provider_key.clone(),
+                    motion::ActionSpin::start(),
+                );
                 this.load_one_subscription(&provider_key, true, cx);
             }
-        }))
+        })
     }
 }
 

@@ -1,4 +1,5 @@
 use crate::theme::{ThemeScheme, ui_px};
+use crate::ui::ActivationExt;
 
 use ely_gpui_component::{
     buttons::{Button, ButtonVariant, SegmentedControl},
@@ -10,6 +11,12 @@ use super::composer::next_picker_highlight;
 use super::*;
 
 actions!(fintwind_settings, [ClearSearch]);
+
+#[derive(Clone)]
+pub(super) enum GeneralWorkspaceRetry {
+    Choose,
+    Save(Option<PathBuf>),
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum OpenCodeManagementAction {
@@ -28,7 +35,7 @@ pub(super) struct OpenCodeUpdateStatus {
 
 /// The group heading sits outside the card: a quiet label, then one rounded
 /// card of rows, the way a settings document reads.
-fn settings_group_title(title: String, theme: Theme) -> Div {
+pub(super) fn settings_group_title(title: String, theme: Theme) -> Div {
     div()
         .mt(px(24.0))
         .mb(px(8.0))
@@ -39,7 +46,7 @@ fn settings_group_title(title: String, theme: Theme) -> Div {
         .child(title)
 }
 
-fn settings_card(theme: Theme) -> Div {
+pub(super) fn settings_card(theme: Theme) -> Div {
     div()
         .w_full()
         .flex()
@@ -88,7 +95,7 @@ pub(super) fn settings_row_text(title: String, description: Option<String>, them
 
 /// One setting row: icon chip plus title and description; the caller appends
 /// the control on the right.
-fn settings_row(
+pub(super) fn settings_row(
     path: &'static str,
     title: String,
     description: Option<String>,
@@ -107,7 +114,7 @@ fn settings_row(
 }
 
 /// Dashed hairline between rows, inset to the card padding.
-fn settings_separator(theme: Theme) -> Div {
+pub(super) fn settings_separator(theme: Theme) -> Div {
     div()
         .relative()
         .mx(px(20.0))
@@ -328,7 +335,7 @@ impl Fintwind {
             // the visit; the roster selection itself does.
             self.reset_providers_page(cx);
         }
-        if page == SettingsPage::General {
+        if page == SettingsPage::General && !self.settings_machine_selected() {
             // The threshold field always shows the stored value on entry;
             // a rejected edit restores it here as well as on commit.
             self.sync_auto_compact_threshold_input(cx);
@@ -483,7 +490,8 @@ impl Fintwind {
                 ),
             )
             .child(div().h(px(18.0)))
-            .child(div().px(px(12.0)).child(navigation))
+            .child(div().id("settings-navigation").flex_1().min_h_0().overflow_y_scroll().px(px(12.0)).child(navigation))
+            .child(self.render_settings_machine_picker(cx))
     }
 
     /// The search field's content, normalized the way the page filter expects.
@@ -691,6 +699,24 @@ impl Fintwind {
         let image_generate_model = image_generate
             .as_ref()
             .and_then(|config| config.model.clone());
+        let image_models_error = self.image_models_error.clone();
+        let image_models_pending = self.image_models_loading || image_models_error.is_some();
+        let (image_models_phase, image_models_wake) =
+            crate::ui::loading::LoadingDelay::observe(
+                &mut self.image_models_loading_delay.borrow_mut(),
+                (),
+                self.image_models_loading,
+            );
+        if let Some(wake) = image_models_wake {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(wake.delay()).await;
+                wake.fired();
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+        }
+        let image_models_spinning =
+            image_models_phase == crate::ui::loading::LoadingPhase::Visible;
         let image_model_label = image_generate_model
             .as_deref()
             .map(|model| {
@@ -699,7 +725,7 @@ impl Fintwind {
                     .find(|choice| choice.id == model)
                     .map(|choice| choice.label.clone())
                     .unwrap_or_else(|| {
-                        if self.image_models_loading {
+                        if image_models_pending {
                             model.to_owned()
                         } else {
                             tr!("settings.image_generation_model_unavailable", model = model)
@@ -717,11 +743,15 @@ impl Fintwind {
                 .selected(image_handle.is_open())
                 .w(px(220.0))
                 .justify_between()
-                .disabled(
-                    self.image_generate_busy
-                        || self.image_models_loading
-                        || image_generate.is_none(),
-                ),
+                .caret(!image_models_spinning)
+                .when(image_models_spinning, |chip| {
+                    chip.child(motion::spin_slow(icon(
+                        "icons/loader-circle.svg",
+                        12.0,
+                        theme.text_tertiary,
+                    )))
+                })
+                .disabled(self.image_generate_busy || image_generate.is_none()),
             "image-generate-model-menu",
             &image_handle,
             MenuAlign::BelowRight,
@@ -741,7 +771,11 @@ impl Fintwind {
                 }) {
                     items.push(
                         MenuItem::new(
-                            tr!("settings.image_generation_model_unavailable", model = model),
+                            if image_models_pending {
+                                model.clone()
+                            } else {
+                                tr!("settings.image_generation_model_unavailable", model = model)
+                            },
                             |_, _| {},
                         )
                         .disabled(true)
@@ -952,13 +986,47 @@ impl Fintwind {
                     )
                     .child(settings_separator(theme))
                     .child(
-                        settings_row(
-                            "icons/sparkle.svg",
-                            tr!("settings.image_generation_model"),
-                            Some(tr!("settings.image_generation_model_description")),
-                            theme,
-                        )
-                        .child(image_model_selector),
+                        div()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                settings_row(
+                                    "icons/sparkle.svg",
+                                    tr!("settings.image_generation_model"),
+                                    Some(tr!("settings.image_generation_model_description")),
+                                    theme,
+                                )
+                                .child(image_model_selector),
+                            )
+                            .when_some(image_models_error, |group, error| {
+                                group.child(
+                                    div()
+                                        .px(px(20.0))
+                                        .pb(px(10.0))
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(8.0))
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .text_size(ui_px(12.0))
+                                                .text_color(theme.danger_text)
+                                                .child(error),
+                                        )
+                                        .child(
+                                            Button::new(
+                                                "image-models-retry",
+                                                tr!("common.retry"),
+                                            )
+                                            .variant(ButtonVariant::Ghost)
+                                            .size(ControlSize::Sm)
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.rebuild_image_models_report(cx, true);
+                                            })),
+                                        ),
+                                )
+                            }),
                     )
                     .child(settings_separator(theme))
                     .child(
@@ -1609,6 +1677,7 @@ impl Fintwind {
             _ => return,
         };
         self.opencode_management_action = Some(action);
+        self.opencode_management_error = None;
         let generation = self.provider_binary_generation;
         let daemon = self.daemon.client();
         cx.notify();
@@ -1639,9 +1708,9 @@ impl Fintwind {
                         update_available,
                         check_error,
                     }) if action == OpenCodeManagementAction::Check => {
-                        if let Some(error) = &check_error {
-                            this.show_toast(tr!("settings.opencode_check_failed", error = error));
-                        }
+                        this.opencode_management_error = check_error
+                            .as_ref()
+                            .map(|error| tr!("settings.opencode_check_failed", error = error));
                         this.opencode_update_status = Some(OpenCodeUpdateStatus {
                             path,
                             current_version,
@@ -1663,16 +1732,12 @@ impl Fintwind {
                         this.refresh_opencode_after_management(cx);
                         this.show_toast(tr!("settings.opencode_updated"));
                     }
-                    Ok(_) => this.show_toast(tr!(
+                    Ok(_) => this.opencode_management_error = Some(tr!(
                         "settings.opencode_operation_failed",
                         error = "invalid daemon response"
                     )),
                     Err(error) => {
-                        if action != OpenCodeManagementAction::Check {
-                            this.opencode_update_status = None;
-                            this.refresh_provider_detection();
-                        }
-                        this.show_toast(tr!("settings.opencode_operation_failed", error = error))
+                        this.opencode_management_error = Some(tr!("settings.opencode_operation_failed", error = error));
                     }
                 }
                 cx.notify();
@@ -1785,6 +1850,7 @@ impl Fintwind {
             return;
         }
         self.general_workspace_busy = true;
+        self.general_workspace_resetting = false;
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -1803,7 +1869,10 @@ impl Fintwind {
                         }
                     }
                     Ok(Err(error)) => {
-                        this.show_toast(tr!("settings.general_workspace_failed", error = error))
+                        this.general_workspace_error = Some((
+                            tr!("settings.general_workspace_failed", error = error),
+                            GeneralWorkspaceRetry::Choose,
+                        ));
                     }
                     _ => {}
                 }
@@ -1818,6 +1887,8 @@ impl Fintwind {
             return;
         }
         self.general_workspace_busy = true;
+        self.general_workspace_resetting = path.is_none();
+        let retry_path = path.clone();
         let key = fintwind_protocol::settings::GENERAL_WORKSPACE_PATH_KEY;
         let mut settings = self.state.daemon_settings();
         let value = path.map(|path| path.to_string_lossy().into_owned());
@@ -1862,6 +1933,7 @@ impl Fintwind {
                 this.general_workspace_busy = false;
                 match result {
                     Ok((root, legacy_root)) => {
+                        this.general_workspace_error = None;
                         fintwind_protocol::projectless::set_workspace_root(root);
                         fintwind_protocol::projectless::set_legacy_root(legacy_root);
                         this.state.set_general_workspace_path(value);
@@ -1886,7 +1958,10 @@ impl Fintwind {
                         }
                     }
                     Err(error) => {
-                        this.show_toast(tr!("settings.general_workspace_failed", error = error))
+                        this.general_workspace_error = Some((
+                            tr!("settings.general_workspace_failed", error = error),
+                            GeneralWorkspaceRetry::Save(retry_path),
+                        ));
                     }
                 }
                 cx.notify();
@@ -2085,11 +2160,12 @@ impl Fintwind {
         .detach();
     }
 
-    /// Fetch availability from the workspace server, never from model metadata.
+    /// Fetch availability from the workspace server, never from model
+    /// metadata. The last known list stays on screen while a refresh runs.
     /// Background refreshes stay silent: the server needs time to load
-    /// configuration after start, so a first failure waits and retries once
-    /// before any toast. Only the retry's failure surfaces, and only when
-    /// the caller asked to report it.
+    /// configuration after start, so a first failure waits and retries once.
+    /// A retry's failure lands as an inline error with a retry action when
+    /// the caller asked to report it; silent refreshes keep the old list.
     pub(super) fn rebuild_image_models(&mut self, cx: &mut Context<Self>) {
         self.rebuild_image_models_report(cx, false);
     }
@@ -2110,8 +2186,12 @@ impl Fintwind {
     ) {
         self.image_models_generation += 1;
         let generation = self.image_models_generation;
-        self.image_models.clear();
+        self.image_models_error = None;
         let workspace = self.provider_workspace();
+        if self.image_models_workspace != workspace {
+            self.image_models.clear();
+            self.image_models_workspace = None;
+        }
         let requested_workspace = workspace.clone();
         let store = fintwind_client::persistence::StateStore::remote(self.daemon.clone());
         self.image_models_loading = true;
@@ -2140,6 +2220,7 @@ impl Fintwind {
                 match result {
                     Ok(mut models) => {
                         this.image_models_loading = false;
+                        this.image_models_error = None;
                         models.sort_by(|a, b| {
                             a.provider
                                 .cmp(&b.provider)
@@ -2147,15 +2228,16 @@ impl Fintwind {
                                 .then_with(|| a.id.cmp(&b.id))
                         });
                         this.image_models = models;
+                        this.image_models_workspace = requested_workspace;
                     }
                     Err(error) => {
                         if is_retry {
                             this.image_models_loading = false;
                             if report_failure {
-                                this.show_toast(tr!(
-                                    "settings.image_generation_load_failed",
-                                    error = error.to_string()
-                                ));
+                                this.image_models_error = Some(tr!(
+                                        "settings.image_generation_load_failed",
+                                        error = error.to_string()
+                                    ));
                             }
                         } else {
                             this.schedule_image_models_retry(cx, generation, report_failure);
@@ -2194,7 +2276,7 @@ impl Fintwind {
     }
 
     fn set_image_generate_model(&mut self, model: Option<String>, cx: &mut Context<Self>) {
-        if self.image_generate_busy || self.image_models_loading {
+        if self.image_generate_busy {
             return;
         }
         if model

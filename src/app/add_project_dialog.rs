@@ -616,6 +616,10 @@ impl Fintwind {
         } else {
             CloneProgress::default()
         };
+        #[cfg(test)]
+        let fail_first_registration = method == ProjectMethod::Clone
+            && previous_directory.is_none()
+            && std::env::var_os("FINTWIND_SSH_E2E_REGISTRATION_RETRY").is_some();
         cx.notify();
         cx.spawn(async move |this, cx| {
             let operation_progress = progress.clone();
@@ -653,6 +657,8 @@ impl Fintwind {
                 let destination = directory.clone();
                 let name = name.clone();
                 let client = this.update(cx, |app, _| app.ssh_client_for(host)).ok().flatten();
+                #[cfg(test)]
+                let client = if fail_first_registration { None } else { client };
                 let registered = cx.background_executor().spawn(async move {
                     let client = client.ok_or_else(|| anyhow::anyhow!(tr!("ssh.offline")))?;
                     super::ssh_page::register_remote_project(&client, destination, name)

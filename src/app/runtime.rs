@@ -967,6 +967,7 @@ impl Fintwind {
             return;
         };
         self.provider_model_discoveries.insert(directory.clone());
+        self.provider_model_discovery_error = None;
         self.provider_model_discoveries_pending
             .insert(directory.clone());
         let binary_generation = self.provider_binary_generation;
@@ -979,7 +980,7 @@ impl Fintwind {
         if std::thread::Builder::new()
             .name("fintwind-opencode-model-discovery".into())
             .spawn(move || {
-                let discovered = match daemon.request(
+                let (discovered, error) = match daemon.request(
                     Uuid::nil(),
                     Uuid::nil(),
                     fintwind_client::Command::ProbeProvider {
@@ -989,14 +990,16 @@ impl Fintwind {
                         probe_version: false,
                     },
                 ) {
-                    Ok(fintwind_client::ResponsePayload::ProviderProbe { probe, .. }) => probe,
-                    _ => fallback_probe,
+                    Ok(fintwind_client::ResponsePayload::ProviderProbe { probe, .. }) => (probe, None),
+                    Ok(_) => (fallback_probe, Some("invalid daemon response".to_owned())),
+                    Err(error) => (fallback_probe, Some(error.to_string())),
                 };
                 if provider_probe_tx
                     .send(ProviderProbeResult {
                         binary_generation,
                         directory: result_directory,
                         probe: discovered,
+                        error,
                     })
                     .is_ok()
                 {
@@ -1007,6 +1010,7 @@ impl Fintwind {
         {
             self.provider_model_discoveries.remove(&directory);
             self.provider_model_discoveries_pending.remove(&directory);
+            self.provider_model_discovery_error = Some((directory, "无法启动模型发现".to_owned()));
         }
     }
 
@@ -3232,6 +3236,7 @@ impl Fintwind {
             }
             self.provider_model_discoveries
                 .insert(result.directory.clone());
+            self.provider_model_discovery_error = result.error.map(|error| (result.directory.clone(), error));
             if let Some(existing) = self.probes.first_mut() {
                 *existing = result.probe;
             } else {

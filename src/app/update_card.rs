@@ -387,7 +387,7 @@ impl Fintwind {
                             format!("{:.1} MB", card.downloaded_bytes as f64 / (1024.0 * 1024.0))
                     )
                 },
-                motion::spin_slow(icon("icons/loader-circle.svg", 14.0, theme.text_secondary)),
+                icon("icons/download.svg", 14.0, theme.text_secondary).into_any_element(),
             ),
             UpdatePhase::Installing => (
                 tr!("update.installing"),

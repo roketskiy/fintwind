@@ -289,6 +289,16 @@ impl Fintwind {
         }
         let entity = cx.entity().downgrade();
         let scrollbar_handle = transcript_rows.clone();
+        let floating_capsule = self.selected_workspace_path().is_some();
+        let capsule_space = if floating_capsule {
+            px(super::background_work::capsule::CAPSULE_ROW_HEIGHT)
+        } else {
+            Pixels::ZERO
+        };
+        let end_space = anchor_end_space.max(capsule_space);
+        let surface = Theme::current(cx).surface;
+        let top_fade_rows = transcript_rows.clone();
+        let bottom_fade_rows = transcript_rows.clone();
         let viewport_bounds = transcript_rows.viewport_bounds();
         let transcript_scrollable = viewport_bounds.size.height > Pixels::ZERO
             && transcript_rows.max_offset_for_scrollbar().y > px(0.5);
@@ -307,7 +317,7 @@ impl Fintwind {
         // button to rejoin it.
         if self.transcript_tail_recheck.get()
             && let Some(rests_at_tail) =
-                transcript_rests_at_tail(viewport_bottom, tail_bottom, anchor_end_space)
+                transcript_rests_at_tail(viewport_bottom, tail_bottom, end_space)
         {
             self.transcript_tail_recheck.set(false);
             if rests_at_tail {
@@ -320,7 +330,7 @@ impl Fintwind {
             transcript_scrollable,
             viewport_bottom,
             tail_bottom,
-            anchor_end_space,
+            end_space,
         )
         .unwrap_or_else(|| self.transcript_scroll_to_bottom_visible.get());
         self.transcript_scroll_to_bottom_visible
@@ -430,10 +440,54 @@ impl Fintwind {
                         .unwrap_or_else(|| div().into_any_element())
                 })
                 .size_full()
-                .pb(anchor_end_space),
+                .pb(end_space),
             )
+            .child(scroll_edge_fade(
+                ActivityScrollFadeSide::Top,
+                surface,
+                px(18.0),
+                move || -top_fade_rows.scroll_px_offset_for_scrollbar().y > px(0.5),
+            ))
+            .child(scroll_edge_fade(
+                ActivityScrollFadeSide::Bottom,
+                surface,
+                capsule_space.max(px(18.0)),
+                move || {
+                    let Some(last_row) = bottom_fade_rows.item_count().checked_sub(1) else {
+                        return false;
+                    };
+                    let viewport = bottom_fade_rows.viewport_bounds();
+                    bottom_fade_rows.bounds_for_item(last_row).map_or_else(
+                        || {
+                            bottom_fade_rows.max_offset_for_scrollbar().y
+                                + bottom_fade_rows.scroll_px_offset_for_scrollbar().y
+                                > px(0.5)
+                        },
+                        |last| last.bottom() > viewport.bottom() + px(0.5),
+                    )
+                },
+            ))
             .children(navigation_rail)
             .children(scroll_to_bottom)
+            .when(floating_capsule, |transcript| {
+                transcript.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .bottom(px(6.0))
+                        .px(px(20.0))
+                        .child(
+                            div()
+                                .w_full()
+                                .max_w(px(crate::theme::transcript_width()))
+                                .mx_auto()
+                                .flex()
+                                .justify_end()
+                                .child(self.render_task_capsule(cx)),
+                        ),
+                )
+            })
             .child(scrollbar::vertical(
                 &scrollbar_handle,
                 &self.transcript_scrollbar,
@@ -3841,15 +3895,24 @@ fn activity_scroll_fade(
     side: ActivityScrollFadeSide,
     surface: Hsla,
 ) -> impl IntoElement {
+    scroll_edge_fade(side, surface, px(18.0), move || {
+        let scrolled = -scroll.offset().y;
+        match side {
+            ActivityScrollFadeSide::Top => scrolled > px(0.5),
+            ActivityScrollFadeSide::Bottom => scroll.max_offset().y - scrolled > px(0.5),
+        }
+    })
+}
+
+fn scroll_edge_fade(
+    side: ActivityScrollFadeSide,
+    surface: Hsla,
+    height: Pixels,
+    visible: impl Fn() -> bool + 'static,
+) -> impl IntoElement {
     canvas(
         move |bounds, _, _| {
-            let scrolled = -scroll.offset().y;
-            let max_offset = scroll.max_offset().y;
-            let visible = match side {
-                ActivityScrollFadeSide::Top => scrolled > px(0.5),
-                ActivityScrollFadeSide::Bottom => max_offset - scrolled > px(0.5),
-            };
-            visible.then(|| {
+            visible().then(|| {
                 let transparent = surface.opacity(0.0);
                 let background = match side {
                     ActivityScrollFadeSide::Top => linear_gradient(
@@ -3875,7 +3938,7 @@ fn activity_scroll_fade(
     .absolute()
     .left_0()
     .w_full()
-    .h(px(18.0))
+    .h(height)
     .when(matches!(side, ActivityScrollFadeSide::Top), |element| {
         element.top_0()
     })

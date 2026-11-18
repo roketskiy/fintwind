@@ -20,6 +20,18 @@ pub(super) enum ComposerSubmitAction {
     Stop,
 }
 
+#[derive(Clone)]
+enum AttachmentImportSource {
+    Paths(Vec<PathBuf>),
+    Image(Arc<gpui::Image>, Option<usize>),
+}
+
+pub(super) struct AttachmentImportFailure {
+    pub(super) owner: Option<crate::persistence::ComposerDraftKey>,
+    message: String,
+    source: AttachmentImportSource,
+}
+
 pub(super) fn composer_submit_action(
     status: Option<SessionStatus>,
     preparing: bool,
@@ -32,11 +44,6 @@ pub(super) fn composer_submit_action(
         ComposerSubmitAction::Send
     }
 }
-
-/// Chat-column group for an external file drag. The column accepts the drop;
-/// the composer card watches the group so the drop ring shows while the
-/// pointer is still over the transcript, not only once it reaches the card.
-pub(super) const CHAT_FILE_DROP_GROUP: &str = "chat-file-drop";
 
 // ── Control-row width budget ─────────────────────────────────────────────
 //
@@ -364,6 +371,38 @@ pub(super) fn composer_row_plan(available: f32, widths: ComposerRowWidths) -> Co
 }
 
 impl Fintwind {
+    pub(super) fn composer_attachments_importing(&self) -> bool {
+        let owner = self.selected_composer_draft_key();
+        self.composer_attachment_imports.values().any(|pending| *pending == owner)
+    }
+
+    pub(super) fn composer_attachments_unresolved(&self) -> bool {
+        let owner = self.selected_composer_draft_key();
+        self.composer_attachments_importing()
+            || self.composer_attachment_errors.values().any(|failure| failure.owner == owner)
+    }
+
+    pub(super) fn defer_restore_attachment_prompt(&self, prompt: String, cx: &mut Context<Self>) {
+        let owner = self.selected_composer_draft_key();
+        let composer = self.composer.clone();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(1)).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.selected_composer_draft_key() == owner {
+                    composer.update(cx, |input, cx| {
+                        let restored = format!("{}{}", prompt, input.content());
+                        input.set_content(restored, cx);
+                    });
+                } else if let Some(owner) = owner {
+                    let mut draft = this.composer_drafts.get(owner).cloned().unwrap_or_default();
+                    draft.text.insert_str(0, &prompt);
+                    this.composer_drafts.set(owner, draft);
+                    this.schedule_composer_draft_save(cx);
+                }
+            });
+        }).detach();
+    }
+
     pub(super) fn render_permission(&self, cx: &mut Context<Self>) -> Option<Div> {
         if let Some(input) = self.selected_runtime()?.pending_user_input.clone() {
             return Some(self.render_user_input(input, cx));
@@ -891,6 +930,9 @@ impl Fintwind {
         let probes = self.probes.clone();
         let pending_discoveries = self.provider_model_discoveries_pending.clone();
         let provider_directory = self.provider_directory();
+        let discovery_error = self.provider_model_discovery_error.as_ref()
+            .filter(|(directory, _)| directory == &provider_directory)
+            .map(|(_, error)| error.clone());
         let provider_detection_pending = self.provider_detection_remaining > 0;
         let favorites = self.state.favorite_models.clone();
         let weak = cx.entity().downgrade();
@@ -945,11 +987,40 @@ impl Fintwind {
         // Built out here rather than in the body so the key handler and the
         // rendered rows index one ordering and cannot disagree about what
         // `enter` selects.
-        let available_models = Rc::new(if handle.is_open() {
+        let available_models = if handle.is_open() {
             visible_picker_models(&probes, &favorites, selected_tab.clone(), &normalized_query)
         } else {
             Vec::new()
-        });
+        };
+        let waiting = handle.is_open()
+            && !searching
+            && selected_tab != ModelPickerTab::Favorites
+            && available_models.is_empty()
+            && (provider_detection_pending || pending_discoveries.contains(&provider_directory));
+        let (loading_phase, wake) = if handle.is_open() && !searching {
+            crate::ui::loading::LoadingDelay::observe(
+                &mut self.model_picker_loading.borrow_mut(),
+                (provider_directory.clone(), selected_tab.clone()),
+                waiting,
+            )
+        } else {
+            *self.model_picker_loading.borrow_mut() = None;
+            (crate::ui::loading::LoadingPhase::Done, None)
+        };
+        if let Some(wake) = wake {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(wake.delay()).await;
+                wake.fired();
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+        }
+        let available_models =
+            Rc::new(if loading_phase == crate::ui::loading::LoadingPhase::Done {
+                available_models
+            } else {
+                Vec::new()
+            });
         let highlight = self
             .model_picker_highlight
             .filter(|index| *index < available_models.len());
@@ -1116,15 +1187,67 @@ impl Fintwind {
                     .overflow_y_scroll()
                     .track_scroll(&scroll)
                     .p(px(9.0));
-                if available_models.is_empty() {
+                if let Some(error) = discovery_error.as_ref() {
+                    let retry_weak = weak.clone();
+                    let retry_key_weak = weak.clone();
+                    rows = rows.child(
+                        div().px(px(12.0)).py(px(8.0)).flex().items_center().gap(px(8.0))
+                            .text_size(ui_px(11.5)).text_color(theme.danger_text)
+                            .child(div().flex_1().min_w_0().child(tr!("providers.fetch_failed", error = error)))
+                            .child(div().id("model-discovery-retry").tab_index(0)
+                                .text_color(theme.text_secondary)
+                                .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
+                                .child(tr!("common.retry"))
+                                .on_click(move |_, _, cx| {
+                                    let _ = retry_weak.update(cx, |this, cx| {
+                                        this.refresh_provider_model_discovery();
+                                        cx.notify();
+                                    });
+                                })
+                                .on_key_down(move |event: &KeyDownEvent, _, cx| {
+                                    if !event.keystroke.modifiers.modified()
+                                        && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                    {
+                                        let _ = retry_key_weak.update(cx, |this, cx| {
+                                            this.refresh_provider_model_discovery();
+                                            cx.notify();
+                                        });
+                                        cx.stop_propagation();
+                                    }
+                                }))
+                    );
+                }
+                if loading_phase == crate::ui::loading::LoadingPhase::Visible {
+                    rows = rows.children((0..4).map(|index| {
+                        div()
+                            .h(px(60.0))
+                            .px(px(12.0))
+                            .flex()
+                            .flex_col()
+                            .justify_center()
+                            .gap(px(7.0))
+                            .child(
+                                div()
+                                    .w(px(if index % 2 == 0 { 150.0 } else { 125.0 }))
+                                    .h(px(12.0))
+                                    .rounded(px(3.0))
+                                    .bg(theme.overlay_strong),
+                            )
+                            .child(
+                                div()
+                                    .w(px(if index % 2 == 0 { 100.0 } else { 135.0 }))
+                                    .h(px(10.0))
+                                    .rounded(px(3.0))
+                                    .bg(theme.overlay_strong),
+                            )
+                    }));
+                } else if loading_phase == crate::ui::loading::LoadingPhase::Done
+                    && available_models.is_empty() && discovery_error.is_none()
+                {
                     let label = if searching {
                         tr!("models.none_found")
                     } else if selected_tab == ModelPickerTab::Favorites {
                         tr!("models.favorite_hint")
-                    } else if provider_detection_pending
-                        || pending_discoveries.contains(&provider_directory)
-                    {
-                        tr!("models.loading")
                     } else if probes.iter().any(|probe| probe.installed)
                         && probes.iter().all(|probe| probe.models.is_empty())
                     {
@@ -1693,7 +1816,7 @@ impl Fintwind {
             .into_any_element()
     }
 
-    /// Stage files dropped onto the chat column as composer attachment chips. The bytes
+    /// Stage files dropped onto the workspace as composer attachment chips. The bytes
     /// are copied into the daemon attachment store; submit sends that path
     /// as a prompt `files` URI, not as text.
     pub(super) fn stage_dropped_files(
@@ -1713,9 +1836,19 @@ impl Fintwind {
         if paths.is_empty() {
             return false;
         }
+        if paths.len() > 1 {
+            for path in paths {
+                self.stage_attachment_paths(std::slice::from_ref(path), cx);
+            }
+            return true;
+        }
         let paths = paths.to_vec();
+        let retry_paths = paths.clone();
         let daemon = self.daemon.clone();
         let draft_owner = self.selected_composer_draft_key();
+        let import_id = Uuid::new_v4();
+        self.composer_attachment_imports.insert(import_id, draft_owner);
+        cx.notify();
         cx.spawn(async move |fintwind, cx| {
             let result = cx
                 .background_executor()
@@ -1744,9 +1877,48 @@ impl Fintwind {
                     Ok::<_, anyhow::Error>(stored)
                 })
                 .await;
-            let _ = fintwind.update(cx, |fintwind, cx| match result {
+            let _ = fintwind.update(cx, |fintwind, cx| {
+                let Some(draft_owner) = fintwind.composer_attachment_imports.remove(&import_id) else {
+                    return;
+                };
+                cx.notify();
+                match result {
                 Ok(stored) => {
                     if fintwind.selected_composer_draft_key() != draft_owner {
+                        if let Some(key) = draft_owner {
+                            let mut draft =
+                                fintwind.composer_drafts.get(key).cloned().unwrap_or_default();
+                            let mut changed = false;
+                            for (attachment, _, is_image) in stored {
+                                if draft.attachments.iter().any(|existing| {
+                                    existing.path == attachment.path
+                                        || existing.blob_reference.as_deref()
+                                            == Some(attachment.reference.as_str())
+                                }) {
+                                    continue;
+                                }
+                                let mut mention = attachment.path.display().to_string();
+                                if attachment.is_dir && !mention.ends_with('/') {
+                                    mention.push('/');
+                                }
+                                draft.attachments.push(
+                                    crate::persistence::ComposerDraftAttachment {
+                                        path: attachment.path,
+                                        mention,
+                                        name: attachment.name,
+                                        is_dir: attachment.is_dir,
+                                        is_image,
+                                        blob_reference: Some(attachment.reference),
+                                    },
+                                );
+                                changed = true;
+                            }
+                            if changed {
+                                fintwind.composer_drafts.set(key, draft);
+                                fintwind.schedule_composer_draft_save(cx);
+                                cx.notify();
+                            }
+                        }
                         return;
                     }
                     let mut changed = false;
@@ -1766,8 +1938,13 @@ impl Fintwind {
                     }
                 }
                 Err(error) => {
-                    fintwind.show_toast(error.to_string());
+                    fintwind.composer_attachment_errors.insert(import_id, AttachmentImportFailure {
+                        owner: draft_owner,
+                        message: error.to_string(),
+                        source: AttachmentImportSource::Paths(retry_paths),
+                    });
                     cx.notify();
+                }
                 }
             });
         })
@@ -1818,7 +1995,7 @@ impl Fintwind {
         let mut images = Vec::new();
         for entry in entries {
             match entry {
-                ClipboardEntry::Image(image) if !image.bytes.is_empty() => images.push(image),
+                ClipboardEntry::Image(image) if !image.bytes.is_empty() => images.push(Arc::new(image)),
                 ClipboardEntry::ExternalPaths(external) => {
                     paths.extend(external.paths().iter().cloned())
                 }
@@ -1826,22 +2003,31 @@ impl Fintwind {
             }
         }
         self.stage_attachment_paths(&paths, cx);
-        if images.is_empty() {
-            return;
-        }
+        self.stage_clipboard_images(images, cx);
+    }
 
+    fn stage_clipboard_images(&mut self, images: Vec<Arc<gpui::Image>>, cx: &mut Context<Self>) {
+        let multiple = images.len() > 1;
+        for (index, image) in images.into_iter().enumerate() {
+            self.stage_clipboard_image(image, multiple.then_some(index + 1), cx);
+        }
+    }
+
+    fn stage_clipboard_image(&mut self, image: Arc<gpui::Image>, index: Option<usize>, cx: &mut Context<Self>) {
+        let retry_image = image.clone();
         let daemon = self.daemon.clone();
         let draft_owner = self.selected_composer_draft_key();
+        let import_id = Uuid::new_v4();
+        self.composer_attachment_imports.insert(import_id, draft_owner);
+        cx.notify();
         cx.spawn(async move |fintwind, cx| {
             let stored = cx
                 .background_executor()
                 .spawn(async move {
-                    let image_count = images.len();
-                    images
+                    vec![image]
                         .into_iter()
-                        .enumerate()
-                        .map(|(index, image)| {
-                            let preview_image = Arc::new(image);
+                        .map(|image| {
+                            let preview_image = image;
                             let bytes = preview_image.bytes.clone();
                             if bytes.len() as u64 > MAX_PROMPT_FILE_BYTES {
                                 return Err("attachment is larger than 20 MB".into());
@@ -1866,19 +2052,54 @@ impl Fintwind {
                                 .extension()
                                 .and_then(|extension| extension.to_str())
                                 .unwrap_or("png");
-                            let name = if image_count == 1 {
-                                format!("image.{extension}")
+                            let name = if let Some(index) = index {
+                                format!("image-{index}.{extension}")
                             } else {
-                                format!("image-{}.{extension}", index + 1)
+                                format!("image.{extension}")
                             };
                             Ok::<_, String>((path, name, reference, preview_image))
                         })
                         .collect::<Result<Vec<_>, _>>()
                 })
                 .await;
-            let _ = fintwind.update(cx, |fintwind, cx| match stored {
+            let _ = fintwind.update(cx, |fintwind, cx| {
+                let Some(draft_owner) = fintwind.composer_attachment_imports.remove(&import_id) else {
+                    return;
+                };
+                cx.notify();
+                match stored {
                 Ok(stored) => {
                     if fintwind.selected_composer_draft_key() != draft_owner {
+                        if let Some(key) = draft_owner {
+                            let mut draft =
+                                fintwind.composer_drafts.get(key).cloned().unwrap_or_default();
+                            let mut changed = false;
+                            for (path, name, reference, _) in stored {
+                                if draft.attachments.iter().any(|existing| {
+                                    existing.path == path
+                                        || existing.blob_reference.as_deref()
+                                            == Some(reference.as_str())
+                                }) {
+                                    continue;
+                                }
+                                draft.attachments.push(
+                                    crate::persistence::ComposerDraftAttachment {
+                                        mention: path.display().to_string(),
+                                        path,
+                                        name,
+                                        is_dir: false,
+                                        is_image: true,
+                                        blob_reference: Some(reference),
+                                    },
+                                );
+                                changed = true;
+                            }
+                            if changed {
+                                fintwind.composer_drafts.set(key, draft);
+                                fintwind.schedule_composer_draft_save(cx);
+                                cx.notify();
+                            }
+                        }
                         return;
                     }
                     let mut staged = false;
@@ -1898,8 +2119,13 @@ impl Fintwind {
                     }
                 }
                 Err(error) => {
-                    fintwind.show_toast(tr!("errors.store_pasted_image", error = error));
+                    fintwind.composer_attachment_errors.insert(import_id, AttachmentImportFailure {
+                        owner: draft_owner,
+                        message: tr!("errors.store_pasted_image", error = error),
+                        source: AttachmentImportSource::Image(retry_image, index),
+                    });
                     cx.notify();
+                }
                 }
             });
         })
@@ -1914,6 +2140,9 @@ impl Fintwind {
         prompt: &str,
         cx: &mut Context<Self>,
     ) -> Option<ComposerSubmission> {
+        if self.composer_attachments_unresolved() {
+            return None;
+        }
         for attachment in &self.composer_attachments {
             if let (Some(reference), Some(image)) = (
                 attachment.blob_reference.as_ref(),
@@ -1977,7 +2206,7 @@ impl Fintwind {
     /// The staged-attachment chips above the input: a thumbnail tile per
     /// image, a file-type icon and basename for everything else, each with a
     /// floating remove button — T3 Code's attachment row in graphite.
-    fn render_composer_attachments(&self, cx: &mut Context<Self>) -> Div {
+    fn render_composer_attachments(&self, attachment_loading: bool, cx: &mut Context<Self>) -> Div {
         let theme = Theme::current(cx);
         let mut row = div()
             .px(px(14.0))
@@ -1986,6 +2215,47 @@ impl Fintwind {
             .flex()
             .flex_wrap()
             .gap(px(8.0));
+        let owner = self.selected_composer_draft_key();
+        for (id, failure) in self.composer_attachment_errors.iter().filter(|(_, failure)| failure.owner == owner) {
+            let retry_id = *id;
+            let dismiss_id = *id;
+            row = row.child(
+                div().w(px(200.0)).min_h(px(64.0)).p(px(8.0))
+                    .rounded(px(8.0)).border_1().border_color(theme.border)
+                    .flex().flex_col().gap(px(4.0))
+                    .child(div().text_size(ui_px(11.0)).text_color(theme.danger_text).child(failure.message.clone()))
+                    .child(div().flex().gap(px(10.0))
+                        .child(div().id(SharedString::from(format!("attachment-retry-{id}")))
+                            .role(gpui::Role::Button).tab_index(0)
+                            .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
+                            .text_size(ui_px(11.0)).text_color(theme.text_secondary)
+                            .child(tr!("common.retry"))
+                            .on_activation(cx, move |this, _, cx| {
+                                if this.selected_composer_draft_key() != owner {
+                                    return;
+                                }
+                                if let Some(failure) = this.composer_attachment_errors.remove(&retry_id) {
+                                    match failure.source {
+                                        AttachmentImportSource::Paths(paths) => { this.stage_attachment_paths(&paths, cx); }
+                                        AttachmentImportSource::Image(image, index) => this.stage_clipboard_image(image, index, cx),
+                                    }
+                                    cx.notify();
+                                }
+                            }))
+                        .child(div().id(SharedString::from(format!("attachment-dismiss-{id}")))
+                            .role(gpui::Role::Button).tab_index(0)
+                            .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
+                            .text_size(ui_px(11.0)).text_color(theme.text_secondary)
+                            .child(tr!("common.close"))
+                            .on_activation(cx, move |this, _, cx| {
+                                this.composer_attachment_errors.remove(&dismiss_id);
+                                cx.notify();
+                            }))),
+            );
+        }
+        if attachment_loading {
+            row = row.child(div().w(px(64.0)).h(px(64.0)).rounded(px(8.0)).bg(theme.overlay_strong));
+        }
         for (index, attachment) in self.composer_attachments.iter().enumerate() {
             let menu = self.menu_handle(format!("composer-attachment-{index}-menu"), cx);
             let icon_path = if attachment.is_dir {
@@ -2741,7 +3011,12 @@ impl Fintwind {
         composer_row_plan(available, widths)
     }
 
-    pub(super) fn render_composer(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+    pub(super) fn render_composer(
+        &self,
+        window: &Window,
+        dock_capsule: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let theme = Theme::current(cx);
         let session = self.selected_session();
         let preparing = session.is_some_and(|session| {
@@ -2804,12 +3079,6 @@ impl Fintwind {
                 // scroll viewport, via `padding_x`) rather than on the card,
                 // so the field's overlay scrollbar can hug the card's edge.
                 .py(px(10.0))
-                .drag_over::<ExternalPaths>(move |style, _, _, _| {
-                    style.bg(drop_wash).border_color(drop_ring)
-                })
-                .group_drag_over::<ExternalPaths>(CHAT_FILE_DROP_GROUP, move |style| {
-                    style.bg(drop_wash).border_color(drop_ring)
-                })
                 // Anchor for the bounds probe the autocomplete popup aligns to.
                 .relative()
                 .child(super::autocomplete::composer_card_bounds_probe(
@@ -2835,8 +3104,9 @@ impl Fintwind {
                         }))
                 })
                 .children(autocomplete)
-                .when(!self.composer_attachments.is_empty(), |card| {
-                    card.child(self.render_composer_attachments(cx))
+                .when(!self.composer_attachments.is_empty() || attachment_loading
+                    || self.composer_attachment_errors.values().any(|failure| failure.owner == self.selected_composer_draft_key()), |card| {
+                    card.child(self.render_composer_attachments(attachment_loading, cx))
                 })
                 .when(!self.composer_references.is_empty(), |card| {
                     card.child(self.render_composer_references(cx))
@@ -2931,13 +3201,14 @@ impl Fintwind {
                                             .items_center()
                                             .justify_center()
                                             .cursor_default()
-                                            .bg(theme.inverse)
-                                            .hover(|element| element.opacity(0.9))
-                                            .active(|element| element.opacity(0.8))
+                                            .bg(if can_send { theme.inverse } else { theme.overlay_strong })
+                                            .when(can_send, |element| element
+                                                .hover(|element| element.opacity(0.9))
+                                                .active(|element| element.opacity(0.8)))
                                             .child(icon(
                                                 "icons/arrow-up.svg",
                                                 18.0,
-                                                theme.on_inverse,
+                                                if can_send { theme.on_inverse } else { theme.text_ghost },
                                             ))
                                             .tooltip(Tooltip::text(
                                                 if self.state.busy_send_mode
@@ -2969,12 +3240,12 @@ impl Fintwind {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .bg(if has_draft {
+                                .bg(if can_send {
                                     theme.inverse
                                 } else {
                                     theme.overlay_strong
                                 })
-                                .when(has_draft, |element| {
+                                .when(can_send, |element| {
                                     element
                                         .cursor_default()
                                         .hover(|element| element.opacity(0.9))
@@ -2983,7 +3254,7 @@ impl Fintwind {
                                 .child(icon(
                                     "icons/arrow-up.svg",
                                     18.0,
-                                    if has_draft {
+                                    if can_send {
                                         theme.on_inverse
                                     } else {
                                         theme.text_ghost
@@ -3010,9 +3281,27 @@ impl Fintwind {
         let workspace_path = self.workspace_path_for_session(session)?.to_path_buf();
         self.selected_project()
             .filter(|project| !project.is_projectless())?;
-        let branch_enabled = !session.is_busy() && !self.branch_operation_pending;
+        let (branch_loading, wake) = crate::ui::loading::LoadingDelay::observe(
+            &mut self.branch_operation_loading.borrow_mut(),
+            workspace_path.clone(),
+            self.branch_operation_pending,
+        );
+        let branch_enabled = !session.is_busy()
+            && !self.branch_operation_pending
+            && branch_loading != crate::ui::loading::LoadingPhase::Visible;
+        if let Some(wake) = wake {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(wake.delay()).await;
+                wake.fired();
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+        }
         let planned_worktree = matches!(workspace, SessionWorkspace::NewWorktree { .. });
         let snapshot = self.branch_snapshot_for_workspace(&workspace_path, cx)?;
+        let branch_error = (!self.branch_operation_pending)
+            .then(|| self.last_branch_error_for(&workspace_path))
+            .flatten();
         let selected_branch = match &workspace {
             SessionWorkspace::Local => snapshot.display_branch().map(str::to_owned),
             SessionWorkspace::NewWorktree { base_branch } => base_branch
@@ -3072,11 +3361,8 @@ impl Fintwind {
 
         let trigger = MenuChip::new("workspace-branch")
             .icon("icons/git-branch.svg", theme.text_tertiary)
-            .label(if self.branch_operation_pending {
-                tr!("branches.switching")
-            } else {
-                selected_branch.clone()
-            })
+            .label(selected_branch.clone())
+            .loading(branch_loading == crate::ui::loading::LoadingPhase::Visible)
             .caret(false)
             .disabled(!branch_enabled)
             .selected(branch_enabled && handle.is_open())
@@ -3316,6 +3602,60 @@ impl Fintwind {
                             })
                     });
 
+                    let branch_error_banner: Option<AnyElement> =
+                        branch_error.clone().map(|(_, message)| {
+                            let retry_weak = weak.clone();
+                            let retry_key_weak = weak.clone();
+                            div()
+                                .mx(px(6.0))
+                                .px(px(8.0))
+                                .py(px(8.0))
+                                .flex()
+                                .items_center()
+                                .gap(px(8.0))
+                                .text_size(ui_px(11.5))
+                                .text_color(theme.danger_text)
+                                .child(
+                                    div().flex_1().min_w_0().child(tr!(
+                                        "errors.change_branch",
+                                        error = message
+                                    )),
+                                )
+                                .child(
+                                    div()
+                                        .id("branch-switch-retry")
+                                        .tab_index(0)
+                                        .text_color(theme.text_secondary)
+                                        .focus_visible(|style| {
+                                            style.border_1().border_color(theme.accent_focus)
+                                        })
+                                        .child(tr!("common.retry"))
+                                        .on_click(move |_, _, cx| {
+                                            let _ = retry_weak.update(cx, |this, cx| {
+                                                this.retry_failed_branch_operation(cx);
+                                                cx.notify();
+                                            });
+                                        })
+                                        .on_key_down(
+                                            move |event: &KeyDownEvent, _, cx| {
+                                                if !event.keystroke.modifiers.modified()
+                                                    && matches!(
+                                                        event.keystroke.key.as_str(),
+                                                        "enter" | "space"
+                                                    )
+                                                {
+                                                    let _ = retry_key_weak.update(cx, |this, cx| {
+                                                        this.retry_failed_branch_operation(cx);
+                                                        cx.notify();
+                                                    });
+                                                    cx.stop_propagation();
+                                                }
+                                            },
+                                        ),
+                                )
+                                .into_any_element()
+                        });
+
                     div()
                         .w_full()
                         .flex()
@@ -3353,6 +3693,9 @@ impl Fintwind {
                                 .text_color(theme.text_tertiary)
                                 .child(tr!("branches.title")),
                         )
+                        .when_some(branch_error_banner, |element, banner| {
+                            element.child(banner)
+                        })
                         .child(rows)
                         .when_some(create_row, |element, create_row| {
                             element

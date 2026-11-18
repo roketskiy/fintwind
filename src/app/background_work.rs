@@ -1678,8 +1678,7 @@ impl Fintwind {
                                                 "icons/loader-circle.svg",
                                                 14.0,
                                                 theme.text_tertiary,
-                                            )))
-                                            .child(SharedString::from(tr!("capsule.loading"))),
+                                            ))),
                                     )
                                 })
                                 .when(!self.update_card_visible(), |surface| {
@@ -2400,7 +2399,7 @@ fn render_environment_action_row(
     div()
         .id(id)
         .track_focus(focus)
-        .when(enabled, |row| row.tab_index(0))
+        .when(enabled || active, |row| row.tab_index(0))
         .min_h(px(32.0))
         .w_full()
         .px(px(8.0))

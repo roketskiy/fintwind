@@ -124,7 +124,28 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
     let mut profile = fixture.profile.clone();
     profile.fingerprint = None;
     let profile_id = profile.id;
-    let picker_daemon = bootstrap.connection.supervisor();
+    let local_workspace = std::env::var_os("FINTWIND_E2E_LOCAL_WORKSPACE").map(PathBuf::from);
+    let picker_daemon = if local_workspace.is_some() {
+        fintwind_client::DaemonSupervisor::connect(
+            &std::env::var("FINTWIND_PROBE_LOCAL_SETTINGS_ADDRESS").unwrap(),
+            std::env::var("FINTWIND_PROBE_LOCAL_SETTINGS_TOKEN").unwrap(),
+        ).unwrap()
+    } else {
+        bootstrap.connection.supervisor()
+    };
+    let local_probe = local_workspace.as_ref().map(|path| {
+        let response = picker_daemon.client().request(Uuid::nil(), Uuid::nil(),
+            fintwind_client::Command::ProbeProvider {
+                binary_override: Some(std::env::var("FINTWIND_E2E_LOCAL_OPENCODE").unwrap()),
+                directory: Some(path.clone()),
+                discover_models: false,
+                probe_version: false,
+            }).unwrap();
+        let fintwind_client::ResponsePayload::ProviderProbe { probe, .. } = response else {
+            panic!("expected Windows OpenCode probe");
+        };
+        probe
+    });
     let picker_store = StateStore::ssh_workspace(picker_daemon.clone(), &bootstrap.state_dir);
     let (picker, picker_cx) = cx.add_window_view(|window, cx| {
         let desktop = Fintwind::new_with_store(window, cx, picker_daemon, picker_store);
@@ -351,13 +372,27 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
     let mut switched_during_stream = false;
     let mut reconnected_during_stream = false;
     let local_session_id = cx.update(|_, cx| {
-        picker.update(cx, |app, _| {
-            let session = AgentSession::new(project.id);
+        picker.update(cx, |app, cx| {
+            let project_id = if let Some(path) = &local_workspace {
+                let id = Uuid::new_v4();
+                app.state.projects.push(Project { id, name: "Windows fixture".into(), path: path.clone(), created_at: 0 });
+                id
+            } else {
+                project.id
+            };
+            let mut session = AgentSession::new(project_id);
             let session_id = session.id;
+            session.model = Some("fixture/fixture-model".into());
             app.state.sessions.push(session);
+            if let Some(probe) = local_probe {
+                app.probes = vec![probe];
+                app.submit_submission_for_session(session_id, ComposerSubmission::plain(
+                    "Reply with a short greeting in plain text. Do not use tools.".into()), cx);
+            }
             session_id
         })
     });
+    let mut concurrent_turns = false;
     loop {
         cx.run_until_parked();
         let (streaming, complete, text, live_proof) = cx.update(|_, cx| {
@@ -380,6 +415,13 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
             })
         });
         observed_live |= streaming;
+        let local_finished = cx.update(|_, cx| picker.update(cx, |app, cx| {
+            app.drain_event_pump(cx);
+            let session = app.state.session_mut(local_session_id).unwrap();
+            concurrent_turns |= streaming && !complete && session.active_turn_id().is_some();
+            session.active_turn_id().is_none() && session.messages.iter()
+                .any(|message| message.content.contains("Hello from the SSH stream fixture."))
+        }));
         if streaming && !complete && quit_during_turn {
             save_ssh_navigation(Some(profile_id)).unwrap();
             let before = request(fintwind_client::Command::HydrateSession { session_id: id });
@@ -450,7 +492,11 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
                 && proof["completed"] == true
                 && proof["childCompleted"] == true
                 && proof["assistantText"] == true;
-            if transcript_ready || Instant::now() >= until {
+            if (transcript_ready && (local_workspace.is_none() || local_finished)) || Instant::now() >= until {
+                if local_workspace.is_some() {
+                    assert!(concurrent_turns && local_finished, "Windows and SSH turns must overlap and both complete");
+                    proof["windowsAndRemoteTurnsOverlapped"] = serde_json::json!(true);
+                }
                 eprintln!("SSH E2E: checking remote file and session catalog");
                 proof["desktopTurnSettledMs"] = serde_json::json!(settled_at);
                 proof["desktopChildResultMs"] = serde_json::json!(child_result_at);

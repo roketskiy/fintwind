@@ -74,7 +74,7 @@ class Provider(BaseHTTPRequestHandler):
                 delta["role"] = "assistant"
             self.chunk(common, delta, None)
             if index + 1 < len(chunks):
-                time.sleep(25 if os.getenv("FINTWIND_NATIVE_DESKTOP") else 3)
+                time.sleep(getattr(self.server, "stream_delay", 25 if os.getenv("FINTWIND_NATIVE_DESKTOP") else 3))
         self.chunk(common, {}, "stop")
         self.wfile.write(b"data: [DONE]\n\n")
 
@@ -219,7 +219,7 @@ def provider_peer(daemon, opencode, token):
             child.wait(timeout=15)
 
 
-def settings_probe(binary, args, env, skills=False):
+def settings_probe(binary, args, env, skills=False, timeout=100, local_model=False):
     import importlib.util
     import socket
 
@@ -238,28 +238,54 @@ def settings_probe(binary, args, env, skills=False):
                       if k.upper() in {"SYSTEMROOT", "WINDIR", "PATH", "COMSPEC", "PATHEXT"}}
         daemon_env.update({k: root for k in ("HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP")})
         daemon_env["FINTWIND_DAEMON_TOKEN"] = token
-        with socket.socket() as listener:
+        with contextlib.ExitStack() as services, socket.socket() as listener:
+            if local_model:
+                opencode = __import__("shutil").which("opencode")
+                if not opencode:
+                    raise RuntimeError("Windows OpenCode is required")
+                provider = services.enter_context(ThreadingHTTPServer(("127.0.0.1", 0), Provider))
+                provider.stream_delay = 25
+                threading.Thread(target=provider.serve_forever, daemon=True).start()
+                services.callback(provider.shutdown)
+                daemon_env.update(OPENCODE_CONFIG_CONTENT=json.dumps({"model": MODEL,
+                    "providers": {"fixture": {"name": "Windows fixture", "env": ["FIXTURE_API_KEY"],
+                        "package": "@opencode/ai/providers/openai-compatible",
+                        "settings": {"baseURL": f"http://127.0.0.1:{provider.server_port}/v1"},
+                        "models": {"fixture-model": {"name": "Windows fixture",
+                            "limit": {"context": 128000, "output": 8192}}}}}}),
+                    FIXTURE_API_KEY="ssh-probe-fixture-key", OPENCODE_DISABLE_AUTOUPDATE="1")
+                Path(root, "daemon.json").write_text(json.dumps({"opencode_binary_path": opencode}), encoding="utf-8")
+                workspace = Path(root, "workspace")
+                workspace.mkdir()
+                env = {**env, "FINTWIND_E2E_LOCAL_WORKSPACE": str(workspace),
+                       "FINTWIND_E2E_LOCAL_OPENCODE": opencode}
             listener.bind(("127.0.0.1", 0))
             address = listener.getsockname()
-        endpoint = f"127.0.0.1:{address[1]}"
-        daemon = fixture.OwnedProcess(str(binary.resolve(strict=True)),
-                                      ["--bind", endpoint, "--data-dir", root], root, daemon_env)
-        try:
-            deadline = time.monotonic() + 15
-            while daemon.alive():
-                try:
-                    with socket.create_connection(address, timeout=0.5):
-                        break
-                except OSError:
-                    if time.monotonic() >= deadline:
-                        raise RuntimeError("Windows settings fixture startup timed out")
-                    time.sleep(0.05)
-            else:
-                raise RuntimeError("Windows settings fixture exited during startup")
-            return subprocess.run(args, env={**env, "FINTWIND_PROBE_LOCAL_SETTINGS_ADDRESS": endpoint,
-                                  "FINTWIND_PROBE_LOCAL_SETTINGS_TOKEN": token}, timeout=100)
-        finally:
-            daemon.close()
+            listener.close()
+            return run_local_daemon(fixture, binary, args, env, root, daemon_env, address, token, timeout)
+
+
+def run_local_daemon(fixture, binary, args, env, root, daemon_env, address, token, timeout):
+    import socket
+    endpoint = f"127.0.0.1:{address[1]}"
+    daemon = fixture.OwnedProcess(str(binary.resolve(strict=True)),
+                                  ["--bind", endpoint, "--data-dir", root], root, daemon_env)
+    try:
+        deadline = time.monotonic() + 15
+        while daemon.alive():
+            try:
+                with socket.create_connection(address, timeout=0.5):
+                    break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("Windows daemon fixture startup timed out")
+                time.sleep(0.05)
+        else:
+            raise RuntimeError("Windows daemon fixture exited during startup")
+        return subprocess.run(args, env={**env, "FINTWIND_PROBE_LOCAL_SETTINGS_ADDRESS": endpoint,
+                              "FINTWIND_PROBE_LOCAL_SETTINGS_TOKEN": token}, timeout=timeout)
+    finally:
+        daemon.close()
 
 
 def native_desktop(ns, ready, fingerprint):
@@ -464,7 +490,10 @@ def local():
                         env["FINTWIND_SSH_QUIT_DURING_TURN"] = "1"
                     desktop_command = [str(ns.desktop_test.resolve()),
                                        "app::ssh_page::e2e::desktop_ssh_project_streams", "--exact", "--ignored", "--nocapture"]
-                    result = subprocess.run(desktop_command,
+                    if ns.settings_local_daemon and ns.live_model and not ns.quit_during_turn:
+                        result = settings_probe(ns.settings_local_daemon, desktop_command, env, timeout=270, local_model=True)
+                    else:
+                        result = subprocess.run(desktop_command,
                                             env=env, cwd=home,
                                             timeout=270 if ns.live_model else 150 if ns.quit_during_turn else 100)
                     if result.returncode == 0 and ns.quit_during_turn:

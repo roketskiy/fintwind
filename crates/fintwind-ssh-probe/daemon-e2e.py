@@ -381,6 +381,7 @@ def local():
     parser.add_argument("--managed-upgrade", action="store_true", help="exercise desktop deployment on an isolated remote daemon")
     parser.add_argument("--rejected-clone", action="store_true", help="verify retry after GitHub rejects a remote clone")
     parser.add_argument("--registration-retry", action="store_true", help="verify reuse of a successful clone after registration fails")
+    parser.add_argument("--clone-disconnect", action="store_true", help="interrupt only the SSH clone channel after progress arrives")
     ns = parser.parse_args()
     if ns.peer_profile and (not ns.desktop_test or ns.provider_isolation or ns.quit_during_turn):
         parser.error("--peer-profile requires a desktop test without the internal peer or restart mode")
@@ -520,6 +521,8 @@ def local():
                         env["FINTWIND_SSH_E2E_REJECTED_CLONE"] = "1"
                     if ns.registration_retry:
                         env["FINTWIND_SSH_E2E_REGISTRATION_RETRY"] = "1"
+                    if ns.clone_disconnect:
+                        env["FINTWIND_SSH_E2E_CLONE_DISCONNECT"] = "1"
                     if ready.get("deployment_root"):
                         env["FINTWIND_SSH_E2E_DEPLOY_ROOT"] = ready["deployment_root"]
                     if ns.quit_during_turn:
@@ -531,7 +534,7 @@ def local():
                     else:
                         result = subprocess.run(desktop_command,
                                             env=env, cwd=home,
-                                            timeout=270 if ns.live_model else 180 if ns.rejected_clone or ns.registration_retry else 150 if ns.quit_during_turn else 100)
+                                            timeout=270 if ns.live_model else 180 if ns.rejected_clone or ns.registration_retry or ns.clone_disconnect else 150 if ns.quit_during_turn else 100)
                     if result.returncode == 0 and ns.quit_during_turn:
                         result = subprocess.run(desktop_command,
                                                 env={**env, "FINTWIND_SSH_RESTART_PHASE": "1"},

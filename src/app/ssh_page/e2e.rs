@@ -188,6 +188,33 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
     let (input, folder) = picker_cx.read_entity(&picker, |app, _| {
         super::super::add_project_dialog::ssh_dialog_inputs(app)
     });
+    picker_cx.update(|_, cx| picker.update(cx, |app, _| {
+        app.ssh.profiles.iter_mut().find(|profile| profile.id == profile_id).unwrap().user =
+            format!("fintwind-e2e-{}", &Uuid::new_v4().simple().to_string()[..12]);
+    }));
+    let connect = picker_cx.debug_bounds("add-project-submit").unwrap();
+    picker_cx.simulate_click(connect.center(), gpui::Modifiers::none());
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        picker_cx.run_until_parked();
+        if picker_cx.read_entity(&picker, |app, _| {
+            app.toast.as_ref().is_some_and(|toast| {
+                toast.tone == ToastTone::Alert && toast.message.contains(&tr!("ssh.auth_failed"))
+            })
+        }) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "SSH authentication failure did not become an error toast");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let dismiss = picker_cx.debug_bounds("dismiss-notification-toast").unwrap();
+    picker_cx.simulate_click(dismiss.center(), gpui::Modifiers::none());
+    picker_cx.update(|_, cx| picker.update(cx, |app, _| {
+        assert!(app.add_project_dialog.is_some());
+        assert!(app.ssh_client_for(profile_id).is_none());
+        app.ssh.profiles.iter_mut().find(|profile| profile.id == profile_id).unwrap().user =
+            fixture.profile.user.clone();
+    }));
     picker_cx.run_until_parked();
     picker_cx.update(|window, cx| {
         let focus = picker.update(cx, |app, cx| {
@@ -658,6 +685,7 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
                 "passed": true, "workspace": workspace, "session": id,
                 "selectedHost": chosen_id, "observedLive": observed_live, "settledText": "Hello from the SSH stream fixture.",
                 "cloneProgressToast": true, "cloneErrorToastDismissibleOverDialog": true,
+                "sshAuthenticationErrorToastAndRetry": true,
                 "openedLocalSidebarSession": switched_during_stream,
                 "switchedBetweenRemoteDaemons": peer_verified
             })).unwrap()).unwrap();

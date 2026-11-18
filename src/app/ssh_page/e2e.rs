@@ -288,7 +288,7 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
     assert_eq!(chosen_path, cwd.join("new-remote-project"));
     let workspace = chosen_path.to_str().unwrap().to_owned();
     let launch = prepare_project_launch(
-        fixture.profile,
+        fixture.profile.clone(),
         workspace.clone(),
         project.name.clone(),
         fixture.state_dir.clone(),
@@ -393,6 +393,7 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
         })
     });
     let mut concurrent_turns = false;
+    let mut upgraded_client = None;
     loop {
         cx.run_until_parked();
         let (streaming, complete, text, live_proof) = cx.update(|_, cx| {
@@ -579,6 +580,55 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
                 });
                 proof["restoredSavedSessionInNewWorkspace"] = serde_json::json!(true);
                 proof["desktopWorkspaceRestoredMs"] = serde_json::json!(observed_from.elapsed().as_millis());
+                if std::env::var_os("FINTWIND_SSH_E2E_DEPLOY_ROOT").is_some() {
+                    let runtime = tunnel::RUNTIME.as_ref().unwrap();
+                    let managed_port = || runtime.block_on(async {
+                        let (ssh, _) = authenticate(&fixture.profile).await.unwrap();
+                        match deploy::detect(&ssh).await.unwrap() {
+                            deploy::Detection::Running { port, .. } => port,
+                            _ => panic!("expected a running isolated managed daemon"),
+                        }
+                    });
+                    let previous_port = managed_port();
+                    assert_eq!(Some(previous_port), fixture.profile.daemon_port);
+                    let restored = cx.read_entity(&picker, |app, _| app.active_ssh_workspace().unwrap());
+                    cx.update(|_, cx| picker.update(cx, |app, cx| {
+                        let mut profile = app.ssh.profiles.iter().find(|profile| profile.id == profile_id).unwrap().clone();
+                        profile.daemon_port = None;
+                        app.ssh_connect(profile, SshConnectionAction::Deploy, cx);
+                    }));
+                    let deadline = Instant::now() + Duration::from_secs(90);
+                    loop {
+                        cx.run_until_parked();
+                        let done = cx.read_entity(&picker, |app, _| !app.ssh.busy);
+                        if done {
+                            break;
+                        }
+                        assert!(Instant::now() < deadline, "desktop deployment did not finish");
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    cx.read_entity(&picker, |app, _| {
+                        assert!(app.ssh.connection_errors.get(&profile_id).is_none(), "deployment connection error: {:?}", app.ssh.connection_errors.get(&profile_id));
+                        assert!(app.ssh.backend_errors.get(&profile_id).is_none(), "deployment backend error: {:?}", app.ssh.backend_errors.get(&profile_id));
+                        assert_eq!(app.active_ssh_workspace(), Some(restored.clone()));
+                    });
+                    assert_ne!(managed_port(), previous_port, "managed daemon did not restart on a new port");
+                    let daemon = cx.read_entity(&restored, |app, _| app.daemon.clone());
+                    let connections = daemon.subscribe_clients();
+                    let deadline = Instant::now() + Duration::from_secs(15);
+                    loop {
+                        let remaining = deadline.saturating_duration_since(Instant::now());
+                        let candidate = connections.recv_timeout(remaining).expect("desktop reconnected after deployment");
+                        if !candidate.is_disconnected() {
+                            break;
+                        }
+                    }
+                    let session = fintwind_client::persistence::hydrate_session(&daemon, id)
+                        .expect("read upgraded daemon session").expect("session survived upgrade");
+                    assert_eq!(live_session_proof(&session)["completed"], true);
+                    upgraded_client = Some(daemon.client());
+                    proof["desktopDeploymentPreservedSession"] = serde_json::json!(true);
+                }
                 proof["passed"] = serde_json::json!(["completed", "reasoning", "assistantText", "fileRead", "fileWrite", "childCompleted", "observedLive", "remoteFileVerified"]
                     .into_iter().all(|field| proof[field].as_bool() == Some(true)));
                 std::fs::write(&fixture.proof, serde_json::to_vec_pretty(&proof).unwrap()).unwrap();
@@ -615,8 +665,10 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
     let quit_started = Instant::now();
     test_app.quit();
     assert!(matches!(
-        request(fintwind_client::Command::LoadTaskState),
-        fintwind_client::ResponsePayload::TaskState { .. }
+        upgraded_client.as_ref().unwrap_or(&client).request(
+            Uuid::nil(), Uuid::nil(), fintwind_client::Command::LoadTaskState,
+        ),
+        Ok(fintwind_client::ResponsePayload::TaskState { .. })
     ));
     let mut proof: serde_json::Value = serde_json::from_slice(&std::fs::read(&fixture.proof).unwrap()).unwrap();
     proof["daemonReachableAfterDesktopQuit"] = serde_json::json!(true);

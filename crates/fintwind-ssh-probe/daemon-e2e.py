@@ -120,9 +120,11 @@ def remote(daemon, opencode):
     opencode = str(Path(opencode).resolve(strict=True)) if opencode else None
     live = os.getenv("FINTWIND_SSH_LIVE_MODEL") == "1"
     os.umask(0o077)
-    with tempfile.TemporaryDirectory(prefix="fintwind-ssh-e2e-", dir="/tmp") as directory:
+    managed = os.getenv("FINTWIND_SSH_MANAGED_FIXTURE") == "1"
+    prefix = "fintwind-deploy-e2e-" if managed else "fintwind-ssh-e2e-"
+    with tempfile.TemporaryDirectory(prefix=prefix, dir="/tmp") as directory:
         root = Path(directory)
-        token_file = root / "daemon-token"
+        token_file = root / ("token" if managed else "daemon-token")
         token_file.write_text(token, encoding="utf-8")
         cwd = root / "workspace"
         cwd.mkdir()
@@ -136,6 +138,13 @@ def remote(daemon, opencode):
                "TMPDIR": str(root), "GIT_CONFIG_NOSYSTEM": "1",
                **{"XDG_" + key.upper() + "_HOME": str(root / key)
                   for key in ("config", "cache", "data", "state")}}
+        data = root / ("data" if managed else "daemon")
+        if managed:
+            import shutil
+            env["XDG_DATA_HOME"] = str(root / "opencode-data")
+            (root / "fixture-owner").write_text(str(os.getpid()))
+            shutil.copy2(daemon, root / "daemon")
+            daemon = str(root / "daemon")
         git = ["git", "-c", "user.name=SSH Probe", "-c", "user.email=probe@example.invalid"]
         for args in (("init", "-q"), ("symbolic-ref", "HEAD", "refs/heads/ssh-probe"),
                      ("commit", "-q", "--allow-empty", "-m", "Isolated fixture")):
@@ -170,11 +179,12 @@ def remote(daemon, opencode):
             if os.getenv("FINTWIND_NATIVE_DESKTOP"):
                 env["FIXTURE_API_KEY"] = "ssh-probe-fixture-key"
             if opencode:
-                data = root / "daemon"
                 data.mkdir(exist_ok=True)
                 (data / "daemon.json").write_text(json.dumps({"opencode_binary_path": opencode}), encoding="utf-8")
-            with subprocess.Popen([daemon, "--bind", "127.0.0.1:0", "--data-dir",
-                                   str(root / "daemon"), "--parent-pid", str(os.getpid())],
+            command = [daemon, "--bind", "127.0.0.1:0", "--data-dir", str(data), "--parent-pid", str(os.getpid())]
+            if managed:
+                command = ["flock", "-no", str(root / "lock"), *command]
+            with subprocess.Popen(command,
                                   env={**env, "FINTWIND_DAEMON_TOKEN": token,
                                        "FIXTURE_MCP_KEY": "ssh-probe-mcp-key"}, cwd=cwd,
                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -184,12 +194,17 @@ def remote(daemon, opencode):
                     response = {"port": int(ready["address"].rsplit(":", 1)[1]),
                                       "workspace": str(cwd), "opencode": opencode,
                                       "token_file": str(token_file)}
+                    if managed:
+                        (root / "ready").write_text(json.dumps(ready) + "\n")
+                        response["deployment_root"] = directory
                     with provider_peer(daemon, opencode, token) as peer:
                         if peer:
                             response["peer"] = peer
                         print(json.dumps(response), flush=True)
                         sys.stdin.read(1)
                 finally:
+                    if managed and (root / "daemon.log").is_file():
+                        print((root / "daemon.log").read_text(errors="replace")[-4096:], file=sys.stderr, flush=True)
                     # Keep the session leader unreaped until its group is stopped.
                     try:
                         os.killpg(child.pid, signal.SIGKILL)
@@ -363,9 +378,12 @@ def local():
     parser.add_argument("--skills-local-daemon", type=Path, help="verify skill isolation against a separate local daemon")
     parser.add_argument("--provider-isolation", action="store_true")
     parser.add_argument("--peer-profile", type=Path, help="JSON containing a separate SSH profile and workspace")
+    parser.add_argument("--managed-upgrade", action="store_true", help="exercise desktop deployment on an isolated remote daemon")
     ns = parser.parse_args()
     if ns.peer_profile and (not ns.desktop_test or ns.provider_isolation or ns.quit_during_turn):
         parser.error("--peer-profile requires a desktop test without the internal peer or restart mode")
+    if ns.managed_upgrade and (not ns.live_model or ns.quit_during_turn or ns.provider_isolation):
+        parser.error("--managed-upgrade requires a live desktop test without restart or an internal peer")
     if ns.native_provider_oauth and (not ns.native_app or ns.native_mcp_oauth or ns.provider_isolation):
         parser.error("--native-provider-oauth requires --native-app and is a separate test mode")
     if ns.quit_during_turn and not ns.desktop_test:
@@ -386,6 +404,8 @@ def local():
         if not ns.opencode:
             parser.error("--native-app requires --opencode")
         command = ["env", "FINTWIND_NATIVE_DESKTOP=1", *command]
+    if ns.managed_upgrade:
+        command = ["env", "FINTWIND_SSH_MANAGED_FIXTURE=1", *command]
     if ns.native_mcp_oauth or ns.native_provider_oauth:
         import socket
         if not ns.native_app:
@@ -494,6 +514,8 @@ def local():
                     env.update({k: str(home) for k in ("USERPROFILE", "HOME", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP")})
                     env["FINTWIND_DEBUG_DATA_DIR"] = str(root / "desktop-data")
                     env["FINTWIND_SSH_DESKTOP_FIXTURE"] = json.dumps(fixture)
+                    if ready.get("deployment_root"):
+                        env["FINTWIND_SSH_E2E_DEPLOY_ROOT"] = ready["deployment_root"]
                     if ns.quit_during_turn:
                         env["FINTWIND_SSH_QUIT_DURING_TURN"] = "1"
                     desktop_command = [str(ns.desktop_test.resolve()),

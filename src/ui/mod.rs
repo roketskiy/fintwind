@@ -46,6 +46,26 @@ pub fn icon(path: &'static str, size: f32, color: Hsla) -> Svg {
         .text_color(color)
 }
 
+pub fn loading_label(label: impl Into<SharedString>, loading: bool, color: Hsla) -> Div {
+    div()
+        .relative()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(div().when(loading, |text| text.opacity(0.0)).child(label.into()))
+        .when(loading, |content| {
+            content.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(motion::spin(icon("icons/loader-circle.svg", 12.0, color))),
+            )
+        })
+}
+
 /// A polychrome file icon rendered as an image so the SVG's authored colors
 /// are preserved. GPUI's `svg()` element intentionally renders an alpha mask
 /// tinted with one text color.

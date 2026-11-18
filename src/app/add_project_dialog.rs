@@ -17,7 +17,7 @@ use crate::model::Project;
 use crate::theme::{Theme, ui_px};
 use crate::ui::loading::{LoadingDelay, LoadingPhase};
 use crate::ui::text_field::TextField;
-use crate::ui::{ActivationExt, icon, icon_button, motion};
+use crate::ui::{ActivationExt, icon, icon_button};
 
 use super::Fintwind;
 
@@ -954,7 +954,7 @@ impl Fintwind {
                             .rounded(px(6.0))
                             .flex()
                             .items_center()
-                            .gap(px(6.0))
+                            .justify_center()
                             .bg(theme.accent_fill)
                             .text_color(theme.on_accent)
                             .text_size(ui_px(12.0))
@@ -966,17 +966,11 @@ impl Fintwind {
                             .focus_visible(|style| {
                                 style.border_1().border_color(theme.accent_focus)
                             })
-                            .child(div().size(px(12.0)).flex_none().when(
+                            .child(crate::ui::loading_label(
+                                confirm_label,
                                 loading_phase == LoadingPhase::Visible,
-                                |slot| {
-                                    slot.child(motion::spin(icon(
-                                        "icons/loader-circle.svg",
-                                        12.0,
-                                        theme.on_accent,
-                                    )))
-                                },
+                                theme.on_accent,
                             ))
-                            .child(confirm_label)
                             .when(can_confirm, |button| {
                                 button.on_activation(cx, |this, _, cx| {
                                     this.confirm_add_project(cx);

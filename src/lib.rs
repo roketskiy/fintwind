@@ -235,8 +235,16 @@ impl FintwindApplicationExt for Application {
 }
 
 pub fn run() {
-    let remote = crate::app::ssh_page::project_launch()
-        .unwrap_or_else(|error| panic!("failed to open SSH project: {error:#}"));
+    let remote = match crate::app::ssh_page::project_launch() {
+        Ok(remote) => remote,
+        Err(error) => {
+            let error = serde_json::Value::String(format!("{error:#}"));
+            println!("fintwind-ssh-project-error {error}");
+            eprintln!("failed to open SSH project: {error}");
+            return;
+        }
+    };
+    let ssh_project = remote.is_some();
     let daemon = remote.as_ref().map(|remote| Ok(remote.connection.supervisor()))
         .unwrap_or_else(crate::daemon::start_process)
         .unwrap_or_else(|error| panic!("failed to start fintwind daemon: {error:#}"));
@@ -418,6 +426,10 @@ pub fn run() {
                 },
             )
             .expect("failed to open fintwind window");
+
+            if ssh_project {
+                println!("{}", crate::app::ssh_page::SSH_PROJECT_READY);
+            }
 
             cx.on_system_notification_response({
                 let window = window;

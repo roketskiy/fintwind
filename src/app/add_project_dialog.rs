@@ -1,15 +1,16 @@
 use std::{
     path::{Component, Path, PathBuf},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
 use ely_gpui_component::{
-    buttons::{Button, ButtonVariant},
+    buttons::{Button, ButtonVariant, SegmentedControl},
     theme::ControlSize,
 };
 use gpui::{
     AnyElement, Context, Entity, FocusHandle, FontWeight, KeyDownEvent, MouseButton, ParentElement,
-    PathPromptOptions, Styled, Window, div, prelude::*, px,
+    PathPromptOptions, SharedString, Styled, Window, div, prelude::*, px,
 };
 
 use crate::input::{ComposerEvent, ComposerInput};
@@ -26,6 +27,10 @@ use crate::ui::{
     menu::{MenuAlign, MenuItem, dropdown_menu},
 };
 use uuid::Uuid;
+use fintwind_client::ssh::{GitCloneProgress, GitCloneProgressReader, GitCloneStage};
+use super::ToastTone;
+
+pub(super) const ADD_PROJECT_LAYER_PRIORITY: usize = 4;
 
 pub(super) struct AddProjectDialogState {
     id: Uuid,
@@ -35,6 +40,7 @@ pub(super) struct AddProjectDialogState {
     repository: Entity<ComposerInput>,
     directory_name: Entity<ComposerInput>,
     pending: bool,
+    clone_toast: Option<u64>,
     loading: Option<LoadingDelay<()>>,
     error: Option<String>,
     folder: Option<PathBuf>,
@@ -42,9 +48,24 @@ pub(super) struct AddProjectDialogState {
     folder_focus: FocusHandle,
 }
 
+#[derive(Clone, Default)]
+pub(super) struct CloneProgress(Arc<Mutex<Option<GitCloneProgress>>>);
+
+impl CloneProgress {
+    pub(super) fn publish(&self, progress: GitCloneProgress) {
+        *self.0.lock().unwrap() = Some(progress);
+    }
+}
+
 #[cfg(test)]
-pub(super) fn ssh_dialog_path(app: &Fintwind) -> Entity<ComposerInput> {
-    app.add_project_dialog.as_ref().unwrap().remote_path.clone()
+pub(super) fn ssh_dialog_inputs(app: &Fintwind) -> (Entity<ComposerInput>, Entity<ComposerInput>) {
+    let dialog = app.add_project_dialog.as_ref().unwrap();
+    (dialog.remote_path.clone(), dialog.directory_name.clone())
+}
+
+#[cfg(test)]
+pub(super) fn project_repository_input(app: &Fintwind) -> Entity<ComposerInput> {
+    app.add_project_dialog.as_ref().unwrap().repository.clone()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -82,6 +103,7 @@ async fn clone_local_project(
     parent: &Path,
     folder: &str,
     repository: url::Url,
+    progress: CloneProgress,
 ) -> anyhow::Result<PathBuf> {
     let mut components = Path::new(folder).components();
     anyhow::ensure!(
@@ -106,17 +128,38 @@ async fn clone_local_project(
     }
     let mut command = smol::process::Command::from(command);
     command
+        .env("LC_ALL", "C")
         .env("GIT_TERMINAL_PROMPT", "0")
-        .args(["clone", "--", repository.as_str()])
+        .args(["clone", "--progress", "--", repository.as_str()])
         .arg(&target)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
     let result = futures_lite::future::race(
         async {
-            let output = command.output().await?;
+            use futures_lite::io::AsyncReadExt as _;
+            let mut child = command.spawn()?;
+            let mut stderr = child.stderr.take().expect("git stderr is piped");
+            let mut reader = GitCloneProgressReader::default();
+            let mut tail = Vec::new();
+            let mut chunk = [0; 4096];
+            loop {
+                let size = stderr.read(&mut chunk).await?;
+                if size == 0 {
+                    break;
+                }
+                reader.push(&chunk[..size], |update| progress.publish(update));
+                tail.extend_from_slice(&chunk[..size]);
+                if tail.len() > 8192 {
+                    tail.drain(..tail.len() - 8192);
+                }
+            }
+            let status = child.status().await?;
             anyhow::ensure!(
-                output.status.success(),
+                status.success(),
                 "{}",
-                String::from_utf8_lossy(&output.stderr).trim()
+                String::from_utf8_lossy(&tail).lines().rev().find(|line| !line.trim().is_empty())
+                    .unwrap_or("Git clone failed")
             );
             Ok(())
         },
@@ -178,6 +221,68 @@ fn create_empty_local_project(
 }
 
 impl Fintwind {
+    fn start_clone_toast(&mut self, cx: &mut Context<Self>) -> CloneProgress {
+        self.show_toast_with_tone(tr!("project.cloning"), ToastTone::Progress(None));
+        let toast_id = self.toast_generation;
+        self.add_project_dialog.as_mut().unwrap().clone_toast = Some(toast_id);
+        let progress = CloneProgress::default();
+        let reader = progress.clone();
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_millis(125)).await;
+                let update = reader.0.lock().unwrap().take();
+                let active = this.update(cx, |app, cx| {
+                    let Some(toast) = app.toast.as_mut().filter(|toast| {
+                        toast.id == toast_id && matches!(toast.tone, ToastTone::Progress(_))
+                    }) else { return false; };
+                    if let Some(GitCloneProgress { stage, percent }) = update {
+                        let tone = ToastTone::Progress(Some(percent));
+                        let message = match stage {
+                            GitCloneStage::Counting => tr!("project.clone_counting", percent = percent),
+                            GitCloneStage::Compressing => tr!("project.clone_compressing", percent = percent),
+                            GitCloneStage::Receiving => tr!("project.clone_receiving", percent = percent),
+                            GitCloneStage::Resolving => tr!("project.clone_resolving", percent = percent),
+                            GitCloneStage::Updating => tr!("project.clone_updating", percent = percent),
+                        };
+                        if toast.tone != tone || toast.message != message {
+                            toast.tone = tone;
+                            toast.message = message;
+                            cx.notify();
+                        }
+                    }
+                    true
+                });
+                if !matches!(active, Ok(true)) {
+                    break;
+                }
+            }
+        }).detach();
+        progress
+    }
+
+    fn finish_add_project_toast(&mut self, message: String, tone: ToastTone, always_show: bool) {
+        let clone_toast = self.add_project_dialog.as_mut().and_then(|dialog| dialog.clone_toast.take());
+        if let Some(toast) = self.toast.as_mut().filter(|toast| Some(toast.id) == clone_toast) {
+            toast.tone = tone;
+            toast.message = message;
+        } else if always_show || clone_toast.is_some() {
+            self.show_toast_with_tone(message, tone);
+        }
+    }
+
+    pub(super) fn add_project_targets_host(&self, host: Uuid) -> bool {
+        self.add_project_dialog.as_ref().is_some_and(|dialog| dialog.server == Some(host))
+    }
+
+    pub(super) fn report_add_project_error(&mut self, error: String, cx: &mut Context<Self>) {
+        if let Some(dialog) = &mut self.add_project_dialog {
+            dialog.pending = false;
+            dialog.error = Some(error.clone());
+        }
+        self.finish_add_project_toast(tr!("project.add_failed", error = error), ToastTone::Alert, true);
+        cx.notify();
+    }
+
     pub(super) fn open_add_project_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.daemon.is_remote() {
             self.load_ssh_profiles(cx);
@@ -253,6 +358,7 @@ impl Fintwind {
             repository,
             directory_name,
             pending: false,
+            clone_toast: None,
             loading: None,
             error: None,
             folder: None,
@@ -338,7 +444,13 @@ impl Fintwind {
         let Some(dialog) = self.add_project_dialog.as_ref() else {
             return;
         };
-        if dialog.pending || dialog.loading.as_ref().is_some_and(|loading| loading.is_visible()) {
+        if dialog.pending || self.project_host_connection(dialog.server).0 {
+            return;
+        }
+        if let Some(server) = dialog.server
+            && self.ssh_client_for(server).is_none()
+        {
+            self.connect_project_host(server, cx);
             return;
         }
         if dialog.server.is_some() || self.daemon.is_remote() {
@@ -353,9 +465,7 @@ impl Fintwind {
                 let Some(repository) =
                     github_repository(dialog.repository.read(cx).content().trim())
                 else {
-                    let dialog = self.add_project_dialog.as_mut().unwrap();
-                    dialog.error = Some(tr!("project.invalid_github_url"));
-                    cx.notify();
+                    self.report_add_project_error(tr!("project.invalid_github_url"), cx);
                     return;
                 };
                 Some(repository)
@@ -376,6 +486,7 @@ impl Fintwind {
             let dialog = self.add_project_dialog.as_mut().unwrap();
             dialog.pending = true;
             dialog.error = None;
+            let progress = if repository.is_some() { self.start_clone_toast(cx) } else { CloneProgress::default() };
             cx.notify();
             cx.spawn(async move |this, cx| {
                 let result = cx
@@ -383,30 +494,23 @@ impl Fintwind {
                     .spawn(async move {
                         match repository {
                             Some((address, _)) => {
-                                clone_local_project(&path, &folder, address).await
+                                clone_local_project(&path, &folder, address, progress).await
                             }
                             None => create_empty_local_project(client, path, folder),
                         }
                     })
                     .await;
                 let _ = this.update(cx, |app, cx| {
-                    let Some(dialog) = app
-                        .add_project_dialog
-                        .as_mut()
-                        .filter(|dialog| dialog.id == id)
-                    else {
+                    if app.add_project_dialog.as_ref().is_none_or(|dialog| dialog.id != id) {
                         return;
-                    };
+                    }
                     match result {
                         Ok(path) => {
+                            app.finish_add_project_toast(tr!("project.added"), ToastTone::Success, false);
                             app.add_project_dialog = None;
                             app.add_project_directory(path, String::new(), cx);
                         }
-                        Err(error) => {
-                            dialog.pending = false;
-                            dialog.error = Some(error.to_string());
-                            cx.notify();
-                        }
+                        Err(error) => app.report_add_project_error(error.to_string(), cx),
                     }
                 });
             })
@@ -461,8 +565,7 @@ impl Fintwind {
             let Some((address, suggested)) =
                 github_repository(dialog.repository.read(cx).content().trim())
             else {
-                dialog.error = Some(tr!("project.invalid_github_url"));
-                cx.notify();
+                self.report_add_project_error(tr!("project.invalid_github_url"), cx);
                 return;
             };
             if folder.is_empty() {
@@ -479,14 +582,15 @@ impl Fintwind {
         };
         let dialog = self.add_project_dialog.as_mut().expect("dialog still open");
         let Some(client) = client else {
-            dialog.error = Some(tr!("ssh.offline"));
-            cx.notify();
+            self.report_add_project_error(tr!("ssh.offline"), cx);
             return;
         };
         dialog.pending = true;
         dialog.error = None;
+        let progress = if method == ProjectMethod::Clone { self.start_clone_toast(cx) } else { CloneProgress::default() };
         cx.notify();
         cx.spawn(async move |this, cx| {
+            let operation_progress = progress.clone();
             let result = cx
                 .background_executor()
                 .spawn(async move {
@@ -494,40 +598,66 @@ impl Fintwind {
                         return super::ssh_page::remote_project_directory(client, path);
                     }
                     let created = creator.ok_or_else(|| anyhow::anyhow!(tr!("ssh.offline")))?(
-                        path, folder, repository,
+                        path, folder, repository, operation_progress,
                     )?;
                     Ok(PathBuf::from(created))
                 })
                 .await;
-            let _ = this.update(cx, |app, cx| {
-                let Some(dialog) = app.add_project_dialog.as_mut().filter(|d| d.id == id) else {
-                    return;
-                };
-                dialog.pending = false;
+            progress.0.lock().unwrap().take();
+            let launched = this.update(cx, |app, cx| {
+                if app.add_project_dialog.as_ref().is_none_or(|dialog| dialog.id != id) {
+                    return None;
+                }
                 match result {
                     Ok(path) if server.is_none() => {
+                        app.finish_add_project_toast(tr!("project.added"), ToastTone::Success, false);
                         app.add_project_dialog = None;
                         app.add_project_directory(path, name, cx);
                     }
                     Ok(path) => {
                         let server = server.expect("SSH host selected");
                         if app.ssh_client_for(server).is_none() {
-                            app.add_project_dialog.as_mut().unwrap().error =
-                                Some(tr!("ssh.offline"));
+                            app.report_add_project_error(tr!("ssh.offline"), cx);
                         } else {
                             match app.launch_ssh_project_process(server, path, name) {
-                                Ok(_) => app.add_project_dialog = None,
-                                Err(error) => {
-                                    app.add_project_dialog.as_mut().unwrap().error =
-                                        Some(error.to_string())
+                                Ok(Some(child)) => {
+                                    let progress_id = app.add_project_dialog.as_ref().and_then(|dialog| dialog.clone_toast);
+                                    if let Some(toast) = app.toast.as_mut().filter(|toast| Some(toast.id) == progress_id) {
+                                        toast.tone = ToastTone::Progress(None);
+                                        toast.message = tr!("project.opening_remote");
+                                    }
+                                    cx.notify();
+                                    return Some(child);
                                 }
+                                Ok(None) => {
+                                    app.finish_add_project_toast(tr!("project.added"), ToastTone::Success, false);
+                                    app.add_project_dialog = None;
+                                }
+                                Err(error) => app.report_add_project_error(error.to_string(), cx),
                             }
                         }
                     }
-                    Err(error) => dialog.error = Some(error.to_string()),
+                    Err(error) => app.report_add_project_error(error.to_string(), cx),
                 }
                 cx.notify();
+                None
             });
+            if let Ok(Some(child)) = launched {
+                let result = super::ssh_page::wait_for_ssh_project(child).await;
+                let _ = this.update(cx, |app, cx| {
+                    if app.add_project_dialog.as_ref().is_none_or(|dialog| dialog.id != id) {
+                        return;
+                    }
+                    match result {
+                        Ok(()) => {
+                            app.finish_add_project_toast(tr!("project.added"), ToastTone::Success, false);
+                            app.add_project_dialog = None;
+                            cx.notify();
+                        }
+                        Err(error) => app.report_add_project_error(error.to_string(), cx),
+                    }
+                });
+            }
         })
         .detach();
     }
@@ -536,9 +666,12 @@ impl Fintwind {
         &mut self,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        let server = self.add_project_dialog.as_ref()?.server;
+        let (connecting, can_connect, connection_error) = self.project_host_connection(server);
+        let needs_connection = server.is_some_and(|host| self.ssh_client_for(host).is_none());
         let (loading_phase, wake) = {
             let dialog = self.add_project_dialog.as_mut()?;
-            LoadingDelay::observe(&mut dialog.loading, (), dialog.pending)
+            LoadingDelay::observe(&mut dialog.loading, (), dialog.pending || connecting)
         };
         if let Some(wake) = wake {
             cx.spawn(async move |this, cx| {
@@ -554,10 +687,9 @@ impl Fintwind {
         let name = dialog.name.clone();
         let folder_focus = dialog.folder_focus.clone();
         let weak = cx.entity().downgrade();
-        let server = dialog.server;
         let remote = server.is_some() || self.daemon.is_remote();
-        let pending = dialog.pending;
-        let error = dialog.error.clone();
+        let pending = dialog.pending || connecting;
+        let error = dialog.error.clone().or(connection_error);
         let remote_path = dialog.remote_path.clone();
         let method = dialog.method;
         let repository = dialog.repository.clone();
@@ -572,20 +704,32 @@ impl Fintwind {
             &target_folder
         };
         let remote_directory = remote_path.read(cx).content().trim().to_owned();
-        let showing = loading_phase == LoadingPhase::Visible;
-        let can_confirm = !pending && !showing
-            && if remote {
-                remote_directory.starts_with('/')
-            } else {
-                folder.is_some()
-            }
+        let showing = pending && loading_phase == LoadingPhase::Visible;
+        let has_directory = if remote {
+            remote_directory.starts_with('/')
+        } else {
+            folder.is_some()
+        };
+        let can_add = has_directory
             && (method == ProjectMethod::Existing || (can_create && !effective_folder.is_empty()))
             && (method != ProjectMethod::Clone || !repo_address.is_empty());
-        let confirm_label = match method {
-            ProjectMethod::Existing => tr!("project.add_confirm"),
-            ProjectMethod::Empty => tr!("project.create_and_add"),
-            ProjectMethod::Clone => tr!("project.clone_and_add"),
+        let can_confirm = !pending
+            && !showing
+            && if needs_connection {
+                can_connect
+            } else {
+                can_add
+            };
+        let confirm_label = if needs_connection {
+            tr!("ssh.connect")
+        } else {
+            match method {
+                ProjectMethod::Existing => tr!("project.add_confirm"),
+                ProjectMethod::Empty => tr!("project.create_and_add"),
+                ProjectMethod::Clone => tr!("project.clone_and_add"),
+            }
         };
+        let cloning = dialog.pending && method == ProjectMethod::Clone;
         let target_preview = (method != ProjectMethod::Existing && !effective_folder.is_empty())
             .then(|| {
                 if remote && remote_directory.starts_with('/') {
@@ -602,7 +746,7 @@ impl Fintwind {
                 }
             })
             .flatten();
-        let hosts = self.ready_ssh_hosts();
+        let hosts = self.saved_ssh_hosts();
         let location_label = self
             .ssh_project_machine()
             .map(str::to_owned)
@@ -622,10 +766,12 @@ impl Fintwind {
         let fixed_location = self.daemon.is_remote();
         #[cfg(test)]
         let fixed_location = fixed_location && !self.has_ssh_test_launcher();
-        let location = if fixed_location || pending {
+        let location = if fixed_location {
             div().child(location_label).into_any_element()
         } else {
-            let handle = self.menu_handle("add-project-location", cx);
+            let handle = self
+                .menu_handle("add-project-location", cx)
+                .with_priority(ADD_PROJECT_LAYER_PRIORITY + 1);
             let app = weak.clone();
             let choices = std::iter::once((None, tr!("project.location_local")))
                 .chain(hosts.into_iter().map(|(id, name)| (Some(id), name)))
@@ -633,7 +779,8 @@ impl Fintwind {
             dropdown_menu(
                 MenuChip::new("add-project-location")
                     .label(location_label)
-                    .outlined(),
+                    .outlined()
+                    .debug_selector(|| "add-project-location".into()),
                 "add-project-location-menu",
                 &handle,
                 MenuAlign::BelowLeft,
@@ -648,7 +795,7 @@ impl Fintwind {
                                     if let Some(dialog) = app
                                         .add_project_dialog
                                         .as_mut()
-                                        .filter(|dialog| !dialog.pending)
+                                        .filter(|dialog| !pending && !dialog.pending)
                                     {
                                         dialog.server = id;
                                         dialog.error = None;
@@ -657,6 +804,7 @@ impl Fintwind {
                                 });
                             })
                             .selected(id == server)
+                            .disabled(pending)
                         })
                         .collect()
                 },
@@ -671,56 +819,33 @@ impl Fintwind {
                 .text_color(theme.text_secondary)
                 .child(text)
         };
-        let methods = {
-            let mut row = div()
-                .flex()
-                .gap(px(4.0))
-                .p(px(4.0))
-                .rounded(px(8.0))
-                .border_1()
-                .border_color(theme.border)
-                .bg(theme.overlay);
-            for (kind, id, title) in [
-                (
-                    ProjectMethod::Existing,
-                    "project-existing",
-                    tr!("project.method_existing"),
-                ),
-                (
-                    ProjectMethod::Clone,
-                    "project-clone",
-                    tr!("project.method_clone"),
-                ),
-                (
-                    ProjectMethod::Empty,
-                    "project-empty",
-                    tr!("project.method_empty"),
-                ),
-            ] {
-                row = row.child(
-                    div().flex_1().min_w_0().flex().justify_center().child(
-                        Button::new(id, title)
-                            .size(ControlSize::Sm)
-                            .variant(if kind == method {
-                                ButtonVariant::Secondary
-                            } else {
-                                ButtonVariant::Ghost
-                            })
-                            .disabled(pending || (!can_create && kind != ProjectMethod::Existing))
-                            .on_click(cx.listener(move |app, _, _, cx| {
-                                if let Some(dialog) =
-                                    app.add_project_dialog.as_mut().filter(|d| !d.pending)
-                                {
-                                    dialog.method = kind;
-                                    dialog.error = None;
-                                    cx.notify();
-                                }
-                            })),
-                    ),
-                );
+        let methods = SegmentedControl::new(
+            "add-project-method",
+            match method {
+                ProjectMethod::Existing => "existing",
+                ProjectMethod::Clone => "clone",
+                ProjectMethod::Empty => "empty",
+            },
+        )
+        .segment("existing", tr!("project.method_existing"), None)
+        .segment("clone", tr!("project.method_clone"), None)
+        .segment("empty", tr!("project.method_empty"), None)
+        .size(ControlSize::Sm)
+        .on_change(cx.listener(move |app, value: &SharedString, _, cx| {
+            if let Some(dialog) = app
+                .add_project_dialog
+                .as_mut()
+                .filter(|dialog| !pending && !dialog.pending)
+            {
+                dialog.method = match value.as_ref() {
+                    "clone" => ProjectMethod::Clone,
+                    "empty" => ProjectMethod::Empty,
+                    _ => ProjectMethod::Existing,
+                };
+                dialog.error = None;
+                cx.notify();
             }
-            row
-        };
+        }));
 
         let pick_weak = weak.clone();
         let key_weak = weak.clone();
@@ -833,12 +958,7 @@ impl Fintwind {
                     .child(
                         div()
                             .flex()
-                            .when(method == ProjectMethod::Existing, |element| {
-                                element.flex_col().items_start()
-                            })
-                            .when(method != ProjectMethod::Existing, |element| {
-                                element.items_center()
-                            })
+                            .items_center()
                             .gap(px(8.0))
                             .child(label(tr!("project.location_label")))
                             .child(location),
@@ -930,6 +1050,7 @@ impl Fintwind {
                     .border_color(theme.border)
                     .py(px(12.0))
                     .flex()
+                    .items_center()
                     .justify_end()
                     .gap(px(8.0))
                     .child(
@@ -945,6 +1066,7 @@ impl Fintwind {
                     .child(
                         div()
                             .id("add-project-confirm")
+                            .debug_selector(|| "add-project-submit".into())
                             .role(gpui::Role::Button)
                             .aria_label(confirm_label.clone())
                             .track_focus(&confirm_focus)
@@ -966,11 +1088,7 @@ impl Fintwind {
                             .focus_visible(|style| {
                                 style.border_1().border_color(theme.accent_focus)
                             })
-                            .child(crate::ui::loading_label(
-                                confirm_label,
-                                loading_phase == LoadingPhase::Visible,
-                                theme.on_accent,
-                            ))
+                            .child(crate::ui::loading_label(confirm_label, cloning || showing, theme.on_accent))
                             .when(can_confirm, |button| {
                                 button.on_activation(cx, |this, _, cx| {
                                     this.confirm_add_project(cx);
@@ -999,6 +1117,6 @@ impl Fintwind {
                 cx.listener(|this, _, _, cx| this.close_add_project_dialog(cx)),
             )
             .child(card);
-        Some(gpui::deferred(layer).with_priority(4).into_any_element())
+        Some(gpui::deferred(layer).with_priority(ADD_PROJECT_LAYER_PRIORITY).into_any_element())
     }
 }

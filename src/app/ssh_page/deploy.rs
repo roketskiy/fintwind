@@ -87,41 +87,11 @@ fi
     }
 }
 
-pub(super) async fn deploy(
-    session: &client::Handle<HostKey>,
-    deployment: Deployment,
-) -> Result<(u16, String)> {
+async fn start(session: &client::Handle<HostKey>) -> Result<(u16, String)> {
     if let Detection::Running { port, token_file } = detect(session).await? {
         return Ok((port, token_file));
     }
-    let binary = if let Deployment::Upload(target) = deployment {
-        let executable = std::env::current_exe()?;
-        let mut path = executable.with_file_name(target.asset());
-        if !path.is_file()
-            && cfg!(target_os = "linux")
-            && LinuxTarget::from_system(&format!("Linux {}", std::env::consts::ARCH))
-                .is_some_and(|local| local.machine() == target.machine())
-        {
-            path = executable.with_file_name("fintwind-daemon");
-        }
-        Some(read_binary(target, path)?)
-    } else {
-        None
-    };
     tokio::time::timeout(Duration::from_secs(180), async {
-            if let Some(binary) = binary.as_deref() {
-                command(session, r#"
-umask 077
-mkdir -p -- "$root" || exit 1
-tmp=$(mktemp "$root/upload.XXXXXXXX") || exit 1
-trap 'rm -f -- "$tmp"' EXIT
-cat > "$tmp" && chmod 700 "$tmp" || exit 1
-[ "$(wc -c < "$tmp")" -eq "$1" ] || exit 1
-if [ ! -e "$root/daemon" ]; then
-    ln -- "$tmp" "$root/daemon" || [ -x "$root/daemon" ] || exit 1
-fi
-"#, Some(binary)).await?;
-            }
             command(session, r#"
 umask 077
 test -x "$root/daemon" || exit 1
@@ -160,6 +130,13 @@ pub(super) async fn ensure_current(
             .is_some_and(|local| local.machine() == target.machine())
     {
         path = executable.with_file_name("fintwind-daemon");
+    }
+    if !path.is_file() {
+        match detect(session).await? {
+            Detection::Running { port, token_file } => return Ok((port, token_file)),
+            Detection::Stopped => return start(session).await,
+            Detection::Missing => {}
+        }
     }
     let binary = read_binary(target, path)?;
     let digest = format!("{:x}", Sha256::digest(&binary));
@@ -240,7 +217,7 @@ printf '%s\n%s\n' '{version}' '{digest}' > "$root/version"
         let script = format!("printf '%s\\n%s\\n' '{version}' '{digest}' > \"$root/version\"");
         command(session, &script, None).await?;
     }
-    deploy(session, Deployment::Start).await
+    start(session).await
 }
 
 fn read_binary(target: LinuxTarget, path: PathBuf) -> Result<Vec<u8>> {

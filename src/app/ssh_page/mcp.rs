@@ -82,10 +82,9 @@ impl Fintwind {
                     .as_ref()
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
                 runtime.block_on(async {
-                    let session =
+                    let (session, _) =
                         tokio::time::timeout(Duration::from_secs(20), authenticate(&profile))
-                            .await??
-                            .map_err(|_| anyhow::anyhow!("SSH host fingerprint is not trusted"))?;
+                            .await??;
                     tunnel::authenticate_mcp(
                         session,
                         binary.to_str().context("invalid OpenCode path")?,

@@ -113,7 +113,6 @@ ssh.save_connect: 保存并连接
 ssh.save_edit: 保存修改
 ssh.remove_title: 移除连接？
 ssh.remove_body: 从此设备移除「%{name}」的连接配置。远端项目和私钥文件会保留。
-ssh.verify_body: 首次连接到 %{host}。请通过管理员或服务器平台独立核对指纹。
 ssh.edit_connection: 编辑连接
 ssh.remove_connection: 移除连接
 mcp.ssh_refresh: 刷新
@@ -134,8 +133,6 @@ ssh.key: 本地私钥
 ssh.invalid_fields: 请填写名称、主机、端口、用户名及私钥的绝对路径。
 ssh.saved: 已保存连接
 ssh.new: 新建连接
-ssh.verify: 请与可信来源核对主机指纹。
-ssh.trust: 信任指纹
 ssh.last_read: 上次读取
 ssh.system: 系统
 ssh.memory: 内存
@@ -176,6 +173,17 @@ project.invalid_github_url: 请输入 GitHub 仓库地址，例如 https://githu
 project.clone_timeout: 克隆超时。
 project.create_and_add: 创建并添加
 project.clone_and_add: 克隆并添加
+project.cloning: 正在克隆仓库…
+project.clone_counting: 正在统计对象 · %{percent}%
+project.clone_compressing: 正在压缩对象 · %{percent}%
+project.clone_receiving: 正在接收对象 · %{percent}%
+project.clone_resolving: 正在处理差异 · %{percent}%
+project.clone_updating: 正在检出文件 · %{percent}%
+project.opening_remote: 正在打开远程项目…
+project.added: 项目已添加
+project.add_failed: "无法添加项目：%{error}"
+project.open_remote_failed: 远程项目窗口未能打开。
+project.open_remote_timeout: 等待远程项目窗口打开超时。
 project.target_exists: 目标位置已有同名文件或文件夹，未覆盖。
 project.creation_failed: 未能创建项目。请检查父目录和仓库访问权限，目标可能残留未完成的文件夹。
 project.creation_unknown: 结果待确认。请先检查目标目录，再决定是否重试。

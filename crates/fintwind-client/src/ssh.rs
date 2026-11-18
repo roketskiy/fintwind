@@ -163,11 +163,63 @@ pub enum ProjectCreation {
     Unconfirmed,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum GitCloneStage {
+    Counting,
+    Compressing,
+    Receiving,
+    Resolving,
+    Updating,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct GitCloneProgress {
+    pub stage: GitCloneStage,
+    pub percent: u8,
+}
+
+#[derive(Default)]
+pub struct GitCloneProgressReader {
+    line: Vec<u8>,
+}
+
+impl GitCloneProgressReader {
+    pub fn push(&mut self, bytes: &[u8], mut report: impl FnMut(GitCloneProgress)) {
+        for &byte in bytes {
+            if matches!(byte, b'\r' | b'\n') {
+                if let Some(progress) = Self::parse(&self.line) {
+                    report(progress);
+                }
+                self.line.clear();
+            } else if self.line.len() < 1024 {
+                self.line.push(byte);
+            }
+        }
+    }
+
+    fn parse(line: &[u8]) -> Option<GitCloneProgress> {
+        let line = std::str::from_utf8(line).ok()?;
+        let line = line.trim_start_matches("remote: ").trim_start();
+        let (stage, value) = line.split_once(':')?;
+        let stage = match stage {
+            "Counting objects" => GitCloneStage::Counting,
+            "Compressing objects" => GitCloneStage::Compressing,
+            "Receiving objects" => GitCloneStage::Receiving,
+            "Resolving deltas" => GitCloneStage::Resolving,
+            "Updating files" => GitCloneStage::Updating,
+            _ => return None,
+        };
+        let percent = value.split_once('%')?.0.trim().parse().ok()?;
+        (percent <= 100).then_some(GitCloneProgress { stage, percent })
+    }
+}
+
 pub async fn create_project<H: client::Handler>(
     session: &client::Handle<H>,
     parent: &str,
     name: &str,
     repository: Option<&str>,
+    mut progress: impl FnMut(GitCloneProgress),
 ) -> Result<ProjectCreation> {
     ensure!(
         parent.starts_with('/') && !parent.chars().any(char::is_control),
@@ -183,7 +235,7 @@ pub async fn create_project<H: client::Handler>(
     let repo = repository.map(github_repository).transpose()?;
     let clone = repo.map_or(String::new(), |url| {
         format!(
-            "GIT_TERMINAL_PROMPT=0 git clone -- {} . >/dev/null 2>&1 || exit 13; ",
+            "LC_ALL=C GIT_TERMINAL_PROMPT=0 git clone --progress -- {} . >/dev/null || exit 13; ",
             shell_arg(&url)
         )
     });
@@ -204,6 +256,7 @@ pub async fn create_project<H: client::Handler>(
             )
             .await?;
         let mut bytes = Vec::new();
+        let mut progress_reader = GitCloneProgressReader::default();
         let mut status = None;
         while let Some(message) = channel.wait().await {
             match message {
@@ -212,6 +265,7 @@ pub async fn create_project<H: client::Handler>(
                     bytes.extend_from_slice(&data);
                 }
                 ChannelMsg::ExitStatus { exit_status } => status = Some(exit_status),
+                ChannelMsg::ExtendedData { data, .. } => progress_reader.push(&data, &mut progress),
                 _ => {}
             }
         }

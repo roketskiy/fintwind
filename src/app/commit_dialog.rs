@@ -4,6 +4,8 @@
 //! background executor. UI surfaces only paint the cached state below.
 
 use crate::theme::ui_px;
+use crate::ui::ActivationExt;
+use crate::ui::loading::{LoadingDelay, LoadingPhase};
 use crate::ui::scrollbar::{self, ScrollbarState};
 use std::rc::Rc;
 
@@ -75,8 +77,11 @@ pub(super) struct CommitDialogState {
     include_unstaged: bool,
     snapshot: crate::git_commit::Snapshot,
     snapshot_loading: bool,
+    snapshot_failed: bool,
+    snapshot_delay: Option<LoadingDelay<Uuid>>,
     error: Option<String>,
     include_focus: FocusHandle,
+    retry_focus: FocusHandle,
     commit_focus: FocusHandle,
     commit_push_focus: FocusHandle,
     push_focus: FocusHandle,
@@ -92,11 +97,12 @@ pub(super) struct CommitDialogState {
 impl CommitDialogState {
     fn can_commit(&self) -> bool {
         !self.snapshot_loading
+            && !self.snapshot_failed
             && (self.snapshot.has_staged || (self.include_unstaged && self.snapshot.has_unstaged))
     }
 
     fn can_push(&self) -> bool {
-        !self.snapshot_loading && self.snapshot.can_push
+        !self.snapshot_loading && !self.snapshot_failed && self.snapshot.can_push
     }
 
     fn displayed_counts(&self) -> (u64, u64) {
@@ -173,8 +179,11 @@ impl Fintwind {
             include_unstaged: true,
             snapshot,
             snapshot_loading: true,
+            snapshot_failed: false,
+            snapshot_delay: None,
             error: None,
             include_focus: cx.focus_handle(),
+            retry_focus: cx.focus_handle(),
             commit_focus: cx.focus_handle(),
             commit_push_focus: cx.focus_handle(),
             push_focus: cx.focus_handle(),
@@ -188,7 +197,19 @@ impl Fintwind {
             window.on_next_frame(move |window, cx| window.focus(&message_focus, cx));
         });
         cx.notify();
+        self.load_commit_snapshot(cx);
+    }
 
+    fn load_commit_snapshot(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.commit_dialog.as_mut() else {
+            return;
+        };
+        let id = dialog.id;
+        let workspace = dialog.workspace.clone();
+        dialog.snapshot_loading = true;
+        dialog.snapshot_failed = false;
+        dialog.error = None;
+        cx.notify();
         let workspace_client = fintwind_client::WorkspaceClient::new(self.daemon.client());
         cx.spawn(async move |fintwind, cx| {
             let result = cx
@@ -218,7 +239,10 @@ impl Fintwind {
                 dialog.snapshot_loading = false;
                 match result {
                     Ok(snapshot) => dialog.snapshot = snapshot,
-                    Err(error) => dialog.error = Some(error),
+                    Err(error) => {
+                        dialog.snapshot_failed = true;
+                        dialog.error = Some(error);
+                    }
                 }
                 cx.notify();
             });
@@ -243,7 +267,9 @@ impl Fintwind {
             return;
         };
         dialog.include_unstaged = !dialog.include_unstaged;
-        dialog.error = None;
+        if !dialog.snapshot_failed {
+            dialog.error = None;
+        }
         cx.notify();
     }
 
@@ -543,7 +569,7 @@ impl Fintwind {
     }
 
     pub(super) fn render_commit_dialog(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let dialog = self.commit_dialog.as_ref()?;
+        let dialog = self.commit_dialog.as_mut()?;
         let theme = Theme::current(cx);
         let branch = dialog.snapshot.branch.clone();
         let message = dialog.message.clone();
@@ -559,8 +585,25 @@ impl Fintwind {
         let (additions, deletions) = dialog.displayed_counts();
         let can_commit = pending.is_none() && dialog.can_commit();
         let can_push = pending.is_none() && dialog.can_push();
-        let pending_status = pending.map(commit_pending_status_label);
         let error = dialog.error.clone();
+        let snapshot_failed = dialog.snapshot_failed;
+        let loading_phase = if snapshot_failed {
+            dialog.snapshot_delay = None;
+            LoadingPhase::Done
+        } else {
+            let (phase, wake) =
+                LoadingDelay::observe(&mut dialog.snapshot_delay, dialog.id, dialog.snapshot_loading);
+            if let Some(wake) = wake {
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(wake.delay()).await;
+                    wake.fired();
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                })
+                .detach();
+            }
+            phase
+        };
+        let counts_loading = loading_phase == LoadingPhase::Visible;
         let weak = cx.entity().downgrade();
 
         let include = {
@@ -619,7 +662,15 @@ impl Fintwind {
                         })
                         .child(tr!("commit.include_unstaged")),
                 )
-                .child(
+                .child(if counts_loading {
+                    div()
+                        .flex_none()
+                        .w(px(34.0))
+                        .h(px(12.0))
+                        .rounded(px(3.0))
+                        .bg(theme.overlay_strong)
+                        .into_any_element()
+                } else {
                     div()
                         .flex_none()
                         .flex()
@@ -636,8 +687,9 @@ impl Fintwind {
                             div()
                                 .text_color(theme.danger_text)
                                 .child(format!("-{}", grouped_number(deletions))),
-                        ),
-                )
+                        )
+                        .into_any_element()
+                })
                 .when(include_enabled, |row| {
                     row.on_click(move |_, _, cx| {
                         let _ = click_weak
@@ -664,13 +716,7 @@ impl Fintwind {
             "commit-dialog-commit",
             &dialog.commit_focus,
             "icons/git-commit-horizontal.svg",
-            if commit_active {
-                pending_status
-                    .clone()
-                    .unwrap_or_else(|| tr!("commit.commit"))
-            } else {
-                tr!("commit.commit")
-            },
+            tr!("commit.commit"),
             can_commit,
             commit_active,
             Some("Ctrl+Enter"),
@@ -687,13 +733,7 @@ impl Fintwind {
             "commit-dialog-commit-and-push",
             &dialog.commit_push_focus,
             "icons/cloud-upload.svg",
-            if commit_and_push_active {
-                pending_status
-                    .clone()
-                    .unwrap_or_else(|| tr!("commit.commit_and_push"))
-            } else {
-                tr!("commit.commit_and_push")
-            },
+            tr!("commit.commit_and_push"),
             can_commit,
             commit_and_push_active,
             None,
@@ -706,11 +746,7 @@ impl Fintwind {
             "commit-dialog-push",
             &dialog.push_focus,
             "icons/cloud-upload.svg",
-            if push_active {
-                pending_status.unwrap_or_else(|| tr!("commit.push"))
-            } else {
-                tr!("commit.push")
-            },
+            tr!("commit.push"),
             can_push,
             push_active,
             None,
@@ -794,7 +830,44 @@ impl Fintwind {
                         .text_size(ui_px(11.5))
                         .line_height(ui_px(16.0))
                         .text_color(theme.danger_text)
-                        .child(error),
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(div().flex_1().min_w_0().child(error))
+                        .when(snapshot_failed, |row| {
+                            row.child(
+                                div()
+                                    .id("commit-snapshot-retry")
+                                    .track_focus(&dialog.retry_focus)
+                                    .tab_index(0)
+                                    .flex_none()
+                                    .h(px(22.0))
+                                    .px(px(8.0))
+                                    .rounded(px(6.0))
+                                    .flex()
+                                    .items_center()
+                                    .cursor_default()
+                                    .text_color(theme.text_secondary)
+                                    .focus_visible(|style| {
+                                        style.border_1().border_color(theme.accent_focus)
+                                    })
+                                    .hover(|style| {
+                                        style.bg(theme.overlay).text_color(theme.text)
+                                    })
+                                    .active(|style| style.bg(theme.overlay_strong))
+                                    .child(tr!("common.retry"))
+                                    .on_activation(cx, |this, window, cx| {
+                                        this.load_commit_snapshot(cx);
+                                        let message_focus = this
+                                            .commit_dialog
+                                            .as_ref()
+                                            .map(|dialog| dialog.message.read(cx).focus());
+                                        if let Some(focus) = message_focus {
+                                            window.focus(&focus, cx);
+                                        }
+                                    }),
+                            )
+                        }),
                 )
             })
             .child(div().mx(px(8.0)).h(px(1.0)).bg(theme.border))
@@ -863,7 +936,7 @@ fn render_commit_action_row(
     div()
         .id(id)
         .track_focus(focus)
-        .when(enabled, |row| row.tab_index(0))
+        .when(enabled || active, |row| row.tab_index(0))
         .h(px(40.0))
         .w_full()
         .px(px(10.0))

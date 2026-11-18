@@ -5,6 +5,13 @@ enum BranchOperation {
     Create(String),
 }
 
+pub(super) struct FailedBranchOperation {
+    path: PathBuf,
+    branch: String,
+    create: bool,
+    message: String,
+}
+
 impl Fintwind {
     pub(super) fn sync_branch_picker_rows(&self, rows: &[crate::git_branch::BranchEntry]) {
         let mut cached = self.branch_picker_row_cache.borrow_mut();
@@ -14,6 +21,39 @@ impl Fintwind {
         *cached = rows.to_vec();
         self.branch_picker_list_state
             .reset_with_uniform_height(rows.len(), px(BRANCH_PICKER_ROW_HEIGHT));
+    }
+
+    pub(super) fn last_branch_error_for(
+        &self,
+        workspace_path: &std::path::Path,
+    ) -> Option<(String, String)> {
+        self.branch_operation_error
+            .as_ref()
+            .filter(|failed| failed.path == workspace_path)
+            .map(|failed| (failed.branch.clone(), failed.message.clone()))
+    }
+
+    pub(super) fn retry_failed_branch_operation(&mut self, cx: &mut Context<Self>) {
+        if self.branch_operation_pending {
+            return;
+        }
+        let failed = self.branch_operation_error.as_ref()
+            .map(|failed| (failed.path.clone(), failed.branch.clone(), failed.create));
+        let Some((path, branch, create)) = failed else {
+            return;
+        };
+        if self
+            .selected_workspace_path()
+            .is_none_or(|selected| selected != path)
+        {
+            return;
+        }
+        let operation = if create {
+            BranchOperation::Create(branch)
+        } else {
+            BranchOperation::Checkout(branch)
+        };
+        self.start_branch_operation(path, operation, cx);
     }
 
     /// Read the selected workspace's cached Git branches, starting one
@@ -342,6 +382,13 @@ impl Fintwind {
         if self.branch_operation_pending {
             return;
         }
+        let (retry_branch, retry_create) = match &operation {
+            BranchOperation::Checkout(branch) => (branch.clone(), false),
+            BranchOperation::Create(branch) => (branch.clone(), true),
+        };
+        if self.branch_operation_error.as_ref().is_some_and(|failed| failed.path == path) {
+            self.branch_operation_error = None;
+        }
         self.branch_operation_pending = true;
         cx.notify();
         let workspace = fintwind_client::WorkspaceClient::new(self.daemon.client());
@@ -374,6 +421,9 @@ impl Fintwind {
                 fintwind.branch_operation_pending = false;
                 match result {
                     Ok(snapshot) => {
+                        if fintwind.branch_operation_error.as_ref().is_some_and(|failed| failed.path == path) {
+                            fintwind.branch_operation_error = None;
+                        }
                         let current = snapshot.current.clone();
                         fintwind.visible_branch_snapshot = Some((path.clone(), snapshot));
                         fintwind.branch_snapshots.invalidate(&path);
@@ -398,6 +448,12 @@ impl Fintwind {
                         }
                     }
                     Err(error) => {
+                        fintwind.branch_operation_error = Some(FailedBranchOperation {
+                                path: path.clone(),
+                                branch: retry_branch,
+                                create: retry_create,
+                                message: error.to_string(),
+                        });
                         fintwind.show_toast(tr!("errors.change_branch", error = error));
                     }
                 }

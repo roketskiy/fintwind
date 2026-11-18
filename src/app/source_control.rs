@@ -1,9 +1,16 @@
 use crate::theme::{code_px, ui_px};
 use crate::ui::ActivationExt;
+use crate::ui::loading::{LoadingDelay, LoadingPhase};
 
-use gpui::{Context, Div, IntoElement, Window, div, prelude::*, px};
+use gpui::{Context, Div, IntoElement, Window, div, prelude::*, px, relative};
 
 use super::right_panel::file_icon_for_path;
+
+pub(super) struct SourceControlMutationError {
+    workspace: Option<PathBuf>,
+    message: String,
+    retry: Option<(SharedString, fintwind_client::WorkspaceOperation)>,
+}
 use super::sidebar::localized_session_title;
 use super::*;
 
@@ -956,9 +963,6 @@ impl Fintwind {
         !self.review_is_history_snapshot() && self.source_control_busy.is_none()
     }
 
-    /// Runs one source-control write against the workspace it names. One
-    /// action at a time; landing refreshes the cached status and the open
-    /// diff, and failures surface as a toast with the Git message.
     fn run_source_control_mutation(
         &mut self,
         label: SharedString,
@@ -969,6 +973,14 @@ impl Fintwind {
         if self.source_control_busy.is_some() {
             return;
         }
+        let workspace = self.review_workspace_path().map(Path::to_path_buf);
+        let retry = matches!(
+            &operation,
+            fintwind_client::WorkspaceOperation::StagePaths { .. }
+                | fintwind_client::WorkspaceOperation::UnstagePaths { .. }
+        )
+        .then(|| (label.clone(), operation.clone()));
+        self.source_control_mutation_error = None;
         self.source_control_busy = Some(label);
         cx.notify();
         let client = fintwind_client::WorkspaceClient::new(self.daemon.client());
@@ -982,11 +994,23 @@ impl Fintwind {
                 match result {
                     Ok(fintwind_client::WorkspaceResult::Ack) => {
                         if let Some(message) = success_toast {
-                            this.show_toast(message);
+                            this.show_success_toast(message);
                         }
                     }
-                    Ok(_) => this.show_toast(tr!("source_control.action_failed")),
-                    Err(error) => this.show_toast(error.to_string()),
+                    Ok(_) => {
+                        this.source_control_mutation_error = Some(SourceControlMutationError {
+                            workspace,
+                            message: tr!("source_control.action_failed"),
+                            retry,
+                        });
+                    }
+                    Err(error) => {
+                        this.source_control_mutation_error = Some(SourceControlMutationError {
+                            workspace,
+                            message: error.to_string(),
+                            retry,
+                        });
+                    }
                 }
                 this.refresh_source_control_status(cx);
                 cx.notify();
@@ -1198,6 +1222,16 @@ impl Fintwind {
             return;
         };
         let untracked = entry.worktree_status == '?';
+        self.show_source_control_discard(workspace, path, untracked, cx);
+    }
+
+    fn show_source_control_discard(
+        &mut self,
+        workspace: PathBuf,
+        path: String,
+        untracked: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.source_control_discard = Some(DiscardRequest {
             workspace,
             tracked: if untracked {
@@ -1654,27 +1688,24 @@ impl Fintwind {
                     );
                 }
             }
-            if self.source_control_untracked_loading
-                || (!self.source_control_untracked_complete
-                    && self.source_control_untracked_error.is_none())
-            {
-                rows.push(SourceControlRow::UntrackedLoading);
-            }
             if let Some(message) = self.source_control_untracked_error.as_ref() {
                 rows.push(SourceControlRow::IgnoredError {
                     message: message.clone(),
+                    retry: Some(ReviewTreeRetry::Refresh),
                 });
             }
             source_control_nested_rows(&mut rows, &self.source_control_nested, 0, &filter);
             if let Some(message) = self.source_control_nested_error.as_ref() {
                 rows.push(SourceControlRow::IgnoredError {
                     message: message.clone(),
+                    retry: Some(ReviewTreeRetry::Refresh),
                 });
             } else if !self.source_control_nested_complete
                 && self.source_control_nested_refreshed_at.is_some()
             {
                 rows.push(SourceControlRow::IgnoredError {
                     message: tr!("source_control.repositories_incomplete"),
+                    retry: None,
                 });
             }
             rows.push(SourceControlRow::IgnoredHeader {
@@ -1685,6 +1716,7 @@ impl Fintwind {
                 if let Some(error) = self.source_control_ignored_error.as_ref() {
                     rows.push(SourceControlRow::IgnoredError {
                         message: error.clone(),
+                        retry: Some(ReviewTreeRetry::Ignored),
                     });
                 }
                 let entries: Vec<_> = self
@@ -2223,7 +2255,7 @@ impl Fintwind {
                 button.bg(theme.overlay_strong).text_color(theme.text_ghost)
             })
             .child(icon(primary_icon, 13.0, primary_icon_color))
-            .child(primary_label);
+            .child(primary_label.clone());
 
         let handle = self.menu_handle("source-control-commit-more", cx);
         let menu_weak = weak.clone();
@@ -2456,22 +2488,62 @@ impl Fintwind {
             .flex_col()
             .gap(px(4.0))
             .child(self.render_source_control_workspace_menu(cx))
+            .children(self.source_control_mutation_error.as_ref()
+                .filter(|error| error.workspace.as_deref() == self.review_workspace_path())
+                .map(|error| {
+                    let retry = error.retry.clone();
+                    let workspace = error.workspace.clone();
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .text_size(ui_px(11.0))
+                        .text_color(theme.danger)
+                        .child(div().flex_1().min_w_0().child(error.message.clone()))
+                        .children(retry.map(|(label, operation)| {
+                            div()
+                                .id("source-control-mutation-retry")
+                                .role(gpui::Role::Button)
+                                .tab_index(0)
+                                .text_color(theme.text_secondary)
+                                .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
+                                .child(tr!("common.retry"))
+                                .on_activation(cx, move |this, _, cx| {
+                                    if this.source_control_allows_writes()
+                                        && this.review_workspace_path() == workspace.as_deref()
+                                    {
+                                        this.run_source_control_mutation(label.clone(), operation.clone(), None, cx);
+                                    }
+                                })
+                        }))
+                }))
             // Loading, error, and "not a repository" states keep the block
             // honest instead of showing a stale branch over a dead path.
             .when_some(self.source_control_status_error.clone(), |column, error| {
                 column.child(
                     div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
                         .text_size(ui_px(11.0))
                         .text_color(theme.danger)
-                        .child(error),
-                )
-            })
-            .when(self.source_control_status_loading, |column| {
-                column.child(
-                    div()
-                        .text_size(ui_px(11.0))
-                        .text_color(theme.text_tertiary)
-                        .child(tr!("source_control.loading")),
+                        .child(div().flex_1().min_w_0().child(error))
+                        .child(
+                            div()
+                                .id("source-control-status-retry")
+                                .tab_index(0)
+                                .flex_none()
+                                .text_color(theme.text_secondary)
+                                .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
+                                .hover(|style| style.bg(theme.overlay))
+                                .child(tr!("common.retry"))
+                                .on_activation(cx, |this, _, cx| {
+                                    if !this.source_control_status_loading {
+                                        this.refresh_source_control_status(cx);
+                                        this.refresh_review_diff(cx);
+                                    }
+                                }),
+                        ),
                 )
             })
             .when(status.is_some(), |column| {
@@ -2501,8 +2573,9 @@ impl Fintwind {
                 "source-control-refresh",
                 "icons/rotate-cw.svg",
                 tr!("source_control.refresh"),
-                enabled,
+                enabled && !self.source_control_status_loading && !self.right_panel_diff_loading,
                 |this, cx| {
+                    *this.source_control_refresh_spin.get_mut() = Some(motion::ActionSpin::start());
                     this.refresh_source_control_status(cx);
                     this.refresh_review_diff(cx);
                 },
@@ -2574,6 +2647,13 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let theme = Theme::current(cx);
+        let refresh_icon = motion::action_icon(
+            &self.source_control_refresh_spin,
+            self.source_control_status_loading || self.right_panel_diff_loading,
+            false,
+            icon(path, 12.0, theme.text_tertiary),
+            cx,
+        );
         div()
             .id(id)
             .tab_index(0)
@@ -2592,10 +2672,13 @@ impl Fintwind {
                         action(this, cx);
                     })
             })
-            .when(!enabled, |button| button.opacity(0.4))
+            .when(
+                !enabled && !self.source_control_status_loading && !self.right_panel_diff_loading,
+                |button| button.opacity(0.4),
+            )
             .focus_visible(|button| button.border_1().border_color(theme.accent_focus))
             .tooltip(Tooltip::text(label))
-            .child(icon(path, 12.0, theme.text_tertiary))
+            .child(refresh_icon)
     }
 
     /// The branch menu: the current branch on the chip, the local branches
@@ -2724,14 +2807,34 @@ impl Fintwind {
     fn render_source_control_file_list(&mut self, cx: &mut Context<Self>) -> Div {
         let theme = Theme::current(cx);
         let entity = cx.entity().downgrade();
-        let has_workspace = self.review_workspace_path().is_some();
+        let workspace = self.review_workspace_path().map(Path::to_path_buf);
+        let has_workspace = workspace.is_some();
+        let loading_phase = if let Some(path) = workspace {
+            let (phase, wake) = LoadingDelay::observe(
+                &mut self.source_control_loading,
+                path,
+                self.source_control_status_loading && self.source_control_status.is_none(),
+            );
+            if let Some(wake) = wake {
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(wake.delay()).await;
+                    wake.fired();
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                })
+                .detach();
+            }
+            phase
+        } else {
+            self.source_control_loading = None;
+            LoadingPhase::Done
+        };
         let status = self.source_control_status.as_ref();
         let placeholder = if !has_workspace {
             Some(tr!("source_control.no_directory"))
         } else if self.source_control_status_error.is_some() {
             None
         } else if self.source_control_status_loading && status.is_none() {
-            Some(tr!("source_control.loading"))
+            None
         } else if let Some(status) = status {
             if status.entries.is_empty()
                 && self.source_control_untracked_complete
@@ -2766,7 +2869,7 @@ impl Fintwind {
                     ),
                 )
             })
-            .children(placeholder.map(|label| {
+            .children(placeholder.filter(|_| loading_phase == LoadingPhase::Done).map(|label| {
                 div()
                     .px(px(12.0))
                     .pt(px(10.0))
@@ -2775,7 +2878,25 @@ impl Fintwind {
                     .child(label)
                     .into_any_element()
             }))
-            .when(row_count > 0, |column| {
+            .when(loading_phase == LoadingPhase::Visible, |column| {
+                column.children((0..5).map(|index| {
+                    div()
+                        .h(ui_px(SOURCE_CONTROL_ROW_HEIGHT))
+                        .px(px(12.0))
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(div().size(px(12.0)).rounded(px(3.0)).bg(theme.overlay_strong))
+                        .child(
+                            div()
+                                .w(px(if index % 2 == 0 { 110.0 } else { 86.0 }))
+                                .h(px(9.0))
+                                .rounded(px(3.0))
+                                .bg(theme.overlay_strong),
+                        )
+                }))
+            })
+            .when(row_count > 0 && loading_phase == LoadingPhase::Done, |column| {
                 column.child(
                     div()
                         .id("source-control-file-list")
@@ -2809,8 +2930,6 @@ impl Fintwind {
 
     /// One flattened row: a group header with its group-wide actions, a
     /// foldable directory, or a clickable file with its status letter.
-    /// Per-file actions live beside the file name in the diff reader's
-    /// header, not here.
     fn render_source_control_row(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         let Some(row) = self.source_control_rows.borrow().get(index).cloned() else {
@@ -2924,17 +3043,49 @@ impl Fintwind {
                     theme.text_ghost,
                 ))
                 .child(tr!("source_control.ignored"))
-                .when(loading, |row| row.child(tr!("source_control.loading")))
+                .child(div().flex_1())
+                .when(loading, |row| {
+                    row.child(motion::spin_slow(icon(
+                        "icons/loader-circle.svg",
+                        12.0,
+                        theme.text_tertiary,
+                    )))
+                })
                 .on_activation(cx, |this, _, cx| this.toggle_source_control_ignored(cx))
                 .into_any_element(),
-            SourceControlRow::IgnoredError { message } => div()
+            SourceControlRow::IgnoredError { message, retry } => div()
                 .w_full()
                 .h(ui_px(SOURCE_CONTROL_ROW_HEIGHT))
                 .px(px(12.0))
+                .flex()
+                .items_center()
+                .gap(px(6.0))
                 .text_size(ui_px(11.0))
                 .text_color(theme.danger)
-                .truncate()
-                .child(message)
+                .child(div().flex_1().min_w_0().truncate().child(message))
+                .children(retry.map(|retry| {
+                    div()
+                        .id(SharedString::from(format!("source-control-retry-{index}")))
+                        .tab_index(0)
+                        .flex_none()
+                        .text_color(theme.text_secondary)
+                        .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
+                        .child(tr!("common.retry"))
+                        .on_activation(cx, move |this, _, cx| {
+                            match &retry {
+                                ReviewTreeRetry::Refresh => this.refresh_source_control_status(cx),
+                                ReviewTreeRetry::Ignored => this.refresh_source_control_ignored(None, None, cx),
+                                ReviewTreeRetry::Nested(path) => {
+                                    if let Some(node) = find_nested_repository_mut(&mut this.source_control_nested, path) {
+                                        node.stale = true;
+                                    }
+                                    this.load_nested_repository(path.clone(), cx);
+                                }
+                            }
+                            this.sync_source_control_rows(cx);
+                            cx.notify();
+                        })
+                }))
                 .into_any_element(),
             SourceControlRow::IgnoredEmpty => div()
                 .w_full()
@@ -2943,14 +3094,6 @@ impl Fintwind {
                 .text_size(ui_px(11.0))
                 .text_color(theme.text_tertiary)
                 .child(tr!("source_control.ignored_empty"))
-                .into_any_element(),
-            SourceControlRow::UntrackedLoading => div()
-                .w_full()
-                .h(ui_px(SOURCE_CONTROL_ROW_HEIGHT))
-                .px(px(12.0))
-                .text_size(ui_px(11.0))
-                .text_color(theme.text_tertiary)
-                .child(tr!("source_control.loading"))
                 .into_any_element(),
             SourceControlRow::LoadMore {
                 group,
@@ -3046,7 +3189,11 @@ impl Fintwind {
                     .child(icon("icons/git-branch.svg", 13.0, theme.text_tertiary))
                     .child(div().flex_1().min_w_0().truncate().child(name))
                     .when(loading, |element| {
-                        element.child(tr!("source_control.loading"))
+                        element.child(motion::spin_slow(icon(
+                            "icons/loader-circle.svg",
+                            12.0,
+                            theme.text_tertiary,
+                        )))
                     })
                     .when(!initialized, |element| {
                         element.child(tr!("source_control.repository_uninitialized"))
@@ -3129,6 +3276,7 @@ impl Fintwind {
                 path,
                 depth,
                 letter,
+                origin,
             } => {
                 let id = SharedString::from(format!(
                     "source-control-nested-file-{}-{}-{path}",
@@ -3136,8 +3284,16 @@ impl Fintwind {
                     group.key()
                 ));
                 let row_path = path.clone();
+                let row_actions = self.render_source_control_row_actions(
+                    id.clone(),
+                    group,
+                    &path,
+                    Some((repository.clone(), origin)),
+                    cx,
+                );
                 div()
-                    .id(id)
+                    .id(id.clone())
+                    .group(id)
                     .aria_label(path.clone())
                     .tab_index(0)
                     .w_full()
@@ -3171,6 +3327,7 @@ impl Fintwind {
                             .text_color(theme.text_secondary)
                             .child(path),
                     )
+                    .children(row_actions)
                     .child(
                         div()
                             .w(px(12.0))
@@ -3265,8 +3422,16 @@ impl Fintwind {
                     })
                 });
                 let selected = selected_source && selected_path == Some(path.as_str());
+                let row_actions = self.render_source_control_row_actions(
+                    element_id.clone(),
+                    group,
+                    &path,
+                    None,
+                    cx,
+                );
                 div()
-                    .id(element_id)
+                    .id(element_id.clone())
+                    .group(element_id)
                     .aria_label(title.clone())
                     .relative()
                     .w_full()
@@ -3316,6 +3481,7 @@ impl Fintwind {
                             .tooltip(Tooltip::text(title.clone()))
                             .child(name),
                     )
+                    .children(row_actions)
                     .child(
                         div()
                             .w(px(12.0))
@@ -3329,6 +3495,114 @@ impl Fintwind {
                     .into_any_element()
             }
         }
+    }
+
+    fn render_source_control_row_actions(
+        &self,
+        hover_group: SharedString,
+        group: SourceControlGroup,
+        path: &str,
+        nested: Option<(PathBuf, Option<String>)>,
+        cx: &mut Context<Self>,
+    ) -> Option<Div> {
+        if self.review_is_history_snapshot() || group == SourceControlGroup::Ignored {
+            return None;
+        }
+        let busy = self.source_control_busy.is_some();
+        let theme = Theme::current(cx);
+        let button = |id, glyph, label: String| {
+            crate::ui::icon_button(id, glyph, theme)
+                .size(ui_px(20.0))
+                .tab_index(0)
+                .aria_label(label.clone())
+                .tooltip(Tooltip::text(label))
+                .opacity(0.0)
+                .when(!busy, |style| {
+                    style.group_hover(hover_group.clone(), |style| style.opacity(1.0))
+                })
+                .when(busy, |style| {
+                    style.group_hover(hover_group.clone(), |style| style.opacity(0.4))
+                })
+                .focus_visible(|style| {
+                    style
+                        .opacity(1.0)
+                        .border_1()
+                        .border_color(theme.accent_focus)
+                })
+        };
+        let staged = group == SourceControlGroup::Staged;
+        let stage_path = path.to_owned();
+        let stage_nested = nested.clone();
+        let stage = button(
+            "review-row-stage",
+            if staged {
+                "icons/minus.svg"
+            } else {
+                "icons/plus.svg"
+            },
+            if staged {
+                tr!("source_control.unstage")
+            } else {
+                tr!("source_control.stage")
+            },
+        )
+        .on_activation(cx, move |this, _, cx| {
+            if !this.source_control_allows_writes() {
+                return;
+            }
+            let mut paths = vec![stage_path.clone()];
+            if let Some((workspace, origin)) = &stage_nested {
+                paths.extend(origin.iter().cloned());
+                let cwd = workspace.clone();
+                let (label, operation) = if staged {
+                    (
+                        tr!("source_control.unstaging"),
+                        fintwind_client::WorkspaceOperation::UnstagePaths { cwd, paths },
+                    )
+                } else {
+                    (
+                        tr!("source_control.staging"),
+                        fintwind_client::WorkspaceOperation::StagePaths { cwd, paths },
+                    )
+                };
+                this.run_source_control_mutation(label.into(), operation, None, cx);
+            } else if staged {
+                this.unstage_source_control_paths(paths, cx);
+            } else {
+                this.stage_source_control_paths(paths, cx);
+            }
+        });
+        let path = path.to_owned();
+        Some(
+            div()
+                .flex()
+                .flex_none()
+                .when(!staged, |actions| {
+                    actions.child(
+                        button(
+                            "review-row-discard",
+                            "icons/trash.svg",
+                            tr!("source_control.discard"),
+                        )
+                        .on_activation(cx, move |this, _, cx| {
+                            if !this.source_control_allows_writes() {
+                                return;
+                            }
+                            if let Some((workspace, _)) = &nested {
+                                this.show_source_control_discard(
+                                    workspace.clone(),
+                                    path.clone(),
+                                    group == SourceControlGroup::Untracked,
+                                    cx,
+                                );
+                            } else {
+                                this.request_discard_source_control_file(path.clone(), cx);
+                            }
+                        }),
+                    )
+                })
+                .child(stage),
+        )
     }
 
     fn render_source_control_group_menu(
@@ -3954,31 +4228,104 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) -> Div {
         let navbar = self.render_review_diff_toolbar(cx);
-        let content = match self.right_panel_diff_snapshot.clone() {
-            Some(snapshot) => div()
+        let theme = Theme::current(cx);
+        let (loading_phase, wake) = if self.right_panel_diff_error.is_some() {
+            self.review_diff_loading = None;
+            (LoadingPhase::Done, None)
+        } else {
+            LoadingDelay::observe(
+                &mut self.review_diff_loading,
+                self.right_panel_diff_generation,
+                self.right_panel_diff_loading && self.right_panel_diff_snapshot.is_none(),
+            )
+        };
+        if let Some(wake) = wake {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(wake.delay()).await;
+                wake.fired();
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+        }
+        let content = match (loading_phase, self.right_panel_diff_snapshot.clone()) {
+            (LoadingPhase::Hidden, _) => div().flex_1().min_h_0().into_any_element(),
+            (LoadingPhase::Visible, _) => div()
+                .flex_1()
+                .min_h_0()
+                .px(px(16.0))
+                .pt(px(16.0))
+                .flex()
+                .flex_col()
+                .gap(px(12.0))
+                .children((0..8).map(|index| {
+                    div()
+                        .h(code_px(14.0))
+                        .w(px(match index % 3 {
+                            0 => 250.0,
+                            1 => 180.0,
+                            _ => 310.0,
+                        }))
+                        .max_w(relative(0.8))
+                        .rounded(px(3.0))
+                        .bg(theme.overlay_strong)
+                }))
+                .into_any_element(),
+            (_, Some(snapshot)) => div()
                 .flex_1()
                 .min_h_0()
                 .min_w_0()
                 .flex()
                 .flex_col()
+                .when_some(self.right_panel_diff_error.clone(), |content, error| {
+                    content.child(
+                        div()
+                            .px(px(12.0))
+                            .py(px(6.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .text_size(ui_px(11.0))
+                            .text_color(theme.warning_text)
+                            .child(div().flex_1().child(tr!("diff.refresh_failed", error = error)))
+                            .child(
+                                div()
+                                    .id("review-diff-retry")
+                                    .role(gpui::Role::Button)
+                                    .tab_index(0)
+                                    .focus_visible(|style| style.border_1().border_color(theme.accent))
+                                    .child(tr!("common.retry"))
+                                    .on_activation(cx, |this, _, cx| this.refresh_review_surface(cx)),
+                            ),
+                    )
+                })
                 .child(self.render_source_control_file_header(snapshot.clone(), cx))
                 .child(self.render_review_diff(snapshot, cx))
                 .into_any_element(),
-            None if self.right_panel_diff_loading => self
-                .render_right_panel_empty_message(
-                    tr!("diff.loading"),
-                    tr!("diff.loading_description"),
-                    cx,
-                )
-                .into_any_element(),
-            None if self.right_panel_diff_error.is_some() => self
+            (_, None) if self.right_panel_diff_loading => div().flex_1().min_h_0().into_any_element(),
+            (_, None) if self.right_panel_diff_error.is_some() => self
                 .render_right_panel_empty_message(
                     tr!("diff.unavailable"),
                     self.right_panel_diff_error.clone().unwrap_or_default(),
                     cx,
                 )
+                .child(
+                    div()
+                        .id("review-diff-initial-retry")
+                        .role(gpui::Role::Button)
+                        .tab_index(0)
+                        .mt(px(8.0))
+                        .px(px(8.0))
+                        .py(px(4.0))
+                        .rounded(px(5.0))
+                        .text_size(ui_px(11.0))
+                        .text_color(theme.text_secondary)
+                        .focus_visible(|style| style.border_1().border_color(theme.accent))
+                        .hover(|style| style.bg(theme.overlay))
+                        .child(tr!("common.retry"))
+                        .on_activation(cx, |this, _, cx| this.refresh_review_surface(cx)),
+                )
                 .into_any_element(),
-            None => self
+            (_, None) => self
                 .render_right_panel_empty_message(
                     tr!("diff.no_changes"),
                     tr!("diff.no_changes_description"),
@@ -4037,7 +4384,8 @@ impl Fintwind {
             .entry(self.source_control_status.as_deref(), &path);
         let has_unstaged = entry.is_some_and(|entry| entry.worktree_status != ' ');
         let has_staged = entry.is_some_and(source_control_entry_is_staged);
-        let writable = !self.review_is_history_snapshot() && self.source_control_busy.is_none();
+        let writable = !self.review_is_history_snapshot();
+        let busy = self.source_control_busy.is_some();
         let can_stage = writable && has_unstaged;
         let can_discard = writable && has_unstaged;
         let can_unstage = writable && has_staged;
@@ -4111,6 +4459,7 @@ impl Fintwind {
                 header.child(self.render_source_control_file_action(
                     "source-control-file-header-stage",
                     tr!("source_control.stage"),
+                    !busy,
                     cx.listener(|this, _, _, cx| {
                         let path = this.source_control_selected_path();
                         if let Some(path) = path {
@@ -4124,6 +4473,7 @@ impl Fintwind {
                 header.child(self.render_source_control_file_action(
                     "source-control-file-header-discard",
                     tr!("source_control.discard"),
+                    !busy,
                     cx.listener(|this, _, _, cx| {
                         let path = this.source_control_selected_path();
                         if let Some(path) = path {
@@ -4137,6 +4487,7 @@ impl Fintwind {
                 header.child(self.render_source_control_file_action(
                     "source-control-file-header-unstage",
                     tr!("source_control.unstage"),
+                    !busy,
                     cx.listener(|this, _, _, cx| {
                         let path = this.source_control_selected_path();
                         if let Some(path) = path {
@@ -4166,6 +4517,7 @@ impl Fintwind {
         &self,
         id: &'static str,
         label: String,
+        enabled: bool,
         on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
@@ -4184,9 +4536,13 @@ impl Fintwind {
             .cursor_default()
             .text_size(ui_px(10.5))
             .text_color(theme.text_secondary)
-            .hover(|button| button.bg(theme.overlay).text_color(theme.text))
+            .when(enabled, |button| {
+                button
+                    .hover(|button| button.bg(theme.overlay).text_color(theme.text))
+                    .on_click(on_click)
+            })
+            .when(!enabled, |button| button.opacity(0.4))
             .focus_visible(|button| button.border_1().border_color(theme.accent_focus))
-            .on_click(on_click)
             .child(label)
     }
 
@@ -4393,11 +4749,13 @@ impl Fintwind {
             .as_ref()
             .is_some_and(|snapshot| snapshot.truncated);
         let refresh_focus = self.transcript_control_focus("review-diff-refresh", cx);
-        let refresh_icon: AnyElement = if self.right_panel_diff_loading {
-            motion::spin(icon("icons/loader-circle.svg", 12.0, theme.text_tertiary))
-        } else {
-            icon("icons/rotate-cw.svg", 12.0, theme.text_tertiary).into_any_element()
-        };
+        let refresh_icon = motion::action_icon(
+            &self.review_diff_refresh_spin,
+            self.right_panel_diff_loading,
+            false,
+            icon("icons/rotate-cw.svg", 12.0, theme.text_tertiary),
+            cx,
+        );
         let refresh = div()
             .id("review-diff-refresh")
             .track_focus(&refresh_focus)
@@ -4414,10 +4772,18 @@ impl Fintwind {
             .active(|style| style.bg(theme.overlay_strong))
             .child(refresh_icon)
             .tooltip(|window, cx| Tooltip::new(tr!("diff.refresh")).build(window, cx))
-            .on_click(cx.listener(|this, _, _, cx| this.refresh_review_surface(cx)))
+            .on_click(cx.listener(|this, _, _, cx| {
+                if !this.right_panel_diff_loading {
+                    *this.review_diff_refresh_spin.get_mut() = Some(motion::ActionSpin::start());
+                    this.refresh_review_surface(cx);
+                }
+            }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                 if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                    this.refresh_review_surface(cx);
+                    if !this.right_panel_diff_loading {
+                        *this.review_diff_refresh_spin.get_mut() = Some(motion::ActionSpin::start());
+                        this.refresh_review_surface(cx);
+                    }
                     cx.stop_propagation();
                 }
             }));
@@ -5439,11 +5805,7 @@ impl Fintwind {
                         }
                         Err(error) => {
                             let message = error.to_string();
-                            if fintwind.right_panel_diff_snapshot.is_some() {
-                                fintwind.show_toast(tr!("diff.refresh_failed", error = message));
-                            } else {
-                                fintwind.right_panel_diff_error = Some(message);
-                            }
+                            fintwind.right_panel_diff_error = Some(message);
                         }
                     }
                     cx.notify();
@@ -5813,6 +6175,13 @@ impl SourceControlGroup {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum ReviewTreeRetry {
+    Refresh,
+    Ignored,
+    Nested(PathBuf),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum SourceControlRow {
     Header {
         group: SourceControlGroup,
@@ -5825,9 +6194,9 @@ pub(super) enum SourceControlRow {
     },
     IgnoredError {
         message: String,
+        retry: Option<ReviewTreeRetry>,
     },
     IgnoredEmpty,
-    UntrackedLoading,
     /// The next page of a directory listing. `directory` is `None` for the
     /// worktree root.
     LoadMore {
@@ -5866,6 +6235,7 @@ pub(super) enum SourceControlRow {
         path: String,
         depth: usize,
         letter: char,
+        origin: Option<String>,
     },
     Directory {
         group: SourceControlGroup,
@@ -5906,6 +6276,7 @@ fn source_control_nested_rows(
         if let Some(error) = node.error.as_ref() {
             rows.push(SourceControlRow::IgnoredError {
                 message: error.clone(),
+                retry: Some(ReviewTreeRetry::Nested(node.repository.path.clone())),
             });
         }
         if let Some(status) = node.status.as_ref() {
@@ -5954,6 +6325,10 @@ fn source_control_nested_rows(
                         group,
                         path: entry.path.clone(),
                         depth: depth + 1,
+                        origin: entry.origin_path.clone().filter(|_| {
+                            group == SourceControlGroup::Staged
+                                || matches!(entry.worktree_status, 'R' | 'C')
+                        }),
                         letter: if group == SourceControlGroup::Staged {
                             entry.index_status
                         } else {

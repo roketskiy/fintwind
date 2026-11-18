@@ -117,6 +117,21 @@ impl Fintwind {
         let Some(destination) = self.selected_composer_draft_key() else {
             return;
         };
+        if source == destination
+            || self.composer_drafts.get(destination).is_some_and(|draft| !draft.is_empty())
+        {
+            return;
+        }
+        for owner in self.composer_attachment_imports.values_mut() {
+            if *owner == Some(source) {
+                *owner = Some(destination);
+            }
+        }
+        for failure in self.composer_attachment_errors.values_mut() {
+            if failure.owner == Some(source) {
+                failure.owner = Some(destination);
+            }
+        }
         if self.composer_drafts.move_to_empty(source, destination) {
             self.restore_selected_composer_draft(cx);
             self.schedule_composer_draft_save(cx);

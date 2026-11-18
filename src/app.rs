@@ -162,6 +162,7 @@ struct ProviderProbeResult {
     binary_generation: u64,
     directory: Option<PathBuf>,
     probe: ProviderProbe,
+    error: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1435,6 +1436,7 @@ pub struct Fintwind {
     provider_probe_events: Receiver<ProviderProbeResult>,
     provider_model_discoveries: HashSet<Option<PathBuf>>,
     provider_model_discoveries_pending: HashSet<Option<PathBuf>>,
+    provider_model_discovery_error: Option<(Option<PathBuf>, String)>,
     /// Location represented by `probes`. It changes with the selected session,
     /// while completed discoveries for other locations remain in the daemon's
     /// disk cache and are reused when that location is selected again.
@@ -1464,6 +1466,9 @@ pub struct Fintwind {
     model_picker_highlight: Option<usize>,
     model_picker_scroll: ScrollHandle,
     model_picker_scrollbar: Rc<ScrollbarState>,
+    model_picker_loading: RefCell<
+        Option<crate::ui::loading::LoadingDelay<(Option<PathBuf>, ModelPickerTab)>>,
+    >,
     branch_search: Entity<ComposerInput>,
     branch_create_input: Entity<ComposerInput>,
     branch_picker_mode: BranchPickerMode,
@@ -1490,6 +1495,11 @@ pub struct Fintwind {
     capsule_todos: RefCell<Option<(Uuid, Option<Rc<background_work::todo::TodoSnapshot>>)>>,
     capsule_pull_requests:
         QueryCache<PathBuf, Result<fintwind_protocol::pull_request::PullRequestSnapshot, String>>,
+    capsule_pull_requests_previous: Option<(
+        PathBuf,
+        Arc<Result<fintwind_protocol::pull_request::PullRequestSnapshot, String>>,
+    )>,
+    capsule_pull_requests_loading: RefCell<Option<crate::ui::loading::LoadingDelay<PathBuf>>>,
     /// Git commit history per (workspace path, branch filter). Render only
     /// reads this in-memory cache; misses are fulfilled on the background
     /// executor. `Err` is cached as well so a broken path is not retried every
@@ -1502,11 +1512,15 @@ pub struct Fintwind {
     history_list_state: ListState,
     history_row_cache: Arc<git_history::HistoryRows>,
     history_row_key: Option<git_history::HistoryKey>,
+    history_loading: Option<crate::ui::loading::LoadingDelay<git_history::HistoryKey>>,
+    history_refresh_spin: Option<crate::ui::motion::ActionSpin>,
     history_row_height: Pixels,
     history_details_scroll: ScrollHandle,
     /// Keyboard cursor over the history list; `None` means no row selected.
     history_highlight: Option<usize>,
     branch_operation_pending: bool,
+    branch_operation_error: Option<branches::FailedBranchOperation>,
+    branch_operation_loading: RefCell<Option<crate::ui::loading::LoadingDelay<PathBuf>>>,
     /// Window-modal Git commit/push UI. Its repository snapshot is filled
     /// off-thread; frames only read this in-memory value.
     add_project_dialog: Option<add_project_dialog::AddProjectDialogState>,
@@ -1535,6 +1549,9 @@ pub struct Fintwind {
     /// Files dropped onto the composer, drawn as chips above the input and
     /// drained into the next submission.
     composer_attachments: Vec<ComposerAttachment>,
+    composer_attachment_imports: HashMap<Uuid, Option<crate::persistence::ComposerDraftKey>>,
+    composer_attachment_errors: HashMap<Uuid, composer::AttachmentImportFailure>,
+    composer_attachment_loading: RefCell<Option<crate::ui::loading::LoadingDelay<Option<crate::persistence::ComposerDraftKey>>>>,
     /// Quotes of selected code, chat messages and files, drawn as chips above
     /// the input and folded into the next submission's prompt text. Unlike
     /// attachments these never leave on the `files` channel: a reference is
@@ -1727,6 +1744,8 @@ pub struct Fintwind {
     right_panel_diff_source: ReviewDiffSource,
     right_panel_diff_snapshot: Option<Arc<ReviewDiffSnapshot>>,
     right_panel_diff_loading: bool,
+    review_diff_loading: Option<crate::ui::loading::LoadingDelay<u64>>,
+    review_diff_refresh_spin: RefCell<Option<crate::ui::motion::ActionSpin>>,
     right_panel_diff_error: Option<String>,
     right_panel_diff_generation: u64,
     right_panel_diff_selected_file: Option<usize>,
@@ -1747,6 +1766,8 @@ pub struct Fintwind {
     /// its own generation; the virtualized list draws flattened rows from it.
     source_control_status: Option<Arc<fintwind_client::git::WorktreeStatus>>,
     source_control_status_loading: bool,
+    source_control_loading: Option<crate::ui::loading::LoadingDelay<PathBuf>>,
+    source_control_refresh_spin: RefCell<Option<crate::ui::motion::ActionSpin>>,
     source_control_status_error: Option<String>,
     source_control_status_generation: u64,
     source_control_status_workspace: Option<PathBuf>,
@@ -1816,6 +1837,7 @@ pub struct Fintwind {
     /// The write action in flight (staging, discarding, fetch, …). Blocks
     /// re-entry while set and names the action on the toolbar.
     source_control_busy: Option<SharedString>,
+    source_control_mutation_error: Option<source_control::SourceControlMutationError>,
     /// A discard awaiting confirmation: the workspace it targets and the
     /// tracked/untracked split the daemon expects.
     source_control_discard: Option<source_control::DiscardRequest>,
@@ -1867,6 +1889,11 @@ pub struct Fintwind {
     /// Bumped per scan; a result from a superseded scan is discarded.
     skills_scan_generation: u64,
     skills_scan_pending: bool,
+    skills_remote_pending: HashMap<(Uuid, PathBuf), Option<bool>>,
+    skills_remote_errors: HashMap<(Uuid, PathBuf), (Option<bool>, String)>,
+    skills_remote_loading: RefCell<Option<crate::ui::loading::LoadingDelay<(Uuid, PathBuf, Option<bool>)>>>,
+    skills_scan_error: Option<String>,
+    skills_loading: RefCell<Option<crate::ui::loading::LoadingDelay<Option<Uuid>>>>,
     /// When the current catalog landed, for the reopen-staleness check.
     skills_scanned_at: Option<Instant>,
     /// Filter query over the Skills page's rows.
@@ -1979,13 +2006,17 @@ pub struct Fintwind {
     providers_oauth_generation: u64,
     /// The integration fetch (authorization set included) is in flight.
     providers_auth_loading: bool,
+    providers_auth_error: Option<String>,
     /// Only the newest integration snapshot may replace connection state.
     providers_integrations_generation: u64,
     /// The built-in provider whose local catalog check is in flight; the
     /// verdict lands as a toast, and a result for another provider never
     /// toasts.
     providers_builtin_catalog_check_id: Option<String>,
+    providers_builtin_catalog_error: Option<(String, String)>,
+    providers_builtin_catalog_loading: RefCell<Option<crate::ui::loading::LoadingDelay<String>>>,
     provider_quota: providers_quota::SubscriptionBoard,
+    builtin_refresh_spin: RefCell<Option<crate::ui::motion::ActionSpin>>,
     /// Desktop-local subscription cache (Claude/Codex sign-in): account
     /// isolation, single-flight de-duplication and failure backoff, so
     /// repeated board opens share one CLI run per account and cooldown.
@@ -2012,12 +2043,21 @@ pub struct Fintwind {
     /// Catalog image models narrowed to providers this install can use.
     /// Rebuilt only when the catalog or the authorized set changes.
     image_models: Vec<fintwind_client::models_dev::ImageModelChoice>,
+    image_models_workspace: Option<(PathBuf, PathBuf)>,
     image_models_generation: u64,
     image_models_loading: bool,
+    image_models_error: Option<String>,
+    image_models_loading_delay: RefCell<Option<crate::ui::loading::LoadingDelay<()>>>,
     /// The custom providers whose connectivity probe is in flight, each with
     /// its generation token; the verdict lands as a toast, and a superseded
     /// probe never toasts.
     provider_connectivity_testing: HashMap<String, u64>,
+    provider_models_fetching: HashMap<String, u64>,
+    provider_connectivity_errors: HashMap<String, String>,
+    provider_connectivity_loading: RefCell<HashMap<String, Option<crate::ui::loading::LoadingDelay<()>>>>,
+    provider_models_loading: RefCell<HashMap<String, Option<crate::ui::loading::LoadingDelay<()>>>>,
+    provider_models_errors: HashMap<String, String>,
+    providers_form_models_error: Option<String>,
     /// Monotonic token source for the connectivity probes; it outlives the
     /// in-flight entries so an edit-and-retest cannot reuse an old token.
     provider_connectivity_generation: u64,
@@ -2116,11 +2156,16 @@ pub struct Fintwind {
     /// Generation token for the background config load; a newer load
     /// supersedes an older one's result.
     mcp_load_generation: usize,
+    mcp_load_pending: bool,
+    mcp_load_error: Option<String>,
+    mcp_loading: RefCell<Option<crate::ui::loading::LoadingDelay<Option<Uuid>>>>,
     /// The MCP servers' live connection statuses from the workspace's
     /// OpenCode server, keyed by server name. `None` means "not yet known"
     /// and renders nothing rather than a stale state.
     mcp_statuses: Option<HashMap<String, mcp_page::McpStatusEntry>>,
     mcp_status_generation: u64,
+    mcp_status_error: Option<String>,
+    mcp_status_pending: bool,
     /// The MCP list pane's search field.
     mcp_search: Entity<ComposerInput>,
     /// The selected server's editable connection fields, one per kind.
@@ -2168,6 +2213,10 @@ pub struct Fintwind {
     /// Bumped per scan; a result from a superseded scan is discarded.
     usage_stats_generation: u64,
     usage_stats_pending: bool,
+    usage_stats_complete: bool,
+    usage_loading: Option<crate::ui::loading::LoadingDelay<(PathBuf, Uuid)>>,
+    usage_quota_loading: RefCell<Option<crate::ui::loading::LoadingDelay<()>>>,
+    usage_refresh_spin: RefCell<Option<crate::ui::motion::ActionSpin>>,
     usage_price_pending: bool,
     usage_price_checked_at: Option<Instant>,
     usage_stats_loaded_at: Option<Instant>,
@@ -2200,8 +2249,13 @@ pub struct Fintwind {
     opencode_shell_generation: u64,
     opencode_binary_busy: bool,
     opencode_management_action: Option<settings::OpenCodeManagementAction>,
+    opencode_management_error: Option<String>,
+    opencode_management_loading: RefCell<Option<crate::ui::loading::LoadingDelay<settings::OpenCodeManagementAction>>>,
     opencode_update_status: Option<settings::OpenCodeUpdateStatus>,
     general_workspace_busy: bool,
+    general_workspace_resetting: bool,
+    general_workspace_loading: RefCell<Option<crate::ui::loading::LoadingDelay<bool>>>,
+    general_workspace_error: Option<(String, settings::GeneralWorkspaceRetry)>,
     provider_binary_generation: u64,
     opencode_shell_busy: bool,
     opencode_shell_loaded: bool,
@@ -2786,7 +2840,7 @@ impl Fintwind {
         Self::new_with_store(window, cx, daemon, store)
     }
 
-    fn new_with_store(
+    pub(crate) fn new_with_store(
         window: &mut Window,
         cx: &mut App,
         daemon: fintwind_client::DaemonSupervisor,
@@ -2797,7 +2851,7 @@ impl Fintwind {
         let composer_drafts = composer_draft_store.load().unwrap_or_default();
         let mut state = store.load_or_fresh(cwd);
         state.apply_daemon_settings(daemon.settings());
-        if let Err(error) = daemon.update_settings(state.daemon_settings()) {
+        if store.publishes_daemon_settings() && let Err(error) = daemon.update_settings(state.daemon_settings()) {
             eprintln!("could not normalize daemon settings after migration: {error:#}");
         }
         crate::i18n::set_language(state.language);
@@ -3302,7 +3356,9 @@ impl Fintwind {
                 &composer,
                 |this: &mut Self, _, event: &ComposerEvent, cx| match event {
                     ComposerEvent::Submit(prompt) => {
-                        if let Some(session_id) = this.selected_session().and_then(|session| {
+                        if this.composer_attachments_unresolved() {
+                            this.defer_restore_attachment_prompt(prompt.clone(), cx);
+                        } else if let Some(session_id) = this.selected_session().and_then(|session| {
                             (btw::question(prompt).is_none()
                                 && this.response_fork_preparations.contains_key(&session.id))
                             .then_some(session.id)
@@ -3315,7 +3371,9 @@ impl Fintwind {
                         }
                     }
                     ComposerEvent::SubmitSteer(prompt) => {
-                        if let Some(session_id) = this.selected_session().and_then(|session| {
+                        if this.composer_attachments_unresolved() {
+                            this.defer_restore_attachment_prompt(prompt.clone(), cx);
+                        } else if let Some(session_id) = this.selected_session().and_then(|session| {
                             (btw::question(prompt).is_none()
                                 && this.response_fork_preparations.contains_key(&session.id))
                             .then_some(session.id)
@@ -3561,6 +3619,9 @@ impl Fintwind {
                         {
                             this.providers_form_connectivity_testing = false;
                             this.providers_form_probe_generation += 1;
+                            this.providers_form_fetch_generation += 1;
+                            this.provider_connectivity_errors.remove("");
+                            this.providers_form_models_error = None;
                         }
                         cx.notify();
                     }
@@ -3843,6 +3904,7 @@ impl Fintwind {
                 provider_probe_events,
                 provider_model_discoveries: HashSet::new(),
                 provider_model_discoveries_pending: HashSet::new(),
+                provider_model_discovery_error: None,
                 provider_probe_directory: None,
                 provider_versions: HashMap::new(),
                 provider_version_tx,
@@ -3858,6 +3920,7 @@ impl Fintwind {
                 model_picker_highlight: None,
                 model_picker_scroll: ScrollHandle::new(),
                 model_picker_scrollbar: ScrollbarState::new(),
+                model_picker_loading: RefCell::new(None),
                 branch_picker_mode: BranchPickerMode::Browse,
                 branch_picker_highlight: None,
                 branch_picker_list_state,
@@ -3868,16 +3931,22 @@ impl Fintwind {
                 task_capsule_tab: background_work::capsule::CapsuleTab::Changes,
                 capsule_todos: RefCell::new(None),
                 capsule_pull_requests: QueryCache::new(MAX_CACHED_WORKSPACES),
+                capsule_pull_requests_previous: None,
+                capsule_pull_requests_loading: RefCell::new(None),
                 commit_log: QueryCache::new(MAX_CACHED_WORKSPACES),
                 history_stats: QueryCache::new(128),
                 history_branch: None,
                 history_list_state: ListState::new(0, ListAlignment::Top, px(96.0)),
                 history_row_cache: Arc::new(git_history::HistoryRows::default()),
                 history_row_key: None,
+                history_loading: None,
+                history_refresh_spin: None,
                 history_row_height: px(0.0),
                 history_details_scroll: ScrollHandle::new(),
                 history_highlight: None,
                 branch_operation_pending: false,
+                branch_operation_error: None,
+                branch_operation_loading: RefCell::new(None),
                 add_project_dialog: None,
                 commit_dialog: None,
                 commit_operation: None,
@@ -3971,6 +4040,8 @@ impl Fintwind {
                 right_panel_diff_source: ReviewDiffSource::default(),
                 right_panel_diff_snapshot: None,
                 right_panel_diff_loading: false,
+                review_diff_loading: None,
+                review_diff_refresh_spin: RefCell::new(None),
                 right_panel_diff_error: None,
                 right_panel_diff_generation: 0,
                 right_panel_diff_selected_file: None,
@@ -3979,6 +4050,8 @@ impl Fintwind {
                 source_control_number_width: source_control::review_diff_number_width(2),
                 source_control_status: None,
                 source_control_status_loading: false,
+                source_control_loading: None,
+                source_control_refresh_spin: RefCell::new(None),
                 source_control_status_error: None,
                 source_control_status_generation: 0,
                 source_control_status_workspace: None,
@@ -4026,6 +4099,7 @@ impl Fintwind {
                 source_control_scrollbar: ScrollbarState::new(),
                 review_workspace_override: None,
                 source_control_busy: None,
+                source_control_mutation_error: None,
                 source_control_discard: None,
                 source_control_commit_input,
                 source_control_branches: None,
@@ -4048,6 +4122,11 @@ impl Fintwind {
                 skills_catalog: None,
                 skills_scan_generation: 0,
                 skills_scan_pending: false,
+                skills_remote_pending: HashMap::new(),
+                skills_remote_errors: HashMap::new(),
+                skills_remote_loading: RefCell::new(None),
+                skills_scan_error: None,
+                skills_loading: RefCell::new(None),
                 skills_scanned_at: None,
                 skills_search,
                 skills_list_state: ListState::new(0, ListAlignment::Top, px(512.0)),
@@ -4088,9 +4167,13 @@ impl Fintwind {
                 providers_oauth_draft: None,
                 providers_oauth_generation: 0,
                 providers_auth_loading: false,
+                providers_auth_error: None,
                 providers_integrations_generation: 0,
                 providers_builtin_catalog_check_id: None,
+                providers_builtin_catalog_error: None,
+                providers_builtin_catalog_loading: RefCell::new(None),
                 provider_quota: Default::default(),
+                builtin_refresh_spin: RefCell::new(None),
                 local_quota_cache: std::sync::Arc::new(
                     fintwind_client::local_quota::LocalQuotaCache::default(),
                 ),
@@ -4102,9 +4185,18 @@ impl Fintwind {
                 image_generate_busy: false,
                 image_generate_generation: 0,
                 image_models: Vec::new(),
+                image_models_workspace: None,
                 image_models_generation: 0,
                 image_models_loading: false,
+                image_models_error: None,
+                image_models_loading_delay: RefCell::new(None),
                 provider_connectivity_testing: HashMap::new(),
+                provider_models_fetching: HashMap::new(),
+                provider_connectivity_errors: HashMap::new(),
+                provider_connectivity_loading: RefCell::new(HashMap::new()),
+                provider_models_loading: RefCell::new(HashMap::new()),
+                provider_models_errors: HashMap::new(),
+                providers_form_models_error: None,
                 provider_connectivity_generation: 0,
                 model_latency: HashMap::new(),
                 native_reconcile_generation: 0,
@@ -4146,8 +4238,13 @@ impl Fintwind {
                 mcp_commit_generation: 0,
                 mcp_servers: Vec::new(),
                 mcp_load_generation: 0,
+                mcp_load_pending: false,
+                mcp_load_error: None,
+                mcp_loading: RefCell::new(None),
                 mcp_statuses: None,
                 mcp_status_generation: 0,
+                mcp_status_error: None,
+                mcp_status_pending: false,
                 mcp_search,
                 mcp_command_input,
                 mcp_url_input,
@@ -4178,6 +4275,10 @@ impl Fintwind {
                 usage_stats_error: None,
                 usage_stats_generation: 0,
                 usage_stats_pending: false,
+                usage_stats_complete: false,
+                usage_loading: None,
+                usage_quota_loading: RefCell::new(None),
+                usage_refresh_spin: RefCell::new(None),
                 usage_price_pending: false,
                 usage_price_checked_at: None,
                 usage_stats_loaded_at: None,
@@ -4200,8 +4301,13 @@ impl Fintwind {
                 opencode_shell_generation: 0,
                 opencode_binary_busy: false,
                 opencode_management_action: None,
+                opencode_management_error: None,
+                opencode_management_loading: RefCell::new(None),
                 opencode_update_status: None,
                 general_workspace_busy: false,
+                general_workspace_resetting: false,
+                general_workspace_loading: RefCell::new(None),
+                general_workspace_error: None,
                 provider_binary_generation: 0,
                 opencode_shell_busy: false,
                 opencode_shell_loaded: false,

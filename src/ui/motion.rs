@@ -9,6 +9,7 @@
 //! with no loader mounted schedules nothing at all. Every loader shares one
 //! epoch, keeping multi-instance loaders phase-locked.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -28,6 +29,73 @@ const PULSE_LEASE: Duration = Duration::from_millis(300);
 
 /// The rotating `loader-circle` spinners' period.
 const SPINNER_PERIOD: Duration = Duration::from_millis(900);
+const ACTION_SPIN_PERIOD: Duration = Duration::from_millis(640);
+
+pub(crate) struct ActionSpin {
+    started: Instant,
+    stop_at: Option<Duration>,
+}
+
+impl ActionSpin {
+    pub(crate) fn start() -> Self {
+        Self {
+            started: Instant::now(),
+            stop_at: None,
+        }
+    }
+
+    pub(crate) fn observe(&mut self, active: bool) -> bool {
+        if active {
+            self.stop_at = None;
+            return true;
+        }
+        let elapsed = self.started.elapsed();
+        let stop_at = *self.stop_at.get_or_insert_with(|| {
+            let period = ACTION_SPIN_PERIOD.as_nanos();
+            let turns = elapsed.as_nanos().div_ceil(period).max(1);
+            ACTION_SPIN_PERIOD * turns.min(u32::MAX as u128) as u32
+        });
+        elapsed < stop_at
+    }
+
+    pub(crate) fn render(&self, icon: Svg) -> AnyElement {
+        let started = self.started;
+        pulse(ACTION_SPIN_PERIOD, move |_| {
+            let phase =
+                (started.elapsed().as_secs_f32() / ACTION_SPIN_PERIOD.as_secs_f32()).fract();
+            icon.with_transformation(Transformation::rotate(percentage(phase)))
+                .into_any_element()
+        })
+        .into_any_element()
+    }
+}
+
+pub(crate) fn action_icon(
+    state: &RefCell<Option<ActionSpin>>,
+    active: bool,
+    automatic: bool,
+    icon: Svg,
+    cx: &mut App,
+) -> AnyElement {
+    let mut state = state.borrow_mut();
+    if state
+        .as_mut()
+        .is_some_and(|spin| (!active && cx.reduce_motion()) || !spin.observe(active))
+    {
+        *state = None;
+    }
+    if let Some(spin) = state.as_ref() {
+        if cx.reduce_motion() {
+            icon.into_any_element()
+        } else {
+            spin.render(icon)
+        }
+    } else if automatic {
+        spin_slow(icon)
+    } else {
+        icon.into_any_element()
+    }
+}
 
 struct Lease {
     until: Instant,

@@ -1,50 +1,260 @@
-use std::path::PathBuf;
+use std::{
+    path::{Component, Path, PathBuf},
+    time::Duration,
+};
 
 use ely_gpui_component::{
     buttons::{Button, ButtonVariant},
     theme::ControlSize,
 };
 use gpui::{
-    AnyElement, Context, Entity, FocusHandle, FontWeight, KeyDownEvent, MouseButton,
-    ParentElement, PathBuilder, PathPromptOptions, Styled, Window, canvas, div, point, prelude::*,
-    px,
+    AnyElement, Context, Entity, FocusHandle, FontWeight, KeyDownEvent, MouseButton, ParentElement,
+    PathPromptOptions, Styled, Window, div, prelude::*, px,
 };
 
 use crate::input::{ComposerEvent, ComposerInput};
 use crate::model::Project;
 use crate::theme::{Theme, ui_px};
+use crate::ui::loading::{LoadingDelay, LoadingPhase};
 use crate::ui::text_field::TextField;
-use crate::ui::{icon, icon_button};
+use crate::ui::{ActivationExt, icon, icon_button, motion};
 
 use super::Fintwind;
 
-/// The add-project form: a fixed local location, a dashed folder drop area
-/// and an optional display name. Icon, color and index pickers from the
-/// reference are intentionally absent.
+use crate::ui::{
+    MenuChip,
+    menu::{MenuAlign, MenuItem, dropdown_menu},
+};
+use uuid::Uuid;
+
 pub(super) struct AddProjectDialogState {
+    id: Uuid,
+    server: Option<Uuid>,
+    remote_path: Entity<ComposerInput>,
+    method: ProjectMethod,
+    repository: Entity<ComposerInput>,
+    directory_name: Entity<ComposerInput>,
+    pending: bool,
+    loading: Option<LoadingDelay<()>>,
+    error: Option<String>,
     folder: Option<PathBuf>,
     name: Entity<ComposerInput>,
     folder_focus: FocusHandle,
 }
 
+#[cfg(test)]
+pub(super) fn ssh_dialog_path(app: &Fintwind) -> Entity<ComposerInput> {
+    app.add_project_dialog.as_ref().unwrap().remote_path.clone()
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProjectMethod {
+    Existing,
+    Empty,
+    Clone,
+}
+
+fn github_repository(address: &str) -> Option<(url::Url, String)> {
+    let address = url::Url::parse(address).ok()?;
+    if address.scheme() != "https"
+        || address.host_str() != Some("github.com")
+        || !address.username().is_empty()
+        || address.password().is_some()
+        || address.port().is_some()
+        || address.query().is_some()
+        || address.fragment().is_some()
+    {
+        return None;
+    }
+    let (owner, repo) = address.path().trim_matches('/').split_once('/')?;
+    let name = repo.strip_suffix(".git").unwrap_or(repo);
+    let valid = |part: &str| {
+        !part.is_empty()
+            && part
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+    };
+    let name = (valid(owner) && valid(name)).then(|| name.to_owned())?;
+    Some((address, name))
+}
+
+async fn clone_local_project(
+    parent: &Path,
+    folder: &str,
+    repository: url::Url,
+) -> anyhow::Result<PathBuf> {
+    let mut components = Path::new(folder).components();
+    anyhow::ensure!(
+        matches!(components.next(), Some(Component::Normal(name)) if name == folder)
+            && components.next().is_none()
+            && !folder.contains(['/', '\\']),
+        tr!("project.invalid_folder")
+    );
+    let target = parent.join(folder);
+    std::fs::create_dir(&target).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            anyhow::anyhow!(tr!("project.target_exists"))
+        } else {
+            anyhow::Error::from(error)
+        }
+    })?;
+    let mut command = std::process::Command::new("git");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        command.creation_flags(0x0800_0000);
+    }
+    let mut command = smol::process::Command::from(command);
+    command
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .args(["clone", "--", repository.as_str()])
+        .arg(&target)
+        .kill_on_drop(true);
+    let result = futures_lite::future::race(
+        async {
+            let output = command.output().await?;
+            anyhow::ensure!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            Ok(())
+        },
+        async {
+            smol::Timer::after(Duration::from_secs(300)).await;
+            Err(anyhow::anyhow!(tr!("project.clone_timeout")))
+        },
+    )
+    .await;
+    if let Err(error) = result {
+        let _ = std::fs::remove_dir(&target);
+        return Err(error);
+    }
+    Ok(target)
+}
+
+fn create_empty_local_project(
+    client: fintwind_client::WorkspaceClient,
+    parent_dir: PathBuf,
+    project_name: String,
+) -> anyhow::Result<PathBuf> {
+    use fintwind_protocol::workspace::{
+        ProjectOperationState, WorkspaceOperation, WorkspaceResult, project_operation,
+    };
+
+    let result = client
+        .request(WorkspaceOperation::CreateEmptyProject {
+            operation_id: Uuid::new_v4(),
+            parent_dir,
+            project_name,
+        })
+        .map_err(
+            |error| match project_operation::kind_of(&error.to_string()) {
+                Some(project_operation::INVALID_NAME) => {
+                    anyhow::anyhow!(tr!("project.invalid_folder"))
+                }
+                _ => error,
+            },
+        )?;
+    match result {
+        WorkspaceResult::ProjectOperation {
+            state: ProjectOperationState::Succeeded,
+            path,
+            ..
+        } => Ok(path),
+        WorkspaceResult::ProjectOperation {
+            state: ProjectOperationState::Failed,
+            failure_kind,
+            ..
+        } if failure_kind.as_deref() == Some(project_operation::TARGET_EXISTS) => {
+            Err(anyhow::anyhow!(tr!("project.target_exists")))
+        }
+        WorkspaceResult::ProjectOperation {
+            state: ProjectOperationState::Unknown | ProjectOperationState::NeedsReconciliation,
+            ..
+        } => Err(anyhow::anyhow!(tr!("project.creation_unknown"))),
+        _ => Err(anyhow::anyhow!(tr!("project.creation_failed"))),
+    }
+}
+
 impl Fintwind {
     pub(super) fn open_add_project_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.daemon.is_remote() {
+            self.load_ssh_profiles(cx);
+        }
         let name = cx.new(|cx| {
             ComposerInput::new(window, cx)
                 .search_field()
                 .placeholder(tr!("project.name_placeholder"))
         });
-        cx.subscribe(
-            &name,
-            |this: &mut Self, _, event: &ComposerEvent, cx| {
+        cx.subscribe(&name, |this: &mut Self, _, event: &ComposerEvent, cx| {
+            if matches!(event, ComposerEvent::Submit(_)) {
+                this.confirm_add_project(cx);
+            }
+        })
+        .detach();
+        let folder_focus = cx.focus_handle();
+        let remote_path = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder("/home/user/project")
+        });
+        let repository = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder("https://github.com/owner/repo")
+        });
+        let directory_name = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder(tr!("project.target_folder"))
+        });
+        for input in [&repository, &directory_name] {
+            cx.subscribe(input, |this: &mut Self, _, event: &ComposerEvent, cx| {
                 if matches!(event, ComposerEvent::Submit(_)) {
                     this.confirm_add_project(cx);
+                }
+                cx.notify();
+            })
+            .detach();
+        }
+        cx.subscribe(
+            &repository,
+            |this: &mut Self, input, event: &ComposerEvent, cx| {
+                if let ComposerEvent::Edited = event
+                    && let Some(dialog) = &this.add_project_dialog
+                    && dialog.repository == input
+                {
+                    let placeholder = github_repository(input.read(cx).content().trim())
+                        .map(|(_, name)| name)
+                        .unwrap_or_else(|| tr!("project.target_folder"));
+                    dialog
+                        .directory_name
+                        .update(cx, |input, cx| input.set_placeholder(placeholder, cx));
                 }
             },
         )
         .detach();
-        let folder_focus = cx.focus_handle();
+        cx.subscribe(
+            &remote_path,
+            |this: &mut Self, _, event: &ComposerEvent, cx| {
+                if matches!(event, ComposerEvent::Submit(_)) {
+                    this.confirm_add_project(cx);
+                }
+                cx.notify();
+            },
+        )
+        .detach();
         self.add_project_dialog = Some(AddProjectDialogState {
+            id: Uuid::new_v4(),
+            server: None,
+            remote_path,
+            method: ProjectMethod::Existing,
+            repository,
+            directory_name,
+            pending: false,
+            loading: None,
+            error: None,
             folder: None,
             name,
             folder_focus: folder_focus.clone(),
@@ -108,12 +318,98 @@ impl Fintwind {
         let Some(dialog) = self.add_project_dialog.as_ref() else {
             return;
         };
+        if dialog.pending || dialog.loading.as_ref().is_some_and(|loading| loading.is_visible()) {
+            return;
+        }
+        if dialog.server.is_some() || self.daemon.is_remote() {
+            self.confirm_ssh_project(cx);
+            return;
+        }
         let Some(path) = dialog.folder.clone() else {
             return;
         };
+        if dialog.method != ProjectMethod::Existing {
+            let repository = if dialog.method == ProjectMethod::Clone {
+                let Some(repository) =
+                    github_repository(dialog.repository.read(cx).content().trim())
+                else {
+                    let dialog = self.add_project_dialog.as_mut().unwrap();
+                    dialog.error = Some(tr!("project.invalid_github_url"));
+                    cx.notify();
+                    return;
+                };
+                Some(repository)
+            } else {
+                None
+            };
+            let folder = dialog.directory_name.read(cx).content().trim().to_owned();
+            let folder = if folder.is_empty() {
+                let Some((_, name)) = repository.as_ref() else {
+                    return;
+                };
+                name.clone()
+            } else {
+                folder
+            };
+            let id = dialog.id;
+            let client = fintwind_client::WorkspaceClient::new(self.daemon.client());
+            let dialog = self.add_project_dialog.as_mut().unwrap();
+            dialog.pending = true;
+            dialog.error = None;
+            cx.notify();
+            cx.spawn(async move |this, cx| {
+                let result = cx
+                    .background_executor()
+                    .spawn(async move {
+                        match repository {
+                            Some((address, _)) => {
+                                clone_local_project(&path, &folder, address).await
+                            }
+                            None => create_empty_local_project(client, path, folder),
+                        }
+                    })
+                    .await;
+                let _ = this.update(cx, |app, cx| {
+                    let Some(dialog) = app
+                        .add_project_dialog
+                        .as_mut()
+                        .filter(|dialog| dialog.id == id)
+                    else {
+                        return;
+                    };
+                    match result {
+                        Ok(path) => {
+                            app.add_project_dialog = None;
+                            app.add_project_directory(path, String::new(), cx);
+                        }
+                        Err(error) => {
+                            dialog.pending = false;
+                            dialog.error = Some(error.to_string());
+                            cx.notify();
+                        }
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
         let name = dialog.name.read(cx).content().trim().to_owned();
         self.add_project_dialog = None;
-        if let Some(existing) = self.state.projects.iter().find(|project| project.path == path) {
+        self.add_project_directory(path, name, cx);
+    }
+
+    pub(super) fn add_project_directory(
+        &mut self,
+        path: PathBuf,
+        name: String,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(existing) = self
+            .state
+            .projects
+            .iter()
+            .find(|project| project.path == path)
+        {
             self.select_project(existing.id, cx);
         } else {
             let mut project = Project::from_path(path);
@@ -127,17 +423,226 @@ impl Fintwind {
         cx.notify();
     }
 
+    fn confirm_ssh_project(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.add_project_dialog.as_mut() else {
+            return;
+        };
+        let path = dialog.remote_path.read(cx).content().trim().to_owned();
+        let id = dialog.id;
+        let server = dialog.server;
+        let method = dialog.method;
+        let name = if method == ProjectMethod::Existing {
+            dialog.name.read(cx).content().trim().to_owned()
+        } else {
+            String::new()
+        };
+        let mut folder = dialog.directory_name.read(cx).content().trim().to_owned();
+        let repository = if method == ProjectMethod::Clone {
+            let Some((address, suggested)) =
+                github_repository(dialog.repository.read(cx).content().trim())
+            else {
+                dialog.error = Some(tr!("project.invalid_github_url"));
+                cx.notify();
+                return;
+            };
+            if folder.is_empty() {
+                folder = suggested;
+            }
+            Some(address.as_str().trim_end_matches('/').to_owned())
+        } else {
+            None
+        };
+        let creator = self.ssh_project_creator(server);
+        let client = match server {
+            Some(id) => self.ssh_client_for(id),
+            None => Some(self.daemon.client()),
+        };
+        let dialog = self.add_project_dialog.as_mut().expect("dialog still open");
+        let Some(client) = client else {
+            dialog.error = Some(tr!("ssh.offline"));
+            cx.notify();
+            return;
+        };
+        dialog.pending = true;
+        dialog.error = None;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    if method == ProjectMethod::Existing {
+                        return super::ssh_page::remote_project_directory(client, path);
+                    }
+                    let created = creator.ok_or_else(|| anyhow::anyhow!(tr!("ssh.offline")))?(
+                        path, folder, repository,
+                    )?;
+                    Ok(PathBuf::from(created))
+                })
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                let Some(dialog) = app.add_project_dialog.as_mut().filter(|d| d.id == id) else {
+                    return;
+                };
+                dialog.pending = false;
+                match result {
+                    Ok(path) if server.is_none() => {
+                        app.add_project_dialog = None;
+                        app.add_project_directory(path, name, cx);
+                    }
+                    Ok(path) => {
+                        let server = server.expect("SSH host selected");
+                        if app.ssh_client_for(server).is_none() {
+                            app.add_project_dialog.as_mut().unwrap().error =
+                                Some(tr!("ssh.offline"));
+                        } else {
+                            match app.launch_ssh_project_process(server, path, name) {
+                                Ok(_) => app.add_project_dialog = None,
+                                Err(error) => {
+                                    app.add_project_dialog.as_mut().unwrap().error =
+                                        Some(error.to_string())
+                                }
+                            }
+                        }
+                    }
+                    Err(error) => dialog.error = Some(error.to_string()),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn render_add_project_dialog(
         &mut self,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        let (loading_phase, wake) = {
+            let dialog = self.add_project_dialog.as_mut()?;
+            LoadingDelay::observe(&mut dialog.loading, (), dialog.pending)
+        };
+        if let Some(wake) = wake {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(wake.delay()).await;
+                wake.fired();
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+        }
         let dialog = self.add_project_dialog.as_ref()?;
         let theme = Theme::current(cx);
         let folder = dialog.folder.clone();
         let name = dialog.name.clone();
         let folder_focus = dialog.folder_focus.clone();
         let weak = cx.entity().downgrade();
-        let can_confirm = folder.is_some();
+        let server = dialog.server;
+        let remote = server.is_some() || self.daemon.is_remote();
+        let pending = dialog.pending;
+        let error = dialog.error.clone();
+        let remote_path = dialog.remote_path.clone();
+        let method = dialog.method;
+        let repository = dialog.repository.clone();
+        let directory_name = dialog.directory_name.clone();
+        let can_create = !remote || self.ssh_project_creator(server).is_some();
+        let repo_address = repository.read(cx).content().trim().to_owned();
+        let suggested_folder = github_repository(&repo_address).map(|(_, name)| name);
+        let target_folder = directory_name.read(cx).content().trim().to_owned();
+        let effective_folder = if method == ProjectMethod::Clone && target_folder.is_empty() {
+            suggested_folder.as_deref().unwrap_or_default()
+        } else {
+            &target_folder
+        };
+        let remote_directory = remote_path.read(cx).content().trim().to_owned();
+        let showing = loading_phase == LoadingPhase::Visible;
+        let can_confirm = !pending && !showing
+            && if remote {
+                remote_directory.starts_with('/')
+            } else {
+                folder.is_some()
+            }
+            && (method == ProjectMethod::Existing || (can_create && !effective_folder.is_empty()))
+            && (method != ProjectMethod::Clone || !repo_address.is_empty());
+        let confirm_label = match method {
+            ProjectMethod::Existing => tr!("project.add_confirm"),
+            ProjectMethod::Empty => tr!("project.create_and_add"),
+            ProjectMethod::Clone => tr!("project.clone_and_add"),
+        };
+        let target_preview = (method != ProjectMethod::Existing && !effective_folder.is_empty())
+            .then(|| {
+                if remote && remote_directory.starts_with('/') {
+                    Some(format!(
+                        "{}/{effective_folder}",
+                        remote_directory.trim_end_matches('/')
+                    ))
+                } else if !remote {
+                    folder
+                        .as_ref()
+                        .map(|parent| parent.join(effective_folder).display().to_string())
+                } else {
+                    None
+                }
+            })
+            .flatten();
+        let hosts = self.ready_ssh_hosts();
+        let location_label = self
+            .ssh_project_machine()
+            .map(str::to_owned)
+            .or_else(|| {
+                hosts
+                    .iter()
+                    .find(|(id, _)| Some(*id) == server)
+                    .map(|(_, name)| name.clone())
+            })
+            .unwrap_or_else(|| {
+                if remote {
+                    tr!("ssh.offline")
+                } else {
+                    tr!("project.location_local")
+                }
+            });
+        let fixed_location = self.daemon.is_remote();
+        #[cfg(test)]
+        let fixed_location = fixed_location && !self.has_ssh_test_launcher();
+        let location = if fixed_location || pending {
+            div().child(location_label).into_any_element()
+        } else {
+            let handle = self.menu_handle("add-project-location", cx);
+            let app = weak.clone();
+            let choices = std::iter::once((None, tr!("project.location_local")))
+                .chain(hosts.into_iter().map(|(id, name)| (Some(id), name)))
+                .collect::<Vec<_>>();
+            dropdown_menu(
+                MenuChip::new("add-project-location")
+                    .label(location_label)
+                    .outlined(),
+                "add-project-location-menu",
+                &handle,
+                MenuAlign::BelowLeft,
+                move |_| {
+                    choices
+                        .iter()
+                        .map(|(id, label)| {
+                            let id = *id;
+                            let app = app.clone();
+                            MenuItem::new(label.clone(), move |_, cx| {
+                                let _ = app.update(cx, |app, cx| {
+                                    if let Some(dialog) = app
+                                        .add_project_dialog
+                                        .as_mut()
+                                        .filter(|dialog| !dialog.pending)
+                                    {
+                                        dialog.server = id;
+                                        dialog.error = None;
+                                        cx.notify();
+                                    }
+                                });
+                            })
+                            .selected(id == server)
+                        })
+                        .collect()
+                },
+            )
+            .into_any_element()
+        };
 
         let label = |text: String| {
             div()

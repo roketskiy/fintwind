@@ -230,6 +230,180 @@ language.description:
 
 settings.general:
   en: General
+ssh.local_only:
+  en: This device only · Manage saved connections
+ssh.search:
+  en: Search connections
+ssh.no_search_results:
+  en: No matching connections
+ssh.not_connected:
+  en: Not connected
+ssh.connected:
+  en: Connected
+ssh.backend:
+  en: Fintwind backend
+ssh.backend_unavailable:
+  en: Backend unavailable
+ssh.authentication:
+  en: Authentication
+ssh.environment:
+  en: Server environment
+ssh.choose_key:
+  en: Choose file
+ssh.manual_backend:
+  en: Manual backend configuration
+ssh.new_title:
+  en: New SSH connection
+ssh.edit_title:
+  en: Edit SSH connection
+ssh.save_connect:
+  en: Save and connect
+ssh.save_edit:
+  en: Save changes
+ssh.remove_title:
+  en: Remove connection?
+ssh.remove_body:
+  en: Remove the connection profile for %{name} from this device. Remote projects and private keys are kept.
+ssh.verify_body:
+  en: First connection to %{host}. Verify the fingerprint with your administrator or hosting platform.
+ssh.edit_connection:
+  en: Edit connection
+ssh.remove_connection:
+  en: Remove connection
+settings.ssh:
+  en: SSH Connections
+mcp.ssh_refresh:
+  en: Refresh
+mcp.ssh_callback_port:
+  en: OAuth callback port
+mcp.ssh_not_confirmed:
+  en: The remote MCP server did not confirm the connection.
+ssh.key_changed:
+  en: The host fingerprint changed. Connection blocked.
+ssh.connect_failed:
+  en: Could not connect to the SSH server.
+ssh.key_failed:
+  en: Could not read the private key.
+ssh.auth_failed:
+  en: The server rejected the private key.
+ssh.inspect_failed:
+  en: Could not read server details.
+ssh.timeout:
+  en: The SSH check timed out.
+ssh.retry:
+  en: Retry
+ssh.name:
+  en: Name
+ssh.host:
+  en: Host
+ssh.port:
+  en: Port
+ssh.user:
+  en: Username
+ssh.key:
+  en: Private key path
+ssh.invalid_fields:
+  en: Enter a name, host, port, username, and absolute private key path.
+ssh.saved:
+  en: Saved connections
+ssh.new:
+  en: New connection
+ssh.verify:
+  en: Compare this fingerprint with a trusted copy before continuing.
+ssh.trust:
+  en: Trust fingerprint
+ssh.last_read:
+  en: Last read
+ssh.system:
+  en: System
+ssh.memory:
+  en: Memory
+ssh.disk:
+  en: Free disk space
+ssh.probe:
+  en: Check connection
+ssh.edit:
+  en: Edit
+ssh.confirm_remove:
+  en: Confirm removal
+ssh.remove:
+  en: Remove
+ssh.empty:
+  en: No saved connections
+ssh.deploy_daemon:
+  en: Deploy daemon
+ssh.start_daemon:
+  en: Start daemon
+ssh.deploy_missing:
+  en: Fintwind daemon not deployed
+ssh.deploy_asset_missing:
+  en: This installation is missing the daemon for this server (%{asset}).
+ssh.deploy_invalid:
+  en: The bundled daemon does not match the server architecture (%{asset}).
+ssh.deploy_failed:
+  en: Remote daemon operation failed
+ssh.deploy_start_failed:
+  en: The remote daemon did not start. Check daemon.log on the server.
+ssh.daemon_port:
+  en: Remote daemon port
+ssh.token_file:
+  en: Remote daemon token file
+ssh.invalid_daemon:
+  en: Enter both a daemon port and an absolute Linux token-file path, or leave both empty.
+ssh.ready:
+  en: Ready
+ssh.offline:
+  en: Disconnected
+ssh.connect:
+  en: Connect
+ssh.disconnect:
+  en: Disconnect
+ssh.local:
+  en: This computer
+project.remote_path:
+  en: Enter an absolute directory path on the server.
+project.method_existing:
+  en: Existing folder
+project.method_clone:
+  en: Clone from GitHub
+project.method_empty:
+  en: New folder
+project.repository:
+  en: GitHub repository URL
+project.parent_directory:
+  en: Parent directory
+project.target_folder:
+  en: Folder name
+project.new_folder_name:
+  en: New folder name
+project.clone_parent_directory:
+  en: Destination parent directory
+project.clone_destination:
+  en: "Clone to %{path}"
+project.create_destination:
+  en: "Create %{path}"
+project.invalid_folder:
+  en: Enter a single folder name.
+project.invalid_github_url:
+  en: Enter a GitHub repository URL such as https://github.com/owner/repo.
+project.clone_timeout:
+  en: Cloning timed out.
+project.create_and_add:
+  en: Create and add
+project.clone_and_add:
+  en: Clone and add
+project.target_exists:
+  en: A file or folder already exists at the target. Nothing was overwritten.
+project.creation_failed:
+  en: Could not create the project. Check the parent directory and repository access. An incomplete folder may remain.
+project.creation_unknown:
+  en: Result unconfirmed. Check the target directory before trying again.
+ssh.settings_cached:
+  en: Disconnected. Showing last read settings.
+ssh.openc_path:
+  en: OpenCode path
+ssh.general_dir:
+  en: General workspace
 settings.appearance:
   en: Appearance
 settings.providers:

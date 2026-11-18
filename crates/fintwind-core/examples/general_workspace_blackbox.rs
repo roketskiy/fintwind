@@ -172,6 +172,72 @@ fn main() -> Result<()> {
 
     let mut checks = Vec::new();
     let server = Server::start(&data)?;
+    if let Some(config_dir) = std::env::args_os().nth(2) {
+        use fintwind_client::custom_providers::CustomProvider;
+        use fintwind_client::opencode_config::{McpServer, ProviderConfigEntry, config_path};
+
+        let config_dir = PathBuf::from(config_dir).canonicalize()?;
+        let config = config_path();
+        ensure!(
+            config
+                .parent()
+                .context("configuration directory missing")?
+                .canonicalize()?
+                == config_dir
+        );
+        ensure!(
+            config.file_name().and_then(|name| name.to_str()) == Some("opencode.json")
+                && !config.exists()
+        );
+        std::fs::write(
+            &config,
+            serde_json::to_vec(&json!({
+                "provider": {"fixture": {"name": "Fixture", "options": {"baseURL": "https://example.invalid/v1", "setCacheKey": true}}},
+                "mcp": {"servers": {"fixture": {"type": "remote", "url": "https://example.invalid/mcp", "timeout": 2500}}}
+            }))?,
+        )?;
+        let ResponsePayload::Json { value } = server.request(Command::LoadOpenCodeProviders)?
+        else {
+            anyhow::bail!("unexpected provider roster response");
+        };
+        let mut providers = serde_json::from_value::<Vec<ProviderConfigEntry>>(value)?
+            .into_iter()
+            .map(CustomProvider::from)
+            .collect::<Vec<_>>();
+        ensure!(providers.len() == 1 && providers[0].name == "Fixture");
+        providers[0].name = "Edited fixture".into();
+        let ResponsePayload::Json { .. } = server.request(Command::SaveOpenCodeProviders {
+            providers: serde_json::to_value(
+                providers
+                    .into_iter()
+                    .map(ProviderConfigEntry::from)
+                    .collect::<Vec<_>>(),
+            )?,
+            workspace: None,
+            catalog: None,
+        })?
+        else {
+            anyhow::bail!("unexpected provider save response");
+        };
+        let ResponsePayload::Json { value } = server.request(Command::LoadOpenCodeMcp)? else {
+            anyhow::bail!("unexpected MCP roster response");
+        };
+        let mut servers: Vec<McpServer> = serde_json::from_value(value)?;
+        ensure!(servers.len() == 1 && servers[0].name == "fixture");
+        servers[0].url = "https://example.invalid/edited".into();
+        ensure!(matches!(
+            server.request(Command::SaveOpenCodeMcp {
+                servers: serde_json::to_value(servers)?
+            })?,
+            ResponsePayload::Ack
+        ));
+        let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(config)?)?;
+        ensure!(saved["provider"]["fixture"]["name"] == "Edited fixture");
+        ensure!(saved["provider"]["fixture"]["options"]["setCacheKey"] == true);
+        ensure!(saved["mcp"]["servers"]["fixture"]["url"] == "https://example.invalid/edited");
+        ensure!(saved["mcp"]["servers"]["fixture"]["timeout"] == 2500);
+        checks.push("daemon RPC reads and saves provider and MCP edits independently while preserving existing configuration fields");
+    }
     let default_root = data.join("projects");
     ensure!(server.root()? == default_root && default_root.is_dir());
     let first = server.create()?;

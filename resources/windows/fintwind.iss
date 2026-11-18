@@ -87,6 +87,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Files]
 Source: "{#StageDir}\fintwind.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\fintwind-daemon.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#StageDir}\fintwind-daemon-linux-x86_64"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#StageDir}\fintwind-daemon-linux-aarch64"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#StageDir}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]

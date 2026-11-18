@@ -226,6 +226,15 @@ try {
   for (const file of executables) {
     await copyFile(join(releaseDirectory, file), join(packageDirectory, file));
   }
+  for (const architecture of ["x86_64", "aarch64"]) {
+    const name = `fintwind-daemon-linux-${architecture}`;
+    const source = join(releaseDirectory, name);
+    if (await Bun.file(source).exists()) {
+      await copyFile(source, join(packageDirectory, name));
+    } else if (process.env.FINTWIND_REQUIRE_SSH_DAEMONS === "1") {
+      throw new Error(`Missing Linux SSH daemon: ${source}`);
+    }
+  }
   await copyFile(join(projectRoot, "LICENSE"), join(packageDirectory, "LICENSE"));
 
   // Authenticode has to be applied before anything is packaged, so the

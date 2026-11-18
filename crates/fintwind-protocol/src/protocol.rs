@@ -191,6 +191,14 @@ pub enum Command {
         turns_to_remove: usize,
     },
     GetSettings,
+    LoadOpenCodeProviders,
+    SaveOpenCodeProviders {
+        providers: Value,
+        catalog: Option<Value>,
+        workspace: Option<(PathBuf, PathBuf)>,
+    },
+    LoadOpenCodeMcp,
+    SaveOpenCodeMcp { servers: Value },
     UpdateSettings {
         settings: DaemonSettings,
     },

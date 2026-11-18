@@ -295,22 +295,45 @@ impl Fintwind {
     pub(super) fn load_mcp_servers_from_config(&mut self, cx: &mut Context<Self>) {
         self.mcp_load_generation += 1;
         let generation = self.mcp_load_generation;
+        let Some(daemon) = self.settings_daemon() else {
+            self.mcp_load_pending = false;
+            cx.notify();
+            return;
+        };
+        self.mcp_load_pending = true;
+        cx.notify();
         cx.spawn(async move |this, cx| {
             let loaded = cx
                 .background_executor()
-                .spawn(async move { fintwind_client::opencode_config::load_mcp_servers() })
+                .spawn(async move {
+                    if daemon.is_remote() {
+                        Self::settings_json(&daemon, fintwind_client::Command::LoadOpenCodeMcp)
+                    } else {
+                        fintwind_client::opencode_config::load_mcp_servers()
+                    }
+                })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.mcp_load_generation != generation || this.mcp_commit_generation != 0 {
                     return;
                 }
+                this.mcp_load_pending = false;
                 match loaded {
                     Ok(servers) => {
+                        if this.settings_machine_selected() { this.ssh.mcp_loaded = true; }
+                        this.mcp_load_error = None;
                         let selected_missing = this
                             .mcp_selected
                             .as_deref()
                             .is_some_and(|name| !servers.iter().any(|server| server.name == name));
                         this.mcp_servers = servers;
+                        // Statuses for names no longer on the roster describe nothing.
+                        let roster = &this.mcp_servers;
+                        if let Some(statuses) = this.mcp_statuses.as_mut() {
+                            statuses.retain(|name, _| {
+                                roster.iter().any(|server| &server.name == name)
+                            });
+                        }
                         if selected_missing {
                             this.mcp_selected = None;
                             this.mcp_adding = false;
@@ -346,10 +369,27 @@ impl Fintwind {
     /// change up without a restart. Returns false on a failed write, whose
     /// toast is already up — callers must not claim success on top of it.
     pub(super) fn commit_mcp_servers(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.settings_machine_selected() && !self.ssh.mcp_loaded { return false; }
+        let Some(daemon) = self.settings_daemon() else { return false; };
         self.mcp_load_generation += 1;
+        self.mcp_load_pending = false;
+        let result = if daemon.is_remote() {
+            serde_json::to_value(&self.mcp_servers)
+                .map_err(std::io::Error::other)
+                .and_then(|servers| Self::settings_request(&daemon, fintwind_client::Command::SaveOpenCodeMcp { servers }))
+                .and_then(|response| match response {
+                    fintwind_client::ResponsePayload::Ack => Ok(()),
+                    _ => Err(std::io::Error::other("invalid MCP save response")),
+                })
+        } else {
+            fintwind_client::opencode_config::save_mcp_servers(&self.mcp_servers)
+        };
         let saved =
-            match fintwind_client::opencode_config::save_mcp_servers(&self.mcp_servers) {
-                Ok(()) => true,
+            match result {
+                Ok(()) => {
+                    self.mcp_load_error = None;
+                    true
+                }
                 Err(error) => {
                     self.show_toast(tr!("mcp.sync_failed", error = error.to_string()));
                     false
@@ -385,17 +425,22 @@ impl Fintwind {
     /// until one succeeds. The listing RPC is blocking, so it runs on the
     /// background executor — never reachable from `render`.
     pub(super) fn refresh_mcp_statuses(&mut self, cx: &mut Context<Self>) {
-        let Some(binary) = self.native_binary_path() else {
-            return;
-        };
+        let Some(daemon) = self.settings_daemon() else { return; };
+        let binary = self.native_binary_path();
         let directory = self.native_server_directory();
         self.mcp_status_generation += 1;
         let generation = self.mcp_status_generation;
-        let daemon = self.daemon.clone();
+        self.mcp_status_pending = true;
+        cx.notify();
         cx.spawn(async move |this, cx| {
             let fetched = cx
                 .background_executor()
                 .spawn(async move {
+                    let (binary, directory) = if daemon.is_remote() {
+                        super::ssh_page::settings_opencode_workspace(&daemon)?
+                    } else {
+                        (binary.ok_or_else(|| std::io::Error::other("OpenCode is unavailable"))?, directory)
+                    };
                     fintwind_client::persistence::StateStore::remote(daemon)
                         .list_mcp_server_statuses(binary, directory)
                 })
@@ -664,22 +709,28 @@ impl Fintwind {
         if self.mcp_oauth_auth_name.is_some() {
             return;
         }
-        let Some(binary) = self.native_binary_path() else {
+        let Some(daemon) = self.settings_daemon() else { return; };
+        let binary = self.native_binary_path();
+        if !daemon.is_remote() && binary.is_none() {
             self.show_toast(tr!("mcp.oauth_missing_opencode"));
             return;
-        };
-        self.commit_mcp_servers(cx);
+        }
+        if !self.commit_mcp_servers(cx) { return; }
         self.mcp_oauth_auth_generation += 1;
         let generation = self.mcp_oauth_auth_generation;
         self.mcp_oauth_auth_name = Some(name.clone());
         let directory = self.native_server_directory();
-        let daemon = self.daemon.clone();
         self.mcp_oauth_cancel_requested = false;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
+                    let (binary, directory) = if daemon.is_remote() {
+                        super::ssh_page::settings_opencode_workspace(&daemon)?
+                    } else {
+                        (binary.expect("local OpenCode checked"), directory)
+                    };
                     fintwind_client::persistence::StateStore::remote(daemon)
                         .authenticate_mcp_server(binary, directory, name)
                 })
@@ -903,7 +954,70 @@ impl Fintwind {
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .child(self.render_mcp_detail(&theme, cx)),
+                    .child(if (has_roster && self.mcp_loading.borrow().is_none())
+                        || (self.mcp_load_error.is_none()
+                            && !self.mcp_load_pending
+                            && self.mcp_loading.borrow().is_none())
+                    {
+                        self.render_mcp_detail(&theme, cx)
+                    } else {
+                        self.render_mcp_load_placeholder(&theme, cx)
+                    }),
+            )
+            .into_any_element()
+    }
+
+    /// The detail pane while the first load is in flight or has failed: a
+    /// skeleton after the shared loading delay, or the error in the pane's
+    /// own place with a retry. The add form stays reachable from the list.
+    fn render_mcp_load_placeholder(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        if self.mcp_adding {
+            return self.render_mcp_form(theme, cx);
+        }
+        if let Some(error) = &self.mcp_load_error {
+            *self.mcp_loading.borrow_mut() = None;
+            return self.mcp_scrollable_detail(
+                div().flex().flex_col().child(mcp_load_error_banner(
+                    error,
+                    self.mcp_load_pending,
+                    theme,
+                    cx,
+                )),
+            );
+        }
+        let (phase, wake) = crate::ui::loading::LoadingDelay::observe(
+            &mut self.mcp_loading.borrow_mut(),
+            self.settings_ssh_host(),
+            self.mcp_load_pending,
+        );
+        if let Some(wake) = wake {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(wake.delay()).await;
+                wake.fired();
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+        }
+        if phase == crate::ui::loading::LoadingPhase::Done && !self.mcp_load_pending {
+            return self.render_mcp_detail(theme, cx);
+        }
+        div()
+            .size_full()
+            .px(px(24.0))
+            .pt(px(18.0))
+            .when(
+                phase == crate::ui::loading::LoadingPhase::Visible,
+                |body| {
+                    body.flex().flex_col().gap(px(12.0)).children(
+                        [220.0, 160.0, 280.0, 140.0].map(|width| {
+                            div()
+                                .h(px(38.0))
+                                .w(px(width))
+                                .rounded(px(5.0))
+                                .bg(theme.overlay_strong)
+                        }),
+                    )
+                },
             )
             .into_any_element()
     }
@@ -1630,6 +1744,9 @@ impl Fintwind {
                 ));
         }
         if current != McpOAuthMode::Disabled {
+            if self.settings_machine_selected() {
+                return Some(section.child(self.render_ssh_mcp_login(&server.name, cx)));
+            }
             let authenticating = self.mcp_oauth_auth_name.is_some();
             let waiting = self.mcp_oauth_auth_name.as_deref() == Some(server.name.as_str());
             let name = server.name.clone();

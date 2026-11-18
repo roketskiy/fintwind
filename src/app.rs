@@ -272,6 +272,7 @@ enum BranchPickerAction {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingsPage {
     General,
+    Ssh,
     RemoteControl,
     Providers,
     Skills,
@@ -1413,6 +1414,7 @@ pub struct Fintwind {
     command_palette: command_palette::CommandPaletteUi,
     model_search: Entity<ComposerInput>,
     settings_search: Entity<ComposerInput>,
+    ssh: ssh_page::SshPage,
     settings_focus: FocusHandle,
     latest_available: Option<update_card::UpdateCard>,
     update_button_focus: FocusHandle,
@@ -2413,6 +2415,7 @@ mod settings;
 mod sidebar;
 mod skills_page;
 mod source_control;
+pub(crate) mod ssh_page;
 mod streaming;
 mod tabs;
 mod transcript;
@@ -2852,6 +2855,11 @@ impl Fintwind {
             ComposerInput::new(window, cx)
                 .search_field()
                 .placeholder(tr!("settings.search"))
+        });
+        let ssh_search = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder(tr!("ssh.search"))
         });
         let skills_search = cx.new(|cx| {
             ComposerInput::new(window, cx)
@@ -3809,12 +3817,16 @@ impl Fintwind {
                 composer_draft_store,
                 composer_draft_save_generation: 0,
                 composer_attachments,
+                composer_attachment_imports: HashMap::new(),
+                composer_attachment_errors: HashMap::new(),
+                composer_attachment_loading: RefCell::new(None),
                 composer_references,
                 command_palette: command_palette::CommandPaletteUi::new(command_palette_search),
                 model_search,
                 branch_search,
                 branch_create_input,
                 settings_search,
+                ssh: ssh_page::SshPage::with_search(ssh_search, cx),
                 settings_focus,
                 latest_available: None,
                 update_button_focus: cx.focus_handle(),

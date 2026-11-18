@@ -95,6 +95,93 @@ settings.appearance: 外观
 settings.providers: 服务商
 settings.usage: 用量
 settings.general_keywords: 通用 本地 项目 对话 隐私 匿名 使用数据 分析 分享 更新 自动 版本 opencode shell powershell cmd bash 终端 mermaid diagram 图表 可视化 todo todowrite 待办 任务 清单
+settings.ssh: SSH 连接
+ssh.local_only: 仅本机 · 管理已保存的连接
+ssh.search: 搜索连接
+ssh.no_search_results: 未找到匹配的连接
+ssh.not_connected: 未连接
+ssh.connected: 已连接
+ssh.backend: Fintwind 后端
+ssh.backend_unavailable: 后端不可用
+ssh.authentication: 身份验证
+ssh.environment: 服务器环境
+ssh.choose_key: 选择文件
+ssh.manual_backend: 手动配置后端
+ssh.new_title: 新建 SSH 连接
+ssh.edit_title: 编辑 SSH 连接
+ssh.save_connect: 保存并连接
+ssh.save_edit: 保存修改
+ssh.remove_title: 移除连接？
+ssh.remove_body: 从此设备移除「%{name}」的连接配置。远端项目和私钥文件会保留。
+ssh.verify_body: 首次连接到 %{host}。请通过管理员或服务器平台独立核对指纹。
+ssh.edit_connection: 编辑连接
+ssh.remove_connection: 移除连接
+mcp.ssh_refresh: 刷新
+mcp.ssh_callback_port: OAuth 回调端口
+mcp.ssh_not_confirmed: 远端 MCP 服务未确认连接。
+ssh.key_changed: 主机指纹已变化，连接已阻止。
+ssh.connect_failed: 无法连接 SSH 服务器。
+ssh.key_failed: 无法读取私钥。
+ssh.auth_failed: 服务器拒绝了私钥。
+ssh.inspect_failed: 无法读取服务器详情。
+ssh.timeout: SSH 检查超时。
+ssh.retry: 重试
+ssh.name: 名称
+ssh.host: 主机
+ssh.port: 端口
+ssh.user: 用户名
+ssh.key: 本地私钥
+ssh.invalid_fields: 请填写名称、主机、端口、用户名及私钥的绝对路径。
+ssh.saved: 已保存连接
+ssh.new: 新建连接
+ssh.verify: 请与可信来源核对主机指纹。
+ssh.trust: 信任指纹
+ssh.last_read: 上次读取
+ssh.system: 系统
+ssh.memory: 内存
+ssh.disk: 磁盘余量
+ssh.probe: 检查连接
+ssh.edit: 编辑
+ssh.confirm_remove: 确认移除
+ssh.remove: 移除
+ssh.empty: 没有已保存的连接
+ssh.daemon_port: 远端 daemon 端口
+ssh.deploy_daemon: 部署 daemon
+ssh.start_daemon: 启动 daemon
+ssh.deploy_missing: 未部署 Fintwind daemon
+ssh.deploy_asset_missing: 当前安装缺少适用于此服务器的 daemon（%{asset}）。
+ssh.deploy_invalid: 随包提供的 daemon 与服务器架构不匹配（%{asset}）。
+ssh.deploy_failed: 远端 daemon 操作失败
+ssh.deploy_start_failed: 远端 daemon 未能启动，请检查服务器上的 daemon.log
+ssh.token_file: 远端 daemon 令牌文件
+ssh.invalid_daemon: 请填写 daemon 端口及令牌文件的 Linux 绝对路径，或两项均留空。
+ssh.ready: 已就绪
+ssh.offline: 未连接
+ssh.connect: 连接
+ssh.disconnect: 断开
+ssh.local: 本机
+project.remote_path: 请输入服务器上的绝对目录路径。
+project.method_existing: 现有文件夹
+project.method_clone: 从 GitHub 克隆
+project.method_empty: 新建文件夹
+project.repository: GitHub 仓库地址
+project.parent_directory: 父目录
+project.target_folder: 文件夹名称
+project.new_folder_name: 新文件夹名称
+project.clone_parent_directory: 目标父目录
+project.clone_destination: 克隆到 %{path}
+project.create_destination: 创建 %{path}
+project.invalid_folder: 请输入单个文件夹名称。
+project.invalid_github_url: 请输入 GitHub 仓库地址，例如 https://github.com/owner/repo。
+project.clone_timeout: 克隆超时。
+project.create_and_add: 创建并添加
+project.clone_and_add: 克隆并添加
+project.target_exists: 目标位置已有同名文件或文件夹，未覆盖。
+project.creation_failed: 未能创建项目。请检查父目录和仓库访问权限，目标可能残留未完成的文件夹。
+project.creation_unknown: 结果待确认。请先检查目标目录，再决定是否重试。
+ssh.settings_cached: 连接已断开。显示上次读取的设置。
+ssh.openc_path: OpenCode 路径
+ssh.general_dir: 通用工作区
 settings.appearance_keywords: 外观 主题 系统 浅色 深色 语言 英语 中文 简体 字号 文字大小 代码 界面 字体 等宽 宽度 对话宽度 消息宽度
 settings.providers_keywords: 服务商 智能体 模型 自定义 添加 API Key Base URL 端点 模型列表 命令行 版本 安装 检测 获取模型 models.dev 连通 测试 延迟 首字 模态 responses claude codex cursor opencode amp grok pi
 settings.skills: 技能

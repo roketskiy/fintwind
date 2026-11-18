@@ -5,6 +5,9 @@ edition = "2024"
 description = "Rust client and daemon process supervisor for Fintwind"
 license = "GPL-3.0-only"
 
+[features]
+ssh = ["dep:russh", "dep:tokio"]
+
 [dependencies]
 anyhow = "1.0"
 base64 = "0.22"
@@ -28,6 +31,8 @@ url = "2"
 unicode-width = "0.2.2"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 fintwind-protocol = { path = "../fintwind-protocol" }
+russh = { version = "0.65.2", default-features = false, features = ["ring", "rsa"], optional = true }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "time"], optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

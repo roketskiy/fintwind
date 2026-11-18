@@ -21,6 +21,8 @@ pub mod opencode_shell;
 pub mod opencode_todo;
 pub mod persistence;
 mod process;
+#[cfg(feature = "ssh")]
+pub mod ssh;
 mod provider_thinking;
 mod workspace_client;
 

@@ -235,7 +235,10 @@ impl FintwindApplicationExt for Application {
 }
 
 pub fn run() {
-    let daemon = crate::daemon::start_process()
+    let remote = crate::app::ssh_page::project_launch()
+        .unwrap_or_else(|error| panic!("failed to open SSH project: {error:#}"));
+    let daemon = remote.as_ref().map(|remote| Ok(remote.connection.supervisor()))
+        .unwrap_or_else(crate::daemon::start_process)
         .unwrap_or_else(|error| panic!("failed to start fintwind daemon: {error:#}"));
     gpui_platform::application()
         // Ely's embedded files first, Fintwind's icons and logos underneath:
@@ -400,7 +403,15 @@ pub fn run() {
                 cx,
                 move |window, cx| {
                     crate::platform::configure_main_window_close_behavior(window, cx);
-                    let fintwind = Fintwind::new(window, cx, daemon);
+                    let fintwind = if let Some(remote) = remote {
+                        let store = crate::persistence::StateStore::ssh_workspace(daemon.clone(), &remote.state_dir);
+                        let app = Fintwind::new_with_store(window, cx, daemon, store);
+                        window.set_window_title(&format!("Fintwind — {}", remote.machine));
+                        app.update(cx, |app, cx| app.open_ssh_project(remote, cx));
+                        app
+                    } else {
+                        Fintwind::new(window, cx, daemon)
+                    };
                     let composer_focus = fintwind.read(cx).composer_focus(cx);
                     window.focus(&composer_focus, cx);
                     fintwind

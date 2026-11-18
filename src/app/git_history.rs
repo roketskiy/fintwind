@@ -1,7 +1,8 @@
 use crate::git_history::{CommitEntry, CommitGraph, GraphHalf};
 use crate::theme::{code_px, ui_px};
 use crate::ui::ActivationExt;
-use gpui::{PathBuilder, Point, Pixels, relative, size};
+use crate::ui::loading::{LoadingDelay, LoadingPhase};
+use gpui::{PathBuilder, Pixels, Point, relative, size};
 
 use std::path::Path as StdPath;
 
@@ -46,9 +47,12 @@ impl HistoryRows {
 /// Keyboard and click handlers read the same prepared snapshot as the list.
 enum HistoryFetch {
     Ready,
+    Refreshing,
     NotRepository,
     Error(String),
     Loading,
+    Waiting,
+    Placeholder,
 }
 
 impl Fintwind {
@@ -118,7 +122,13 @@ impl Fintwind {
                 Ok(None) => HistoryFetch::NotRepository,
                 Err(error) => HistoryFetch::Error(error.clone()),
             },
-            Query::Pending => HistoryFetch::Loading,
+            Query::Pending => {
+                if self.history_row_key.as_ref() == Some(&key) {
+                    HistoryFetch::Refreshing
+                } else {
+                    HistoryFetch::Loading
+                }
+            }
             Query::Missing(token) => {
                 let fetch_path = workspace_path.to_path_buf();
                 let fetch_branch = self.history_branch.clone();
@@ -175,7 +185,11 @@ impl Fintwind {
                     });
                 })
                 .detach();
-                HistoryFetch::Loading
+                if self.history_row_key.as_ref() == Some(&key) {
+                    HistoryFetch::Refreshing
+                } else {
+                    HistoryFetch::Loading
+                }
             }
         }
     }
@@ -348,6 +362,56 @@ impl Fintwind {
             },
         );
 
+        let mut fetch = match workspace_path.as_deref() {
+            Some(path) => self.commit_log_for_workspace(path, cx),
+            None => HistoryFetch::NotRepository,
+        };
+        let refresh_error = match (&fetch, workspace_path.as_ref()) {
+            (HistoryFetch::Error(error), Some(path))
+                if self.history_row_key.as_ref()
+                    == Some(&(path.clone(), self.history_branch.clone())) =>
+            {
+                Some(error.clone())
+            }
+            _ => None,
+        };
+        if refresh_error.is_some() {
+            fetch = HistoryFetch::Ready;
+        }
+        let request_running = matches!(fetch, HistoryFetch::Loading | HistoryFetch::Refreshing);
+        let loading_phase = if matches!(fetch, HistoryFetch::Error(_)) || refresh_error.is_some() {
+            self.history_loading = None;
+            LoadingPhase::Done
+        } else if let Some(path) = workspace_path.as_ref() {
+            let (phase, wake) = LoadingDelay::observe(
+                &mut self.history_loading,
+                (path.clone(), self.history_branch.clone()),
+                matches!(fetch, HistoryFetch::Loading),
+            );
+            if let Some(wake) = wake {
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(wake.delay()).await;
+                    wake.fired();
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                })
+                .detach();
+            }
+            phase
+        } else {
+            self.history_loading = None;
+            LoadingPhase::Done
+        };
+        match loading_phase {
+            LoadingPhase::Hidden => fetch = HistoryFetch::Waiting,
+            LoadingPhase::Visible => fetch = HistoryFetch::Placeholder,
+            LoadingPhase::Done => {}
+        }
+        let refreshing = matches!(fetch, HistoryFetch::Refreshing);
+        if self.history_refresh_spin.as_mut().is_some_and(|spin| {
+            (!request_running && cx.reduce_motion()) || !spin.observe(request_running)
+        }) {
+            self.history_refresh_spin = None;
+        }
         let refresh_focus = self.transcript_control_focus("history-refresh", cx);
         let refresh = div()
             .id("history-refresh")
@@ -364,12 +428,27 @@ impl Fintwind {
             .focus_visible(|style| style.border_1().border_color(theme.accent))
             .hover(|style| style.bg(theme.overlay))
             .active(|style| style.bg(theme.overlay_strong))
-            .child(icon("icons/rotate-cw.svg", 14.0, theme.text_secondary))
+            .child(if let Some(spin) = &self.history_refresh_spin {
+                if cx.reduce_motion() {
+                    icon("icons/rotate-cw.svg", 14.0, theme.text_secondary).into_any_element()
+                } else {
+                    spin.render(icon("icons/rotate-cw.svg", 14.0, theme.text_secondary))
+                }
+            } else if refreshing {
+                motion::spin_slow(icon("icons/rotate-cw.svg", 14.0, theme.text_secondary))
+            } else {
+                icon("icons/rotate-cw.svg", 14.0, theme.text_secondary).into_any_element()
+            })
             .tooltip(Tooltip::text(tr!("git_history.refresh")))
             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                 cx.stop_propagation();
             })
-            .on_activation(cx, |this, _, cx| this.refresh_history_panel(cx));
+            .on_activation(cx, move |this, _, cx| {
+                if !request_running {
+                    this.history_refresh_spin = Some(motion::ActionSpin::start());
+                    this.refresh_history_panel(cx);
+                }
+            });
 
         let toolbar = div()
             .flex_none()
@@ -382,23 +461,56 @@ impl Fintwind {
             .child(div().flex_1())
             .child(refresh);
 
-        let fetch = match workspace_path.as_deref() {
-            Some(path) => self.commit_log_for_workspace(path, cx),
-            None => HistoryFetch::NotRepository,
-        };
         let highlight = self
             .history_highlight
             .filter(|index| *index < self.history_row_cache.commits.len());
 
         let content = match fetch {
-            HistoryFetch::Ready if self.history_row_cache.commits.is_empty() => self
-                .render_right_panel_empty_message(
+            HistoryFetch::Waiting | HistoryFetch::Loading => {
+                div().flex_1().min_h_0().into_any_element()
+            }
+            HistoryFetch::Placeholder => {
+                let block = || div().rounded(px(3.0)).bg(theme.overlay_strong);
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .children((0..5).map(|index| {
+                        div()
+                            .h(ui_px(HISTORY_ROW_HEIGHT))
+                            .px(px(10.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(block().size(px(12.0)))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(7.0))
+                                    .child(block().h(px(10.0)).w(relative(if index % 2 == 0 {
+                                        0.7
+                                    } else {
+                                        0.55
+                                    })))
+                                    .child(block().h(px(8.0)).w(relative(0.35))),
+                            )
+                    }))
+                    .into_any_element()
+            }
+            HistoryFetch::Ready | HistoryFetch::Refreshing
+                if self.history_row_cache.commits.is_empty() =>
+            {
+                self.render_right_panel_empty_message(
                     tr!("git_history.empty"),
                     tr!("git_history.empty_description"),
                     cx,
                 )
-                .into_any_element(),
-            HistoryFetch::Ready => {
+                .into_any_element()
+            }
+            HistoryFetch::Ready | HistoryFetch::Refreshing => {
                 let list_weak = weak;
                 let list_highlight = highlight;
                 let rows = self.history_row_cache.clone();
@@ -497,16 +609,44 @@ impl Fintwind {
                     cx,
                 )
                 .into_any_element(),
-            HistoryFetch::Error(error) => self
-                .render_right_panel_empty_message(tr!("git_history.error"), error, cx)
-                .into_any_element(),
-            HistoryFetch::Loading => self
-                .render_right_panel_empty_message(
-                    tr!("git_history.loading"),
-                    tr!("git_history.loading_description"),
-                    cx,
-                )
-                .into_any_element(),
+            HistoryFetch::Error(error) => {
+                let retry_focus = self.transcript_control_focus("history-error-retry", cx);
+                self.render_right_panel_empty_message(tr!("git_history.error"), error, cx)
+                    .child(
+                        div()
+                            .id("history-error-retry")
+                            .track_focus(&retry_focus)
+                            .tab_index(0)
+                            .mt(px(12.0))
+                            .px(px(12.0))
+                            .h(px(28.0))
+                            .rounded(px(7.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .gap(px(6.0))
+                            .cursor_pointer()
+                            .text_size(ui_px(12.0))
+                            .text_color(theme.text_secondary)
+                            .border_1()
+                            .border_color(theme.border)
+                            .hover(|style| style.bg(theme.overlay))
+                            .active(|style| style.bg(theme.overlay_strong))
+                            .focus_visible(|style| style.border_color(theme.accent))
+                            .child(icon("icons/rotate-cw.svg", 14.0, theme.text_secondary))
+                            .child(tr!("git_history.refresh"))
+                            .tooltip(Tooltip::text(tr!("git_history.refresh")))
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                cx.stop_propagation();
+                            })
+                            .on_activation(cx, move |this, _, cx| {
+                                this.history_refresh_spin =
+                                    Some(motion::ActionSpin::start());
+                                this.refresh_history_panel(cx);
+                            }),
+                    )
+                    .into_any_element()
+            }
         };
 
         div()
@@ -516,6 +656,16 @@ impl Fintwind {
             .flex()
             .flex_col()
             .child(toolbar)
+            .when_some(refresh_error, |content, error| {
+                content.child(
+                    div()
+                        .px(px(10.0))
+                        .pb(px(6.0))
+                        .text_size(ui_px(11.0))
+                        .text_color(theme.warning_text)
+                        .child(error),
+                )
+            })
             .child(content)
     }
 
@@ -616,7 +766,7 @@ impl Fintwind {
                             .into_any_element(),
                         None => div()
                             .flex_none()
-                            .child(tr!("git_history.stats_loading"))
+                            .h(ui_px(18.0))
                             .into_any_element(),
                     })
                     .child(div().flex_none().child(commit.author.clone()))

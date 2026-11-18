@@ -269,10 +269,25 @@ async fn inspect(profile: Profile, provision: bool) -> Result<Probe> {
             .get(1)
             .and_then(|system| deploy::LinuxTarget::from_system(system))
     {
-        match deploy::detect(&session).await? {
-            deploy::Detection::Missing => deployment = Some(Deployment::Upload(target)),
-            deploy::Detection::Stopped => deployment = Some(Deployment::Start),
-            deploy::Detection::Running { port, token_file } => endpoint = Some((port, token_file)),
+        if provision {
+            match deploy::ensure_current(&session, target).await {
+                Ok(address) => endpoint = Some(address),
+                Err(error) => {
+                    return Ok(Probe::BackendUnavailable(
+                        values,
+                        error.to_string(),
+                        Some(Deployment::Upload(target)),
+                    ));
+                }
+            }
+        } else {
+            match deploy::detect(&session).await? {
+                deploy::Detection::Missing => deployment = Some(Deployment::Upload(target)),
+                deploy::Detection::Stopped => deployment = Some(Deployment::Start),
+                deploy::Detection::Running { port, token_file } => {
+                    endpoint = Some((port, token_file))
+                }
+            }
         }
     }
     if provision && let Some(action) = deployment {

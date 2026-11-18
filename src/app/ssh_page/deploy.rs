@@ -1,4 +1,5 @@
 use super::*;
+use sha2::{Digest, Sha256};
 use std::io::Read as _;
 use std::net::SocketAddr;
 
@@ -145,6 +146,101 @@ nohup flock -n -o "$root/lock" sh -c '
             }
             anyhow::bail!("{}", tr!("ssh.deploy_start_failed"));
     }).await.context(tr!("ssh.timeout"))?
+}
+
+pub(super) async fn ensure_current(
+    session: &client::Handle<HostKey>,
+    target: LinuxTarget,
+) -> Result<(u16, String)> {
+    let executable = std::env::current_exe()?;
+    let mut path = executable.with_file_name(target.asset());
+    if !path.is_file()
+        && cfg!(target_os = "linux")
+        && LinuxTarget::from_system(&format!("Linux {}", std::env::consts::ARCH))
+            .is_some_and(|local| local.machine() == target.machine())
+    {
+        path = executable.with_file_name("fintwind-daemon");
+    }
+    let binary = read_binary(target, path)?;
+    let digest = format!("{:x}", Sha256::digest(&binary));
+    let version = env!("CARGO_PKG_VERSION");
+    let remote = command(
+        session,
+        r#"
+if [ -f "$root/version" ]; then
+    sed -n '1p' "$root/version"
+else
+    printf '\n'
+fi
+if [ -x "$root/daemon" ]; then
+    sha256sum "$root/daemon" | cut -d ' ' -f 1
+    flock -n -E 42 "$root/lock" true
+    case $? in
+        0) printf 'stopped\n' ;;
+        42)
+            pid=$(sed -n 's/.*"pid":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$root/ready")
+            case "$pid" in ''|*[!0-9]*) exit 1 ;; esac
+            sha256sum "/proc/$pid/exe" | cut -d ' ' -f 1
+            ;;
+        *) exit 1 ;;
+    esac
+fi
+"#,
+        None,
+    )
+    .await?;
+    let mut state = remote.lines();
+    let remote_version = state.next();
+    let installed = state.next();
+    let running = state.next();
+    if installed != Some(digest.as_str())
+        || running.is_some_and(|hash| hash != "stopped" && hash != digest)
+    {
+        let script = format!(
+            r#"
+umask 077
+mkdir -p -- "$root" || exit 1
+exec 9>"$root/update.lock"
+flock -w 180 9 || exit 1
+tmp=$(mktemp "$root/upload.XXXXXXXX") || exit 1
+trap 'rm -f -- "$tmp"' EXIT
+cat > "$tmp" && chmod 700 "$tmp" || exit 1
+[ "$(wc -c < "$tmp")" -eq "$1" ] || exit 1
+[ "$(sha256sum "$tmp" | cut -d ' ' -f 1)" = '{digest}' ] || exit 1
+flock -n -E 42 "$root/lock" true
+case $? in
+    0)
+        if [ -x "$root/daemon" ] && [ "$(sha256sum "$root/daemon" | cut -d ' ' -f 1)" = '{digest}' ]; then
+            exit 0
+        fi
+        ;;
+    42)
+        pid=$(sed -n 's/.*"pid":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$root/ready")
+        case "$pid" in ''|*[!0-9]*) exit 1 ;; esac
+        if [ -x "$root/daemon" ] && [ "$(sha256sum "$root/daemon" | cut -d ' ' -f 1)" = '{digest}' ] && [ "$(sha256sum "/proc/$pid/exe" | cut -d ' ' -f 1)" = '{digest}' ]; then
+            exit 0
+        fi
+        [ "/proc/$pid/exe" -ef "$root/daemon" ] || exit 1
+        kill -TERM "$pid" || exit 1
+        flock -w 20 "$root/lock" true || exit 1
+        ;;
+    *) exit 1 ;;
+esac
+mv -f -- "$tmp" "$root/daemon" || exit 1
+printf '%s\n%s\n' '{version}' '{digest}' > "$root/version"
+"#
+        );
+        tokio::time::timeout(
+            Duration::from_secs(180),
+            command(session, &script, Some(&binary)),
+        )
+        .await
+        .context(tr!("ssh.timeout"))??;
+    } else if remote_version != Some(version) {
+        let script = format!("printf '%s\\n%s\\n' '{version}' '{digest}' > \"$root/version\"");
+        command(session, &script, None).await?;
+    }
+    deploy(session, Deployment::Start).await
 }
 
 fn read_binary(target: LinuxTarget, path: PathBuf) -> Result<Vec<u8>> {

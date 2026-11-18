@@ -553,8 +553,8 @@ impl Fintwind {
                     SettingsPage::Skills => self.render_skills_settings(window, cx),
                     SettingsPage::McpServers | SettingsPage::McpMarket | SettingsPage::Providers
                         if self.settings_daemon().is_none() => div().p(px(24.0)).child(tr!("ssh.offline")).into_any_element(),
-                    SettingsPage::McpServers | SettingsPage::McpMarket
-                        if self.settings_machine_selected() && !self.ssh.mcp_loaded => div().into_any_element(),
+                    SettingsPage::McpMarket if self.settings_machine_selected() && !self.ssh.mcp_loaded =>
+                        self.render_mcp_load_placeholder(&theme, cx),
                     SettingsPage::Providers if self.settings_machine_selected() && !self.ssh.providers_loaded => div().into_any_element(),
                     SettingsPage::McpServers => self.render_mcp_page(window, cx),
                     SettingsPage::McpMarket => self.render_mcp_market_page(cx),

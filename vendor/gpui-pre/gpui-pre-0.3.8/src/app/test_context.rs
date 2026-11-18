@@ -187,6 +187,15 @@ impl TestAppContext {
         }
     }
 
+    /// Installs the asset source and SVG renderer before opening test windows.
+    pub fn set_assets(&mut self, source: impl crate::AssetSource) {
+        self.update(|cx| {
+            let source = Arc::new(source);
+            cx.asset_source = source.clone();
+            cx.svg_renderer = super::SvgRenderer::new(source);
+        });
+    }
+
     /// Disables accessibility for subsequently created test windows.
     pub fn disable_accessibility(&mut self) {
         self.update(|cx| cx.accessibility_force_disabled = true);

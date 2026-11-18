@@ -54,6 +54,9 @@ impl DaemonProcess {
             .arg("127.0.0.1:0")
             .arg("--parent-pid")
             .arg(std::process::id().to_string());
+        if let Some(root) = crate::persistence::debug_data_directory() {
+            command.arg("--data-dir").arg(root.join("daemon"));
+        }
         let mut child = command
             .env(DAEMON_TOKEN_ENV, &token)
             .env(APP_EXECUTABLE_ENV, app_executable)

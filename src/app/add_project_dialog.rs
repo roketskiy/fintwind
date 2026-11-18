@@ -34,12 +34,14 @@ pub(super) const ADD_PROJECT_LAYER_PRIORITY: usize = 4;
 
 pub(super) struct AddProjectDialogState {
     id: Uuid,
+    window: gpui::AnyWindowHandle,
     server: Option<Uuid>,
     remote_path: Entity<ComposerInput>,
     method: ProjectMethod,
     repository: Entity<ComposerInput>,
     directory_name: Entity<ComposerInput>,
     pending: bool,
+    created_remote_directory: Option<(RemoteProjectTarget, PathBuf)>,
     clone_toast: Option<u64>,
     loading: Option<LoadingDelay<()>>,
     error: Option<String>,
@@ -73,6 +75,14 @@ enum ProjectMethod {
     Existing,
     Empty,
     Clone,
+}
+
+#[derive(PartialEq, Eq)]
+struct RemoteProjectTarget {
+    server: Option<Uuid>,
+    parent: String,
+    folder: String,
+    repository: Option<String>,
 }
 
 fn github_repository(address: &str) -> Option<(url::Url, String)> {
@@ -352,12 +362,14 @@ impl Fintwind {
         .detach();
         self.add_project_dialog = Some(AddProjectDialogState {
             id: Uuid::new_v4(),
+            window: window.window_handle(),
             server: None,
             remote_path,
             method: ProjectMethod::Existing,
             repository,
             directory_name,
             pending: false,
+            created_remote_directory: None,
             clone_toast: None,
             loading: None,
             error: None,
@@ -554,6 +566,7 @@ impl Fintwind {
         let path = dialog.remote_path.read(cx).content().trim().to_owned();
         let id = dialog.id;
         let server = dialog.server;
+        let window_handle = dialog.window;
         let method = dialog.method;
         let name = if method == ProjectMethod::Existing {
             dialog.name.read(cx).content().trim().to_owned()
@@ -585,15 +598,36 @@ impl Fintwind {
             self.report_add_project_error(tr!("ssh.offline"), cx);
             return;
         };
+        let target = RemoteProjectTarget {
+            server,
+            parent: path,
+            folder,
+            repository,
+        };
+        let previous_directory = dialog
+            .created_remote_directory
+            .as_ref()
+            .filter(|(previous, _)| method != ProjectMethod::Existing && previous == &target)
+            .map(|(_, directory)| directory.clone());
         dialog.pending = true;
         dialog.error = None;
-        let progress = if method == ProjectMethod::Clone { self.start_clone_toast(cx) } else { CloneProgress::default() };
+        let progress = if method == ProjectMethod::Clone && previous_directory.is_none() {
+            self.start_clone_toast(cx)
+        } else {
+            CloneProgress::default()
+        };
         cx.notify();
         cx.spawn(async move |this, cx| {
             let operation_progress = progress.clone();
+            let path = target.parent.clone();
+            let folder = target.folder.clone();
+            let repository = target.repository.clone();
             let result = cx
                 .background_executor()
                 .spawn(async move {
+                    if let Some(directory) = previous_directory {
+                        return Ok(directory);
+                    }
                     if method == ProjectMethod::Existing {
                         return super::ssh_page::remote_project_directory(client, path);
                     }
@@ -604,60 +638,75 @@ impl Fintwind {
                 })
                 .await;
             progress.0.lock().unwrap().take();
-            let launched = this.update(cx, |app, cx| {
+            if let Some(host) = server && let Ok(directory) = &result {
+                let _ = this.update(cx, |app, cx| {
+                    let toast_id = app.add_project_dialog.as_ref()
+                        .filter(|dialog| dialog.id == id)
+                        .and_then(|dialog| dialog.clone_toast);
+                    if let Some(toast) = app.toast.as_mut().filter(|toast| Some(toast.id) == toast_id) {
+                        toast.tone = ToastTone::Progress(None);
+                        toast.message = tr!("project.opening_remote");
+                        cx.notify();
+                    }
+                });
+                let directory = directory.clone();
+                let destination = directory.clone();
+                let name = name.clone();
+                let client = this.update(cx, |app, _| app.ssh_client_for(host)).ok().flatten();
+                let registered = cx.background_executor().spawn(async move {
+                    let client = client.ok_or_else(|| anyhow::anyhow!(tr!("ssh.offline")))?;
+                    super::ssh_page::register_remote_project(&client, destination, name)
+                }).await;
+                let _ = window_handle.update(cx, |_, window, cx| {
+                    let _ = this.update(cx, |app, cx| {
+                        let Some(dialog) = app.add_project_dialog.as_mut().filter(|dialog| dialog.id == id) else { return; };
+                        if method != ProjectMethod::Existing {
+                            dialog.created_remote_directory = Some((target, directory));
+                        }
+                        match registered {
+                            Ok(project) => {
+                                if app.open_registered_ssh_project(host, project, window, cx) {
+                                    if let Some(workspace) = app.active_ssh_workspace() {
+                                        workspace.update(cx, |workspace, cx| {
+                                            workspace.show_toast_with_tone(tr!("project.added"), ToastTone::Success);
+                                            cx.notify();
+                                        });
+                                    }
+                                    let toast_id = app.add_project_dialog.as_ref().and_then(|dialog| dialog.clone_toast);
+                                    if app.toast.as_ref().is_some_and(|toast| Some(toast.id) == toast_id) {
+                                        app.toast = None;
+                                    }
+                                    app.add_project_dialog = None;
+                                } else {
+                                    app.report_add_project_error(tr!("ssh.offline"), cx);
+                                }
+                            }
+                            Err(error) => app.report_add_project_error(error.to_string(), cx),
+                        }
+                    });
+                });
+                return;
+            }
+            let _ = this.update(cx, |app, cx| {
                 if app.add_project_dialog.as_ref().is_none_or(|dialog| dialog.id != id) {
-                    return None;
+                    return;
+                }
+                if method != ProjectMethod::Existing
+                    && let Ok(directory) = &result
+                    && let Some(dialog) = app.add_project_dialog.as_mut()
+                {
+                    dialog.created_remote_directory = Some((target, directory.clone()));
                 }
                 match result {
-                    Ok(path) if server.is_none() => {
+                    Ok(path) => {
                         app.finish_add_project_toast(tr!("project.added"), ToastTone::Success, false);
                         app.add_project_dialog = None;
                         app.add_project_directory(path, name, cx);
                     }
-                    Ok(path) => {
-                        let server = server.expect("SSH host selected");
-                        if app.ssh_client_for(server).is_none() {
-                            app.report_add_project_error(tr!("ssh.offline"), cx);
-                        } else {
-                            match app.launch_ssh_project_process(server, path, name) {
-                                Ok(Some(child)) => {
-                                    let progress_id = app.add_project_dialog.as_ref().and_then(|dialog| dialog.clone_toast);
-                                    if let Some(toast) = app.toast.as_mut().filter(|toast| Some(toast.id) == progress_id) {
-                                        toast.tone = ToastTone::Progress(None);
-                                        toast.message = tr!("project.opening_remote");
-                                    }
-                                    cx.notify();
-                                    return Some(child);
-                                }
-                                Ok(None) => {
-                                    app.finish_add_project_toast(tr!("project.added"), ToastTone::Success, false);
-                                    app.add_project_dialog = None;
-                                }
-                                Err(error) => app.report_add_project_error(error.to_string(), cx),
-                            }
-                        }
-                    }
                     Err(error) => app.report_add_project_error(error.to_string(), cx),
                 }
                 cx.notify();
-                None
             });
-            if let Ok(Some(child)) = launched {
-                let result = super::ssh_page::wait_for_ssh_project(child).await;
-                let _ = this.update(cx, |app, cx| {
-                    if app.add_project_dialog.as_ref().is_none_or(|dialog| dialog.id != id) {
-                        return;
-                    }
-                    match result {
-                        Ok(()) => {
-                            app.finish_add_project_toast(tr!("project.added"), ToastTone::Success, false);
-                            app.add_project_dialog = None;
-                            cx.notify();
-                        }
-                        Err(error) => app.report_add_project_error(error.to_string(), cx),
-                    }
-                });
-            }
         })
         .detach();
     }
@@ -765,7 +814,7 @@ impl Fintwind {
             });
         let fixed_location = self.daemon.is_remote();
         #[cfg(test)]
-        let fixed_location = fixed_location && !self.has_ssh_test_launcher();
+        let fixed_location = fixed_location && !self.ssh_test_location_picker();
         let location = if fixed_location {
             div().child(location_label).into_any_element()
         } else {

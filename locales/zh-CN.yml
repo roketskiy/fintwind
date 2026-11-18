@@ -144,6 +144,8 @@ ssh.remove: 移除
 ssh.empty: 没有已保存的连接
 ssh.daemon_port: 远端 daemon 端口
 ssh.deploy_daemon: 部署 daemon
+ssh.update_daemon: 更新并重启 daemon
+ssh.update_busy: 请等待正在运行的任务结束后再更新 daemon。
 ssh.start_daemon: 启动 daemon
 ssh.deploy_missing: 未部署 Fintwind daemon
 ssh.deploy_asset_missing: 当前安装缺少适用于此服务器的 daemon（%{asset}）。

@@ -322,6 +322,7 @@ pub static RUNTIME: LazyLock<std::io::Result<tokio::runtime::Runtime>> = LazyLoc
 pub struct Connection {
     supervisor: DaemonSupervisor,
     relay: Relay,
+    retired_client: Option<crate::DaemonClient>,
 }
 
 struct Relay(tokio::task::JoinHandle<()>);
@@ -343,6 +344,12 @@ impl Connection {
 
     pub fn supervisor(&self) -> DaemonSupervisor {
         self.supervisor.clone()
+    }
+
+    pub fn replace_tunnel(&mut self, mut replacement: Self) {
+        self.retired_client = Some(self.client());
+        std::mem::swap(&mut self.relay, &mut replacement.relay);
+        self.supervisor.reconnect_through(&replacement.supervisor);
     }
 
     pub async fn open<H: client::Handler + Sync + 'static>(
@@ -410,13 +417,16 @@ impl Connection {
             _ = &mut relay.0 => anyhow::bail!("SSH tunnel closed before daemon connected"),
         };
         match result {
-            Ok(supervisor) => Ok(Self { supervisor, relay }),
+            Ok(supervisor) => Ok(Self { supervisor, relay, retired_client: None }),
             Err(error) => Err(error),
         }
     }
 
     pub fn is_ready(&self) -> bool {
-        !self.relay.0.is_finished() && !self.supervisor.client().is_disconnected()
+        let client = self.client();
+        !self.relay.0.is_finished()
+            && !client.is_disconnected()
+            && self.retired_client.as_ref().is_none_or(|retired| !retired.same_connection(&client))
     }
 }
 

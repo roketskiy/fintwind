@@ -121,6 +121,7 @@ nohup flock -n -o "$root/lock" sh -c '
 pub(super) async fn ensure_current(
     session: &client::Handle<HostKey>,
     target: LinuxTarget,
+    allow_existing_without_asset: bool,
 ) -> Result<(u16, String)> {
     let executable = std::env::current_exe()?;
     let mut path = executable.with_file_name(target.asset());
@@ -131,7 +132,7 @@ pub(super) async fn ensure_current(
     {
         path = executable.with_file_name("fintwind-daemon");
     }
-    if !path.is_file() {
+    if allow_existing_without_asset && !path.is_file() {
         match detect(session).await? {
             Detection::Running { port, token_file } => return Ok((port, token_file)),
             Detection::Stopped => return start(session).await,

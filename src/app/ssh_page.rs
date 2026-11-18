@@ -39,6 +39,27 @@ struct Profile {
     token_file: String,
 }
 
+#[derive(PartialEq, Serialize, Deserialize)]
+struct CatalogHost {
+    host: String,
+    port: u16,
+    user: String,
+    fingerprint: Option<String>,
+}
+
+type LoadedSshWorkspace = (StateStore, LoadedWorkspace);
+
+impl From<&Profile> for CatalogHost {
+    fn from(profile: &Profile) -> Self {
+        Self {
+            host: profile.host.clone(),
+            port: profile.port,
+            user: profile.user.clone(),
+            fingerprint: profile.fingerprint.clone(),
+        }
+    }
+}
+
 struct Draft {
     id: Uuid,
     fields: [Entity<ComposerInput>; 7],
@@ -70,13 +91,13 @@ pub(super) struct SshPage {
     general_loading: RefCell<Option<LoadingDelay<(Uuid, bool)>>>,
     general_error: Option<(Uuid, bool, String)>,
     #[cfg(test)]
-    test_launch: Option<std::sync::mpsc::Sender<(Uuid, PathBuf, String)>>,
+    test_location_picker: bool,
     project_connection: Option<tunnel::Connection>,
     project_machine: Option<String>,
     project_profile: Option<Profile>,
     loaded: bool,
     busy: bool,
-    connection_action: Option<SshConnectionAction>,
+    connection_action: Option<(Uuid, SshConnectionAction)>,
     connection_loading: RefCell<Option<LoadingDelay<(Uuid, SshConnectionAction)>>>,
     dialog_loading: RefCell<Option<LoadingDelay<(Uuid, u8)>>>,
     profiles: Vec<Profile>,
@@ -89,7 +110,14 @@ pub(super) struct SshPage {
     connection_errors: HashMap<Uuid, String>,
     deployments: HashMap<Uuid, Deployment>,
     opencode_installed: HashMap<Uuid, bool>,
-    connections: HashMap<Uuid, tunnel::Connection>,
+    connections: HashMap<Uuid, Arc<tunnel::Connection>>,
+    catalogs: HashMap<Uuid, RemoteTaskStateSnapshot>,
+    catalog_tasks: HashMap<Uuid, gpui::Task<()>>,
+    workspaces: HashMap<Uuid, Entity<Fintwind>>,
+    loaded_workspaces: HashMap<Uuid, LoadedSshWorkspace>,
+    active_workspace: Option<Uuid>,
+    restoring_workspace: Option<Uuid>,
+    workspace_owner: Option<gpui::WeakEntity<Fintwind>>,
     ready: HashSet<Uuid>,
     watching: bool,
     machine: Option<Uuid>,
@@ -158,10 +186,40 @@ fn read_profiles() -> Result<Vec<Profile>> {
 }
 
 fn write_profiles(profiles: &[Profile]) -> Result<()> {
-    let path = profiles_path()?;
+    write_ssh_state(profiles_path()?, &serde_json::to_vec_pretty(profiles)?)
+}
+
+fn catalog_path(id: Uuid) -> Result<PathBuf> {
+    Ok(profiles_path()?.with_file_name("ssh-catalogs").join(format!("{id}.json")))
+}
+
+fn load_ssh_workspace(
+    host: Uuid,
+    daemon: &fintwind_client::DaemonSupervisor,
+) -> Result<LoadedSshWorkspace> {
+    let directory = profiles_path()?.with_file_name("ssh-workspaces").join(host.to_string());
+    let store = StateStore::ssh_workspace(daemon.clone(), &directory);
+    let loaded = Fintwind::load_workspace(daemon, &store);
+    Ok((store, loaded))
+}
+
+pub(super) fn save_ssh_navigation(host: Option<Uuid>) -> Result<()> {
+    write_ssh_state(
+        profiles_path()?.with_file_name("ssh-navigation.json"),
+        &serde_json::to_vec(&host)?,
+    )
+}
+
+fn read_ssh_navigation() -> Option<Uuid> {
+    let path = profiles_path().ok()?.with_file_name("ssh-navigation.json");
+    let bytes = std::fs::read(path).ok()?;
+    serde_json::from_slice(&bytes).ok().flatten()
+}
+
+fn write_ssh_state(path: PathBuf, content: &[u8]) -> Result<()> {
     std::fs::create_dir_all(path.parent().context("missing profile directory")?)?;
     let temporary = path.with_extension(format!("{}.tmp", Uuid::new_v4()));
-    std::fs::write(&temporary, serde_json::to_vec_pretty(profiles)?)?;
+    std::fs::write(&temporary, content)?;
     if let Err(error) = std::fs::rename(&temporary, path) {
         let _ = std::fs::remove_file(temporary);
         return Err(error.into());
@@ -236,8 +294,9 @@ async fn authenticate(profile: &Profile) -> Result<(client::Handle<HostKey>, Str
     Ok((session, fingerprint))
 }
 
-async fn inspect(profile: &mut Profile, provision: bool) -> Result<Probe> {
+async fn inspect(profile: &mut Profile, action: Option<SshConnectionAction>) -> Result<Probe> {
     let (session, fingerprint) = authenticate(profile).await?;
+    let session = Arc::new(session);
     profile.fingerprint = Some(fingerprint);
     let mut channel = session.channel_open_session().await?;
     channel.exec(true, "export LC_ALL=C; printf '%s\\n' \"$(opencode --version 2>/dev/null | head -n1)\" \"$(uname -sm)\" \"$(getconf _NPROCESSORS_ONLN)\" \"$(awk '/^MemTotal:/ {print $2 \" KiB\"}' /proc/meminfo)\" \"$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | paste -sd, -)\" \"$(df -hP . | awk 'NR==2 {print $4}')\"").await?;
@@ -272,8 +331,26 @@ async fn inspect(profile: &mut Profile, provision: bool) -> Result<Probe> {
             .get(1)
             .and_then(|system| deploy::LinuxTarget::from_system(system))
     {
-        if provision {
-            match deploy::ensure_current(&session, target).await {
+        let detected = deploy::detect(&session).await?;
+        if let deploy::Detection::Running { port, token_file } = &detected
+            && action != Some(SshConnectionAction::Deploy)
+        {
+            endpoint = Some((*port, token_file.clone()));
+        } else if action.is_some() {
+            if let deploy::Detection::Running { port, token_file } = &detected {
+                let connection = tunnel::Connection::open_with_reconnect(
+                    session.clone(),
+                    *port,
+                    token_file,
+                    None::<fn() -> std::future::Ready<Result<client::Handle<HostKey>>>>,
+                ).await?;
+                let client = connection.client();
+                tokio::task::spawn_blocking(move || {
+                    require_idle_daemon(&client)
+                }).await??;
+            }
+            let allow_existing_without_asset = !matches!(detected, deploy::Detection::Running { .. });
+            match deploy::ensure_current(&session, target, allow_existing_without_asset).await {
                 Ok(address) => endpoint = Some(address),
                 Err(error) => {
                     return Ok(Probe::BackendUnavailable(
@@ -284,7 +361,7 @@ async fn inspect(profile: &mut Profile, provision: bool) -> Result<Probe> {
                 }
             }
         } else {
-            match deploy::detect(&session).await? {
+            match detected {
                 deploy::Detection::Missing => deployment = Some(Deployment::Upload),
                 deploy::Detection::Stopped => deployment = Some(Deployment::Start),
                 deploy::Detection::Running { port, token_file } => {
@@ -296,7 +373,7 @@ async fn inspect(profile: &mut Profile, provision: bool) -> Result<Probe> {
     if let Some((port, token_file)) = endpoint {
         let profile = profile.clone();
         let connection = tunnel::Connection::open_with_reconnect(
-            Arc::new(session),
+            session,
             port,
             &token_file,
             Some(move || {
@@ -336,6 +413,15 @@ fn probe_opencode(client: &fintwind_client::DaemonClient) -> Option<(bool, Optio
     }
 }
 
+fn require_idle_daemon(client: &fintwind_client::DaemonClient) -> Result<()> {
+    let snapshot = super::runtime::load_remote_task_state(client)?;
+    ensure!(
+        !snapshot.sessions.iter().any(|session| session.status.is_busy()),
+        "{}", tr!("ssh.update_busy"),
+    );
+    Ok(())
+}
+
 pub(super) fn settings_opencode_workspace(
     daemon: &fintwind_client::DaemonSupervisor,
 ) -> std::io::Result<(PathBuf, PathBuf)> {
@@ -345,8 +431,7 @@ pub(super) fn settings_opencode_workspace(
 pub(crate) struct ProjectLaunch {
     profile: Profile,
     pub machine: String,
-    pub directory: PathBuf,
-    pub name: String,
+    project: Project,
     pub state_dir: PathBuf,
     pub connection: tunnel::Connection,
 }
@@ -415,7 +500,7 @@ fn prepare_project_launch(
         .as_ref()
         .map_err(|error| anyhow::anyhow!("{error}"))?;
     let probe = runtime.block_on(async {
-        tokio::time::timeout(Duration::from_secs(30), inspect(&mut profile, false)).await
+        tokio::time::timeout(Duration::from_secs(30), inspect(&mut profile, None)).await
     })??;
     let connection = match probe {
         Probe::Ready(_, connection) => connection,
@@ -423,9 +508,21 @@ fn prepare_project_launch(
         _ => anyhow::bail!("SSH profile is not ready"),
     };
     let directory = remote_project_directory(connection.client(), path)?;
-    // The window subscribes to the daemon's catalog as it starts. Register
-    // the project first so its initial snapshot cannot drop the new project.
-    let client = connection.client();
+    let project = register_remote_project(&connection.client(), directory, name)?;
+    Ok(ProjectLaunch {
+        profile,
+        machine,
+        project,
+        state_dir,
+        connection,
+    })
+}
+
+pub(super) fn register_remote_project(
+    client: &fintwind_client::DaemonClient,
+    directory: PathBuf,
+    name: String,
+) -> Result<Project> {
     let request = |command| {
         client.request_with_timeout(Uuid::nil(), Uuid::nil(), command, Duration::from_secs(10))
     };
@@ -434,32 +531,26 @@ fn prepare_project_launch(
     else {
         anyhow::bail!("invalid remote project catalog response");
     };
-    if !projects.iter().any(|project| project.path == directory) {
-        let mut project = Project::from_path(directory.clone());
-        if !name.is_empty() {
-            project.name.clone_from(&name);
-        }
-        let response = request(fintwind_client::Command::SaveTaskStateCheckpoint {
-            projects: vec![project],
-            skeleton_session_ids: Vec::new(),
-            sessions: Vec::new(),
-        })?;
-        ensure!(
-            matches!(
-                response,
-                fintwind_client::ResponsePayload::TaskStateSaved { .. }
-            ),
-            "remote daemon did not confirm project registration"
-        );
+    if let Some(project) = projects.into_iter().find(|project| project.path == directory) {
+        return Ok(project);
     }
-    Ok(ProjectLaunch {
-        profile,
-        machine,
-        directory,
-        name,
-        state_dir,
-        connection,
-    })
+    let mut project = Project::from_path(directory);
+    if !name.is_empty() {
+        project.name = name;
+    }
+    let response = request(fintwind_client::Command::SaveTaskStateCheckpoint {
+        projects: vec![project.clone()],
+        skeleton_session_ids: Vec::new(),
+        sessions: Vec::new(),
+    })?;
+    ensure!(
+        matches!(
+            response,
+            fintwind_client::ResponsePayload::TaskStateSaved { .. }
+        ),
+        "remote daemon did not confirm project registration"
+    );
+    Ok(project)
 }
 
 #[cfg(test)]
@@ -599,35 +690,234 @@ fn ssh_info(label: String, value: impl IntoElement, theme: Theme) -> Div {
 }
 
 impl Fintwind {
-    #[cfg(test)]
-    pub(super) fn has_ssh_test_launcher(&self) -> bool {
-        self.ssh.test_launch.is_some()
+    pub(super) fn ssh_connection_for_quit(&mut self, cx: &App) -> Option<Arc<tunnel::Connection>> {
+        if let Some(connection) = self.ssh.project_connection.take() {
+            return Some(Arc::new(connection));
+        }
+        let owner = self.ssh_workspace_owner()?;
+        let host = self.ssh.project_profile.as_ref()?.id;
+        owner.read(cx).ssh.connections.get(&host).cloned()
+    }
+    pub(super) fn active_ssh_workspace(&self) -> Option<Entity<Self>> {
+        self.ssh.workspaces.get(&self.ssh.active_workspace?).cloned()
     }
 
-    pub(super) fn launch_ssh_project_process(
-        &self,
-        id: Uuid,
-        path: PathBuf,
-        name: String,
-    ) -> std::io::Result<Option<smol::process::Child>> {
-        #[cfg(test)]
-        if let Some(launch) = &self.ssh.test_launch {
-            return launch.send((id, path, name)).map(|()| None).map_err(std::io::Error::other);
-        }
-        smol::process::Command::new(std::env::current_exe()?)
-            .arg("--ssh-project")
-            .arg(id.to_string())
-            .arg(path)
-            .arg(name)
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .map(Some)
+    pub(super) fn has_workspace_owner(&self) -> bool {
+        self.ssh.workspace_owner.is_some()
     }
+
+    pub(super) fn ssh_workspace_owner(&self) -> Option<Entity<Self>> {
+        self.ssh.workspace_owner.as_ref()?.upgrade()
+    }
+
+    pub(super) fn active_ssh_host(&self) -> Option<Uuid> {
+        self.ssh.active_workspace
+    }
+
+    pub(super) fn ssh_host_for_next_launch(&self) -> Option<Uuid> {
+        self.ssh.active_workspace.or(self.ssh.restoring_workspace)
+    }
+
+    pub(super) fn restore_ssh_navigation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(host) = self.ssh.restoring_workspace else {
+            return;
+        };
+        if self.mode != WorkspaceMode::Sessions || self.ssh_client_for(host).is_none() {
+            return;
+        }
+        let entity = cx.entity().downgrade();
+        window.defer(cx, move |window, cx| {
+            let Some(entity) = entity.upgrade() else { return; };
+            entity.update(cx, |app, cx| {
+                if app.ssh.restoring_workspace == Some(host)
+                    && app.ssh.active_workspace.is_none()
+                    && app.mode == WorkspaceMode::Sessions
+                    && let Some(workspace) = app.open_ssh_workspace(host, window, cx)
+                {
+                    window.focus(&workspace.read(cx).composer_focus(cx), cx);
+                }
+            });
+        });
+    }
+
+    pub(super) fn cancel_ssh_navigation_restore(&mut self) {
+        self.ssh.restoring_workspace = None;
+    }
+
+    pub(super) fn route_sidebar_host_action(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        action: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) {
+        if let Some(owner) = self.ssh_workspace_owner() {
+            self.hide_workspace_webviews(cx);
+            window.defer(cx, move |window, cx| owner.update(cx, |app, cx| action(app, window, cx)));
+        } else {
+            action(self, window, cx);
+        }
+    }
+
+    pub(super) fn return_to_local_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(owner) = self.ssh.workspace_owner.as_ref().and_then(|owner| owner.upgrade()) {
+            self.hide_workspace_webviews(cx);
+            owner.update(cx, |app, cx| {
+                app.ssh.active_workspace = None;
+                app.ssh.restoring_workspace = None;
+                window.focus(&app.composer_focus(cx), cx);
+                cx.notify();
+            });
+        }
+    }
+
+    pub(super) fn activate_local_sidebar_target(
+        &mut self,
+        id: Uuid,
+        is_session: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.ssh.active_workspace = None;
+        if is_session {
+            self.select_session(id, cx);
+        } else {
+            self.select_project(id, cx);
+        }
+        window.focus(&self.composer_focus(cx), cx);
+        cx.notify();
+    }
+
+    pub(super) fn select_ssh_workspace_project(
+        &mut self,
+        host: Uuid,
+        project_id: Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(project) = self.ssh.catalogs.get(&host)
+            .and_then(|catalog| catalog.projects.iter().find(|project| project.id == project_id))
+            .cloned() else { return; };
+        self.open_registered_ssh_project(host, project, window, cx);
+    }
+
+    pub(super) fn select_ssh_workspace_session(
+        &mut self,
+        host: Uuid,
+        project_id: Uuid,
+        session_id: Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.can_open_ssh_session(host, session_id, cx) {
+            return;
+        }
+        let Some(catalog) = self.ssh.catalogs.get(&host) else { return; };
+        let Some(project) = catalog.projects.iter().find(|project| project.id == project_id).cloned() else { return; };
+        let Some(session) = catalog.sessions.iter().find(|session| session.id == session_id).cloned() else { return; };
+        if let Some(workspace) = self.open_ssh_workspace(host, window, cx) {
+            workspace.update(cx, |app, cx| {
+                if !app.state.projects.iter().any(|existing| existing.id == project_id) {
+                    app.state.projects.push(project);
+                }
+                if !app.state.sessions.iter().any(|existing| existing.id == session_id) {
+                    app.state.sessions.push(session);
+                }
+                app.select_session(session_id, cx);
+                window.focus(&app.composer_focus(cx), cx);
+            });
+        }
+    }
+
+    pub(super) fn can_open_ssh_session(&self, host: Uuid, session_id: Uuid, cx: &App) -> bool {
+        self.ssh_client_for(host).is_some()
+            || self.ssh.workspaces.get(&host).is_some_and(|workspace| {
+                workspace.read(cx).state.sessions.iter().any(|session| {
+                    session.id == session_id && session.detail_loaded
+                })
+            })
+    }
+
+    pub(super) fn open_registered_ssh_project(
+        &mut self,
+        host: Uuid,
+        project: Project,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let project_id = project.id;
+        let Some(workspace) = self.open_ssh_workspace(host, window, cx) else { return false; };
+        workspace.update(cx, |app, cx| {
+            if !app.state.projects.iter().any(|existing| existing.id == project_id) {
+                app.state.projects.push(project);
+            }
+            app.select_project(project_id, cx);
+            window.focus(&app.composer_focus(cx), cx);
+        });
+        true
+    }
+
+    fn open_ssh_workspace(
+        &mut self,
+        host: Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<Self>> {
+        let workspace = if let Some(workspace) = self.ssh.workspaces.get(&host) {
+            workspace.clone()
+        } else {
+            let connection = self.ssh.connections.get(&host).filter(|connection| connection.is_ready())?;
+            let profile = self.ssh.profiles.iter().find(|profile| profile.id == host)?.clone();
+            let daemon = connection.supervisor();
+            let (store, loaded) = self.ssh.loaded_workspaces.remove(&host)?;
+            let workspace = Self::new_workspace_view(window, cx, daemon, store, loaded, true);
+            let owner = cx.entity().downgrade();
+            workspace.update(cx, |app, _| {
+                app.ssh.workspace_owner = Some(owner);
+                app.ssh.project_machine = Some(profile.name.clone());
+                app.ssh.project_profile = Some(profile);
+            });
+            self.ssh.workspaces.insert(host, workspace.clone());
+            workspace
+        };
+        self.hide_workspace_webviews(cx);
+        self.ssh.restoring_workspace = None;
+        self.ssh.active_workspace = Some(host);
+        cx.notify();
+        Some(workspace)
+    }
+
+    pub(super) fn hide_workspace_webviews(&self, cx: &mut Context<Self>) {
+        for browser in self.right_panel_browsers.values() {
+            browser.update(cx, |view, cx| view.sync_native_state(false, false, cx));
+        }
+    }
+
+    pub(super) fn open_workspace_settings(&mut self, page: SettingsPage, cx: &mut Context<Self>) {
+        if self.ssh.machine != self.ssh.active_workspace {
+            self.ssh.machine = self.ssh.active_workspace;
+            self.reset_provider_auth_target(cx);
+            self.reset_skills_machine(cx);
+        }
+        self.open_settings_page(page, cx);
+        cx.notify();
+    }
+    #[cfg(test)]
+    pub(super) fn ssh_test_location_picker(&self) -> bool {
+        self.ssh.test_location_picker
+    }
+
     pub(crate) fn open_ssh_project(&mut self, remote: ProjectLaunch, cx: &mut Context<Self>) {
         self.ssh.project_connection = Some(remote.connection);
         self.ssh.project_machine = Some(remote.machine);
         self.ssh.project_profile = Some(remote.profile);
-        self.add_project_directory(remote.directory, remote.name, cx);
+        let project_id = remote.project.id;
+        if self.state.projects.iter().any(|project| project.id == project_id) {
+            self.select_project(project_id, cx);
+        } else {
+            self.state.projects.push(remote.project);
+            self.create_session_for(project_id, cx);
+        }
+        cx.notify();
     }
 
     pub(super) fn ssh_project_machine(&self) -> Option<&str> {
@@ -685,7 +975,7 @@ impl Fintwind {
         let Some(id) = host.filter(|id| self.ssh_client_for(*id).is_none()) else {
             return (false, false, None);
         };
-        let connecting = self.ssh.selected == Some(id) && self.ssh.connection_action.is_some();
+        let connecting = self.ssh.connection_action.is_some_and(|(host, _)| host == id);
         let error = if connecting {
             None
         } else {
@@ -717,10 +1007,14 @@ impl Fintwind {
             .connections
             .get(&id)
             .filter(|connection| connection.is_ready())
-            .map(tunnel::Connection::client)
+            .map(|connection| connection.client())
     }
 
     pub(super) fn load_ssh_profiles(&mut self, cx: &mut Context<Self>) {
+        self.load_ssh_profiles_with_navigation(!self.daemon.is_remote(), cx);
+    }
+
+    fn load_ssh_profiles_with_navigation(&mut self, restore_navigation: bool, cx: &mut Context<Self>) {
         if self.ssh.loaded || self.ssh.busy {
             return;
         }
@@ -728,18 +1022,30 @@ impl Fintwind {
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async { read_profiles() })
+                .spawn(async move {
+                    let profiles = read_profiles()?;
+                    let catalogs = profiles.iter().filter_map(|profile| {
+                        let bytes = std::fs::read(catalog_path(profile.id).ok()?).ok()?;
+                        let (host, snapshot): (CatalogHost, RemoteTaskStateSnapshot) =
+                            serde_json::from_slice(&bytes).ok()?;
+                        (host == CatalogHost::from(profile)).then_some((profile.id, snapshot))
+                    }).collect::<HashMap<_, _>>();
+                    let last_host = restore_navigation.then(read_ssh_navigation).flatten();
+                    Ok::<_, anyhow::Error>((profiles, catalogs, last_host))
+                })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.ssh.busy = false;
                 match result {
-                    Ok(profiles) => {
+                    Ok((profiles, catalogs, last_host)) => {
+                        this.ssh.catalogs = catalogs;
                         this.ssh.row_focus = profiles
                             .iter()
                             .map(|profile| (profile.id, cx.focus_handle().tab_stop(true)))
                             .collect();
                         this.ssh.selected = profiles.first().map(|p| p.id);
                         this.ssh.profiles = profiles;
+                        this.sidebar_rows_fingerprint.set(None);
                         this.ssh
                             .remote_settings
                             .retain(|id, _| this.ssh.profiles.iter().any(|p| p.id == *id));
@@ -753,6 +1059,12 @@ impl Fintwind {
                         }
                         this.ssh.loaded = true;
                         this.ssh.error = None;
+                        if let Some(host) = last_host.filter(|host| {
+                            this.ssh.profiles.iter().any(|profile| profile.id == *host)
+                        }) {
+                            this.ssh.restoring_workspace = Some(host);
+                            this.connect_project_host(host, cx);
+                        }
                     }
                     Err(error) => this.ssh.error = Some(error.to_string()),
                 }
@@ -806,9 +1118,20 @@ impl Fintwind {
                                 && profiles.iter().any(|p| p.id == *id)
                         });
                         this.ssh.connections.retain(|id, _| {
-                            previous.iter().find(|p| p.id == *id)
-                                == profiles.iter().find(|p| p.id == *id)
+                            previous.iter().find(|p| p.id == *id).map(CatalogHost::from)
+                                == profiles.iter().find(|p| p.id == *id).map(CatalogHost::from)
                         });
+                        this.ssh.workspaces.retain(|id, _| this.ssh.connections.contains_key(id));
+                        this.ssh.active_workspace = this.ssh.active_workspace.filter(|id| this.ssh.workspaces.contains_key(id));
+                        for profile in &profiles {
+                            if let Some(workspace) = this.ssh.workspaces.get(&profile.id) {
+                                workspace.update(cx, |app, cx| {
+                                    app.ssh.project_machine = Some(profile.name.clone());
+                                    app.ssh.project_profile = Some(profile.clone());
+                                    cx.notify();
+                                });
+                            }
+                        }
                         this.ssh
                             .ready
                             .retain(|id| this.ssh.connections.contains_key(id));
@@ -830,7 +1153,18 @@ impl Fintwind {
                         {
                             this.ssh.machine = None;
                         }
+                        this.ssh.catalogs.retain(|id, _| {
+                            let old = previous.iter().find(|profile| profile.id == *id);
+                            let new = profiles.iter().find(|profile| profile.id == *id);
+                            new.is_some() && old.map(CatalogHost::from) == new.map(CatalogHost::from)
+                        });
                         this.ssh.profiles = profiles;
+                        this.sidebar_rows_fingerprint.set(None);
+                        this.ssh.catalog_tasks.retain(|id, _| this.ssh.connections.contains_key(id));
+                        this.ssh.loaded_workspaces.retain(|id, _| this.ssh.connections.contains_key(id));
+                        this.ssh.restoring_workspace = this.ssh.restoring_workspace.filter(|id| {
+                            this.ssh.profiles.iter().any(|profile| profile.id == *id)
+                        });
                         this.ssh.backend_errors.clear();
                         this.ssh.connection_errors.clear();
                         if changed_machine {
@@ -993,8 +1327,9 @@ impl Fintwind {
             .fingerprint
             .is_none()
             .then(|| self.ssh.profiles.clone());
+        let preload = !self.ssh.workspaces.contains_key(&id);
         *self.ssh.connection_loading.get_mut() = None;
-        self.ssh.connection_action = Some(action);
+        self.ssh.connection_action = Some((id, action));
         cx.notify();
         cx.spawn(async move |this, cx| {
             let (result, fingerprint) = cx
@@ -1004,7 +1339,7 @@ impl Fintwind {
                         .as_ref()
                         .map_err(|error| anyhow::anyhow!("{error}"))
                         .and_then(|runtime| runtime.block_on(async {
-                            tokio::time::timeout(Duration::from_secs(210), inspect(&mut profile, true))
+                            tokio::time::timeout(Duration::from_secs(210), inspect(&mut profile, Some(action)))
                                 .await
                                 .context(tr!("ssh.timeout"))?
                         }));
@@ -1035,7 +1370,16 @@ impl Fintwind {
                             }),
                         _ => None,
                     };
-                    (Ok((result, opencode)), fingerprint)
+                    let loaded = match &result {
+                        Probe::Ready(_, connection) if preload => {
+                            match load_ssh_workspace(id, &connection.supervisor()) {
+                                Ok(loaded) => Some(loaded),
+                                Err(error) => return (Err(error), fingerprint),
+                            }
+                        }
+                        _ => None,
+                    };
+                    (Ok((result, opencode, loaded)), fingerprint)
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
@@ -1047,7 +1391,7 @@ impl Fintwind {
                     profile.fingerprint = Some(fingerprint);
                 }
                 match result {
-                    Ok((Probe::Snapshot(values, deployment), _)) => {
+                    Ok((Probe::Snapshot(values, deployment), _, _)) => {
                         this.ssh.backend_errors.remove(&id);
                         this.ssh.connection_errors.remove(&id);
                         this.ssh.last_read.insert(id, values);
@@ -1056,7 +1400,7 @@ impl Fintwind {
                             this.ssh.deployments.insert(id, deployment);
                         }
                     }
-                    Ok((Probe::BackendUnavailable(values, error, deployment), _)) => {
+                    Ok((Probe::BackendUnavailable(values, error, deployment), _, _)) => {
                         this.ssh.connection_errors.remove(&id);
                         this.ssh.deployments.remove(&id);
                         if let Some(deployment) = deployment {
@@ -1065,7 +1409,10 @@ impl Fintwind {
                         this.ssh.last_read.insert(id, values);
                         this.ssh.backend_errors.insert(id, error);
                     }
-                    Ok((Probe::Ready(values, connection), opencode)) => {
+                    Ok((Probe::Ready(values, connection), opencode, loaded)) => {
+                        if let Some(loaded) = loaded {
+                            this.ssh.loaded_workspaces.insert(id, loaded);
+                        }
                         this.ssh.backend_errors.remove(&id);
                         this.ssh.connection_errors.remove(&id);
                         this.ssh.last_read.insert(id, values);
@@ -1075,8 +1422,19 @@ impl Fintwind {
                             this.ssh.opencode_installed.insert(id, installed);
                         }
                         this.ssh.remote_settings.insert(id, connection.settings());
-                        this.ssh.connections.insert(id, connection);
-                        this.ssh.ready.insert(id);
+                        if let Some(current) = this.ssh.connections.get_mut(&id)
+                            && this.ssh.workspaces.contains_key(&id)
+                        {
+                            Arc::get_mut(current).expect("SSH connection shared only during quit").replace_tunnel(connection);
+                        } else {
+                            this.ssh.connections.insert(id, Arc::new(connection));
+                        }
+                        this.watch_ssh_catalog(id, cx);
+                        if this.ssh_client_for(id).is_some() {
+                            this.ssh.ready.insert(id);
+                        } else {
+                            this.ssh.ready.remove(&id);
+                        }
                         if this.ssh.machine == Some(id)
                             && this.mode == WorkspaceMode::Settings
                             && this.settings_page == SettingsPage::Skills
@@ -1104,6 +1462,9 @@ impl Fintwind {
                     Err(error) => {
                         this.ssh.deployments.remove(&id);
                         this.ssh.backend_errors.remove(&id);
+                        if action == SshConnectionAction::Deploy {
+                            this.show_toast_with_tone(error.to_string(), ToastTone::Alert);
+                        }
                         this.ssh.connection_errors.insert(id, error.to_string());
                     }
                 }
@@ -1161,7 +1522,7 @@ impl Fintwind {
             .connections
             .get(&self.ssh.machine?)
             .filter(|connection| connection.is_ready())
-            .map(tunnel::Connection::supervisor)
+            .map(|connection| connection.supervisor())
     }
 
     pub(super) fn settings_ssh_host_ready(&self) -> bool {
@@ -1188,6 +1549,11 @@ impl Fintwind {
                             .map(|(id, _)| *id)
                             .collect::<HashSet<_>>();
                         if ready != app.ssh.ready {
+                            for (id, workspace) in &app.ssh.workspaces {
+                                if ready.contains(id) != app.ssh.ready.contains(id) {
+                                    workspace.update(cx, |_, cx| cx.notify());
+                                }
+                            }
                             let restored = app.ssh.machine.is_some_and(|id| {
                                 ready.contains(&id) && !app.ssh.ready.contains(&id)
                             });
@@ -1223,6 +1589,59 @@ impl Fintwind {
             }
         })
         .detach();
+    }
+
+    fn watch_ssh_catalog(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        let Some(connection) = self.ssh.connections.get(&id) else {
+            return;
+        };
+        let Some(profile) = self.ssh.profiles.iter().find(|profile| profile.id == id) else {
+            return;
+        };
+        let host = Arc::new(CatalogHost::from(profile));
+        let clients = connection.supervisor().subscribe_clients();
+        let task = cx.spawn(async move |this, cx| {
+            let mut subscription = None;
+            loop {
+                let refresh = if let Some(client) = clients.try_iter().last() {
+                    subscription = Some((client.subscribe_task_state(), client));
+                    true
+                } else {
+                    subscription.as_ref().is_some_and(|(revisions, _)| {
+                        revisions.try_iter().last().is_some()
+                    })
+                };
+                if refresh && let Some((_, client)) = &subscription {
+                    let client = client.clone();
+                    let host = host.clone();
+                    let result = cx.background_executor().spawn(async move {
+                        let snapshot = super::runtime::load_remote_task_state(&client)?;
+                        let persisted = catalog_path(id).and_then(|path| {
+                            write_ssh_state(path, &serde_json::to_vec(&(&*host, &snapshot))?)
+                        });
+                        if let Err(error) = persisted {
+                            eprintln!("could not cache SSH catalog for {id}: {error:#}");
+                        }
+                        Ok::<_, anyhow::Error>(snapshot)
+                    }).await;
+                    if let Ok(snapshot) = result
+                        && this.update(cx, |app, cx| {
+                            app.ssh.catalogs.insert(id, snapshot);
+                            app.sidebar_rows_fingerprint.set(None);
+                            cx.notify();
+                        }).is_err()
+                    {
+                        break;
+                    }
+                }
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+            }
+        });
+        self.ssh.catalog_tasks.insert(id, task);
+    }
+
+    pub(super) fn ssh_project_catalog(&self, id: Uuid) -> Option<&RemoteTaskStateSnapshot> {
+        self.ssh.catalogs.get(&id)
     }
 
     pub(super) fn render_settings_machine_picker(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -2093,19 +2512,20 @@ impl Fintwind {
             let loading_key = self
                 .ssh
                 .connection_action
-                .map(|action| (id, action))
+                .filter(|(host, _)| *host == id)
                 .or_else(|| {
                     self.ssh
                         .connection_loading
                         .borrow()
                         .as_ref()
+                        .filter(|loading| loading.key().0 == id)
                         .map(|loading| *loading.key())
                 });
             let (loading_phase, wake) = if let Some(key) = loading_key {
                 LoadingDelay::observe(
                     &mut self.ssh.connection_loading.borrow_mut(),
                     key,
-                    self.ssh.connection_action.is_some(),
+                    self.ssh.connection_action == Some(key),
                 )
             } else {
                 (LoadingPhase::Done, None)
@@ -2256,8 +2676,8 @@ impl Fintwind {
                 let deploy_profile = profile.clone();
                 let edit = profile.clone();
                 let connect_active =
-                    self.ssh.connection_action == Some(SshConnectionAction::Connect);
-                let deploy_active = self.ssh.connection_action == Some(SshConnectionAction::Deploy);
+                    self.ssh.connection_action == Some((id, SshConnectionAction::Connect));
+                let deploy_active = self.ssh.connection_action == Some((id, SshConnectionAction::Deploy));
                 let connect_showing = loading_phase == LoadingPhase::Visible
                     && loading_key == Some((id, SshConnectionAction::Connect));
                 let deploy_showing = loading_phase == LoadingPhase::Visible
@@ -2287,6 +2707,12 @@ impl Fintwind {
                                 move |this, cx| {
                                     if ready {
                                         this.ssh.connections.remove(&id);
+                                        this.ssh.workspaces.remove(&id);
+                                        this.ssh.loaded_workspaces.remove(&id);
+                                        if this.ssh.active_workspace == Some(id) {
+                                            this.ssh.active_workspace = None;
+                                        }
+                                        this.ssh.catalog_tasks.remove(&id);
                                         this.ssh.ready.remove(&id);
                                         this.ssh.opencode_installed.remove(&id);
                                         cx.notify();
@@ -2295,13 +2721,16 @@ impl Fintwind {
                                     }
                                 },
                             ))
-                            .children(deployment.filter(|_| !ready).map(|deployment| {
+                            .children(deployment.filter(|_| !ready).or_else(|| {
+                                (ready && deploy_profile.daemon_port.is_none()).then_some(Deployment::Upload)
+                            }).map(|deployment| {
                                 ssh_wait_button(
                                     cx,
                                     theme,
                                     "ssh-deploy",
                                     &deploy_focus,
                                     match deployment {
+                                        Deployment::Upload if ready => tr!("ssh.update_daemon"),
                                         Deployment::Upload => tr!("ssh.deploy_daemon"),
                                         Deployment::Start => tr!("ssh.start_daemon"),
                                     },
@@ -2373,26 +2802,3 @@ impl Fintwind {
 }
 
 pub(crate) const SSH_PROJECT_READY: &str = "fintwind-ssh-project-ready";
-
-pub(super) async fn wait_for_ssh_project(mut child: smol::process::Child) -> Result<()> {
-    use futures_lite::io::{AsyncBufReadExt as _, BufReader};
-
-    let stdout = child.stdout.take().context("missing SSH project startup output")?;
-    let startup = async {
-        let mut lines = BufReader::new(stdout).lines();
-        use futures_lite::StreamExt as _;
-        while let Some(line) = lines.next().await.transpose()? {
-            if line == SSH_PROJECT_READY {
-                return Ok(());
-            }
-            if let Some(error) = line.strip_prefix("fintwind-ssh-project-error ") {
-                anyhow::bail!("{}", serde_json::from_str::<String>(error)?);
-            }
-        }
-        anyhow::bail!("{}", tr!("project.open_remote_failed"));
-    };
-    futures_lite::future::race(startup, async {
-        smol::Timer::after(Duration::from_secs(45)).await;
-        anyhow::bail!("{}", tr!("project.open_remote_timeout"));
-    }).await
-}

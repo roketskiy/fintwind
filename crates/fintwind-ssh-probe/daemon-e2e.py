@@ -120,7 +120,7 @@ def remote(daemon, opencode):
     opencode = str(Path(opencode).resolve(strict=True)) if opencode else None
     live = os.getenv("FINTWIND_SSH_LIVE_MODEL") == "1"
     os.umask(0o077)
-    with tempfile.TemporaryDirectory(prefix="run-", dir=os.getcwd()) as directory:
+    with tempfile.TemporaryDirectory(prefix="fintwind-ssh-e2e-", dir="/tmp") as directory:
         root = Path(directory)
         token_file = root / "daemon-token"
         token_file.write_text(token, encoding="utf-8")
@@ -169,8 +169,9 @@ def remote(daemon, opencode):
                     config.write_text(json.dumps(document), encoding="utf-8")
             if os.getenv("FINTWIND_NATIVE_DESKTOP"):
                 env["FIXTURE_API_KEY"] = "ssh-probe-fixture-key"
+            if opencode:
                 data = root / "daemon"
-                data.mkdir()
+                data.mkdir(exist_ok=True)
                 (data / "daemon.json").write_text(json.dumps({"opencode_binary_path": opencode}), encoding="utf-8")
             with subprocess.Popen([daemon, "--bind", "127.0.0.1:0", "--data-dir",
                                    str(root / "daemon"), "--parent-pid", str(os.getpid())],
@@ -328,6 +329,7 @@ def local():
     parser.add_argument("--opencode", help="remote OpenCode V2 binary relative to remote_dir")
     parser.add_argument("--desktop-test", type=Path, help="run the desktop Rust test binary instead of the probe")
     parser.add_argument("--live-model", action="store_true", help="send one real Alibaba Qwen4 Max task from an isolated desktop and daemon")
+    parser.add_argument("--quit-during-turn", action="store_true", help="quit the desktop during streaming and verify remote completion")
     parser.add_argument("--native-app", type=Path, help="open a debug desktop executable with isolated data; report is a new artifact directory")
     parser.add_argument("--native-mcp-oauth", action="store_true", help="verify MCP after the isolated native browser sign-in")
     parser.add_argument("--native-provider-oauth", action="store_true", help="run the dual-daemon provider OAuth fixture")
@@ -337,6 +339,8 @@ def local():
     ns = parser.parse_args()
     if ns.native_provider_oauth and (not ns.native_app or ns.native_mcp_oauth or ns.provider_isolation):
         parser.error("--native-provider-oauth requires --native-app and is a separate test mode")
+    if ns.quit_during_turn and not ns.desktop_test:
+        parser.error("--quit-during-turn requires --desktop-test")
     ssh = ["ssh", "-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
            "-o", f"UserKnownHostsFile={ns.known_hosts.as_posix()}", "-o", "ConnectTimeout=8",
            "-i", str(ns.key), "-p", str(ns.port), f"{ns.user}@{ns.host}"]
@@ -345,8 +349,10 @@ def local():
     if ns.live_model:
         if not ns.desktop_test or not ns.opencode:
             parser.error("--live-model requires --desktop-test and --opencode")
-        command[3] = "335s"
+        command[3] = "390s" if ns.quit_during_turn else "335s"
         command = ["env", "FINTWIND_SSH_LIVE_MODEL=1", *command]
+    elif ns.quit_during_turn:
+        command[3] = "250s"
     if ns.native_app:
         if not ns.opencode:
             parser.error("--native-app requires --opencode")
@@ -441,6 +447,12 @@ def local():
                                             "daemon_port": ready["port"], "token_file": ready["token_file"]},
                                "workspace": ready["workspace"], "binary": ready["opencode"],
                                "state_dir": str(root / "state"), "proof": str(proof)}
+                    if ns.provider_isolation:
+                        fixture["peer_profile"] = {**fixture["profile"],
+                            "id": str(__import__("uuid").uuid4()), "name": "SSH peer",
+                            "daemon_port": ready["peer"]["port"],
+                            "token_file": ready["peer"]["token_file"]}
+                        fixture["peer_workspace"] = ready["peer"]["workspace"]
                     if ns.live_model:
                         fixture["live_model"] = LIVE_MODEL
                     allowed = {"SYSTEMROOT", "WINDIR", "PATH", "PATHEXT", "COMSPEC"}
@@ -448,11 +460,33 @@ def local():
                     env.update({k: str(home) for k in ("USERPROFILE", "HOME", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP")})
                     env["FINTWIND_DEBUG_DATA_DIR"] = str(root / "desktop-data")
                     env["FINTWIND_SSH_DESKTOP_FIXTURE"] = json.dumps(fixture)
-                    result = subprocess.run([str(ns.desktop_test.resolve()),
-                                             "app::ssh_page::e2e::desktop_ssh_project_streams", "--exact", "--ignored", "--nocapture"],
-                                            env=env, cwd=home, timeout=270 if ns.live_model else 100)
+                    if ns.quit_during_turn:
+                        env["FINTWIND_SSH_QUIT_DURING_TURN"] = "1"
+                    desktop_command = [str(ns.desktop_test.resolve()),
+                                       "app::ssh_page::e2e::desktop_ssh_project_streams", "--exact", "--ignored", "--nocapture"]
+                    result = subprocess.run(desktop_command,
+                                            env=env, cwd=home,
+                                            timeout=270 if ns.live_model else 150 if ns.quit_during_turn else 100)
+                    if result.returncode == 0 and ns.quit_during_turn:
+                        result = subprocess.run(desktop_command,
+                                                env={**env, "FINTWIND_SSH_RESTART_PHASE": "1"},
+                                                cwd=home, timeout=55)
                 if result.returncode == 0 and not proof.is_file():
                     raise RuntimeError("desktop test did not write a proof report")
+                if result.returncode == 0 and ns.provider_isolation and not ns.quit_during_turn:
+                    if json.loads(proof.read_text(encoding="utf-8")).get("switchedBetweenRemoteDaemons") is not True:
+                        raise RuntimeError("desktop test did not verify switching between remote daemons")
+                if result.returncode == 0 and ns.quit_during_turn:
+                    restart_proof = json.loads(proof.read_text(encoding="utf-8"))
+                    if not all(restart_proof.get(field) is True for field in (
+                        "remoteTurnActiveBeforeQuit",
+                        "remoteTurnCompletedAfterQuit",
+                        "updateBlockedWhileBusy",
+                        "updateAllowedWhenIdle",
+                        "restoredInNewProcess",
+                        "restoredCompletedTurnWithoutDuplicateMessage",
+                    )):
+                        raise RuntimeError("desktop restart report is missing required evidence")
                 sys.exit(result.returncode)
             args = [str(ns.probe), ns.host, str(ns.port), ns.user, str(ns.key), str(ns.known_hosts),
                     str(ns.report), str(ready["port"]), ready["workspace"]]

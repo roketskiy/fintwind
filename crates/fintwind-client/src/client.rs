@@ -20,7 +20,7 @@ use fintwind_protocol::browser::{
 };
 use fintwind_protocol::{
     ClientMessage, Command, PROTOCOL_VERSION, ReplayCursor, Request, ResponseOutcome,
-    ResponsePayload, RpcError, SequencedEvent, ServerMessage, WireDriverEvent,
+    ResponsePayload, RpcError, SequencedEvent, ServerMessage,
 };
 
 const READ_POLL_INTERVAL: Duration = Duration::from_millis(25);
@@ -175,6 +175,9 @@ impl DaemonClient {
         let (events, receiver) = unbounded();
         let key = (session_id, runtime_id);
         let mut sessions = self.inner.sessions.lock();
+        if self.is_disconnected() {
+            return receiver;
+        }
         sessions.insert(key, events.clone());
         // Keep the subscription lock while draining the pre-subscription
         // replay queue. The socket thread takes these locks in the same order,
@@ -193,7 +196,10 @@ impl DaemonClient {
 
     pub fn subscribe_task_state(&self) -> Receiver<u64> {
         let (events, receiver) = unbounded();
-        self.inner.task_state_subscribers.lock().push(events);
+        let mut subscribers = self.inner.task_state_subscribers.lock();
+        if !self.is_disconnected() {
+            subscribers.push(events);
+        }
         receiver
     }
 
@@ -424,6 +430,10 @@ impl DaemonClient {
         self.inner.disconnected.load(Ordering::Acquire)
     }
 
+    pub(crate) fn same_connection(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
     pub fn shutdown(&self) {
         let _ = self.inner.outgoing.send(Outgoing::Shutdown);
     }
@@ -629,25 +639,6 @@ fn run_client(
             message: "fintwind daemon disconnected".into(),
         }));
     }
-    let sessions = std::mem::take(&mut *inner.sessions.lock());
-    for ((session_id, runtime_id), events) in sessions {
-        // This event is synthesized locally and is not present in the
-        // daemon's replay journal. Do not advance the replay cursor for it or
-        // reconnecting to the same daemon would skip the next real event.
-        let (epoch, sequence) = inner
-            .last_sequences
-            .lock()
-            .get(&(session_id, runtime_id))
-            .map(|cursor| (cursor.epoch, cursor.sequence))
-            .unwrap_or((Uuid::nil(), 0));
-        let _ = events.send(SequencedEvent {
-            session_id,
-            runtime_id,
-            epoch,
-            sequence,
-            event: WireDriverEvent::new("processExited", serde_json::Value::Null),
-        });
-    }
     // Page grants died with the connection; tell the GUI before the terminal
     // flag so a consumer cannot observe "connected" and pending work at once.
     // try_send: a GUI that already stopped draining must not stall the exit
@@ -656,11 +647,8 @@ fn run_client(
     if let Some(events) = inner.browser.lock().take() {
         let _ = events.try_send(BrowserNotification::Disconnected);
     }
-    // Only now, with the synthetic session exits handed to their subscribers,
-    // does the supervisor-visible flag go up: otherwise a supervisor poll
-    // could replace this client while `is_disconnected()` still races the
-    // delivery of those exits.
     inner.disconnected.store(true, Ordering::Release);
+    inner.sessions.lock().clear();
     inner.task_state_subscribers.lock().clear();
 }
 

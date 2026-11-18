@@ -11,6 +11,7 @@ impl Fintwind {
     }
 
     pub(super) fn select_session(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
+        self.cancel_ssh_navigation_restore();
         self.open_session_tab(session_id);
         self.request_session_activation(session_id, SessionActivationTransition::Visit, cx);
     }

@@ -451,6 +451,7 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
                 && proof["childCompleted"] == true
                 && proof["assistantText"] == true;
             if transcript_ready || Instant::now() >= until {
+                eprintln!("SSH E2E: checking remote file and session catalog");
                 proof["desktopTurnSettledMs"] = serde_json::json!(settled_at);
                 proof["desktopChildResultMs"] = serde_json::json!(child_result_at);
                 proof["desktopTurnAndChildObservedTogetherMs"] = serde_json::json!(observed_from.elapsed().as_millis());
@@ -504,6 +505,7 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
                 assert_eq!(user_messages, 1, "reconnecting duplicated the submitted message");
                 proof["userMessageCount"] = serde_json::json!(user_messages);
                 proof["mcpSettingsTargetedActiveHost"] = serde_json::json!(true);
+                eprintln!("SSH E2E: saving workspace navigation");
                 let (store, mut persisted) = cx.read_entity(&desktop, |app, _| {
                     (app.store.clone(), app.state.clone())
                 });
@@ -513,6 +515,7 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
                 let daemon = cx.read_entity(&desktop, |app, _| app.daemon.clone());
                 let loaded = load_ssh_workspace(profile_id, &daemon).expect("load saved workspace");
                 proof["desktopWorkspaceLoadedMs"] = serde_json::json!(observed_from.elapsed().as_millis());
+                eprintln!("SSH E2E: dispatching workspace restore");
                 cx.update(|window, cx| {
                     picker.update(cx, |app, cx| {
                         app.ssh.workspaces.remove(&profile_id);
@@ -522,7 +525,7 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
                         app.restore_ssh_navigation(window, cx);
                     });
                 });
-                cx.run_until_parked();
+                proof["desktopRestoreDispatchMs"] = serde_json::json!(observed_from.elapsed().as_millis());
                 cx.update(|_, cx| {
                     let restored = picker.read(cx).active_ssh_workspace().expect("restored SSH workspace");
                     assert_ne!(restored, desktop);

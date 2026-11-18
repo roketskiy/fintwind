@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::loading::{LoadingDelay, LoadingPhase};
 use crate::ui::menu::{popover_covering_trigger, toggle_popover};
 use ely_gpui_component::motion::Spinner;
 use ely_gpui_component::theme::IconSize;
@@ -11,6 +12,7 @@ use gpui::Size;
 use super::todo::{TodoSnapshot, TodoStatus};
 
 const CAPSULE_TABS_HEIGHT: f32 = 32.0;
+pub(in crate::app) const CAPSULE_ROW_HEIGHT: f32 = CAPSULE_TABS_HEIGHT + 2.0 + 6.0;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(in crate::app) enum CapsuleTab {
@@ -290,6 +292,11 @@ impl Fintwind {
         let Some(path) = self.selected_workspace_path().map(Path::to_path_buf) else {
             return;
         };
+        if let Some(previous) = self.capsule_pull_requests.peek(&path)
+            && previous.is_ok()
+        {
+            self.capsule_pull_requests_previous = Some((path.clone(), previous));
+        }
         self.capsule_pull_requests.invalidate(&path);
         let Query::Missing(token) = self.capsule_pull_requests.read(&path) else {
             return;
@@ -500,38 +507,85 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) -> Div {
         let theme = Theme::current(cx);
-        let result = self
-            .selected_workspace_path()
-            .and_then(|path| self.capsule_pull_requests.peek(&path.to_path_buf()));
+        let path = self.selected_workspace_path().map(Path::to_path_buf);
+        let result = path
+            .as_ref()
+            .and_then(|path| self.capsule_pull_requests.peek(path));
+        let previous = path.as_ref().and_then(|path| {
+            self.capsule_pull_requests_previous
+                .as_ref()
+                .filter(|(previous_path, _)| previous_path == path)
+                .map(|(_, previous)| previous.clone())
+        });
+        let pending = path.is_some() && result.is_none();
+        let display = match result.as_ref() {
+            Some(result) if result.is_ok() => Some(result.clone()),
+            _ => previous,
+        };
+        let (phase, wake) = if result.as_ref().is_some_and(|result| result.is_err()) {
+            *self.capsule_pull_requests_loading.borrow_mut() = None;
+            (LoadingPhase::Done, None)
+        } else if let Some(path) = path {
+            LoadingDelay::observe(
+                &mut self.capsule_pull_requests_loading.borrow_mut(),
+                path,
+                pending && display.is_none(),
+            )
+        } else {
+            *self.capsule_pull_requests_loading.borrow_mut() = None;
+            (LoadingPhase::Done, None)
+        };
+        if let Some(wake) = wake {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(wake.delay()).await;
+                wake.fired();
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+        }
         let mut body = div()
             .flex()
             .flex_col()
             .gap(px(12.0))
             .child(capsule_heading(tr!("capsule.pull_requests"), &theme));
-        body = match result.as_deref() {
-            None => body.child(capsule_message(tr!("capsule.loading"), &theme)),
-            Some(Err(error)) => body.child(
+        if let Some(Err(error)) = result.as_deref() {
+            body = body.child(
                 capsule_message(tr!("capsule.pr_failed"), &theme)
                     .id("capsule-pr-error")
                     .tooltip(Tooltip::text(error.clone())),
-            ),
-            Some(Ok(PullRequestSnapshot::Unavailable { reason })) => body.child(capsule_message(
-                match reason {
-                    PullRequestUnavailable::NotRepository => tr!("capsule.not_repository"),
-                    PullRequestUnavailable::DetachedHead => tr!("capsule.detached_head"),
-                    PullRequestUnavailable::NoGithubRemote => tr!("capsule.no_github_remote"),
-                    PullRequestUnavailable::CliMissing => tr!("capsule.gh_missing"),
-                    PullRequestUnavailable::AuthenticationRequired => {
-                        tr!("capsule.gh_auth_required")
-                    }
-                },
-                &theme,
-            )),
-            Some(Ok(PullRequestSnapshot::Ready {
-                repository,
-                branch,
-                requests,
-            })) => {
+            );
+        }
+        body = match (phase, display.as_deref()) {
+            (LoadingPhase::Visible, _) => body.children((0..3).map(|index| {
+                div()
+                    .h(px(14.0))
+                    .w(px(if index == 1 { 170.0 } else { 220.0 }))
+                    .rounded(px(3.0))
+                    .bg(theme.overlay_strong)
+            })),
+            (LoadingPhase::Hidden, _) | (_, None) | (_, Some(Err(_))) => body,
+            (_, Some(Ok(PullRequestSnapshot::Unavailable { reason }))) => {
+                body.child(capsule_message(
+                    match reason {
+                        PullRequestUnavailable::NotRepository => tr!("capsule.not_repository"),
+                        PullRequestUnavailable::DetachedHead => tr!("capsule.detached_head"),
+                        PullRequestUnavailable::NoGithubRemote => tr!("capsule.no_github_remote"),
+                        PullRequestUnavailable::CliMissing => tr!("capsule.gh_missing"),
+                        PullRequestUnavailable::AuthenticationRequired => {
+                            tr!("capsule.gh_auth_required")
+                        }
+                    },
+                    &theme,
+                ))
+            }
+            (
+                _,
+                Some(Ok(PullRequestSnapshot::Ready {
+                    repository,
+                    branch,
+                    requests,
+                })),
+            ) => {
                 let mut content = body
                     .child(
                         div()
@@ -583,8 +637,8 @@ impl Fintwind {
             &focus,
             "icons/rotate-cw.svg",
             tr!("common.refresh"),
-            result.is_some(),
-            false,
+            !pending,
+            pending && display.is_some(),
             None,
             &theme,
             move |_, cx| {

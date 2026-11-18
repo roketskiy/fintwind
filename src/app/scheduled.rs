@@ -6,6 +6,7 @@
 //! a slow reload can never overwrite a newer save. `render` reads memory only.
 
 use crate::ui::icon;
+use crate::ui::loading::LoadingDelay;
 use crate::ui::toggle_switch;
 use ely_gpui_component::{
     buttons::{Button, ButtonVariant, SegmentedControl},
@@ -733,6 +734,8 @@ pub(super) struct ScheduledTasksView {
     dialog_focus: FocusHandle,
     confirm_focus: FocusHandle,
     loading: bool,
+    loaded: bool,
+    loading_delay: Option<LoadingDelay<()>>,
     mutation: Option<Mutation>,
     error: Option<SharedString>,
     applied_generation: u64,
@@ -838,6 +841,8 @@ impl ScheduledTasksView {
             dialog_focus: cx.focus_handle(),
             confirm_focus: cx.focus_handle(),
             loading: true,
+            loaded: false,
+            loading_delay: None,
             mutation: None,
             error: None,
             applied_generation: 0,
@@ -1003,6 +1008,7 @@ impl ScheduledTasksView {
                 self.loading = false;
                 match result {
                     Ok(mut tasks) => {
+                        self.loaded = true;
                         sort_tasks(&mut tasks);
                         self.tasks = tasks;
                         self.refresh_task_keys();
@@ -1107,7 +1113,7 @@ impl ScheduledTasksView {
 
     fn retry(&mut self, cx: &mut Context<Self>) {
         self.error = None;
-        self.loading = self.tasks.is_empty();
+        self.loading = !self.loaded;
         if self.daemon.client().is_disconnected()
             || self.requests.send(ScheduledRequest::Reload).is_err()
         {

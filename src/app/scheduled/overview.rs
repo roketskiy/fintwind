@@ -1,4 +1,5 @@
 use crate::ui::menu::{ContextMenuHandle, MenuAlign, MenuItem, dropdown_menu};
+use crate::ui::loading::LoadingPhase;
 
 use super::*;
 use ely_gpui_component::data_display::{Badge, Tone};
@@ -315,16 +316,14 @@ impl ScheduledTasksView {
                 div()
                     .text_size(ui_px(14.0))
                     .text_color(theme.text_secondary)
-                    .child(tr!(if self.loading {
-                        "scheduled_tasks.loading"
-                    } else if filtered {
+                    .child(tr!(if filtered {
                         "scheduled_tasks.no_matches"
                     } else {
                         "scheduled_tasks.empty"
                     })),
             )
             .when(
-                !self.loading && !filtered && self.error.is_none(),
+                !filtered && self.error.is_none(),
                 |empty| {
                     empty.child(
                         command_button(
@@ -354,8 +353,38 @@ impl Render for ScheduledTasksView {
         }
         let theme = Theme::current(cx);
         let weak = cx.entity().downgrade();
-        let body = if self.tasks.is_empty() && self.error.is_some() {
+        let loading_phase = if self.error.is_none() {
+            let (phase, wake) = LoadingDelay::observe(
+                &mut self.loading_delay,
+                (),
+                self.loading && !self.loaded,
+            );
+            if let Some(wake) = wake {
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(wake.delay()).await;
+                    wake.fired();
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                })
+                .detach();
+            }
+            phase
+        } else {
+            self.loading_delay = None;
+            LoadingPhase::Done
+        };
+        let body = if !self.loaded && self.error.is_some() {
             div().into_any_element()
+        } else if loading_phase == LoadingPhase::Hidden {
+            div().size_full().into_any_element()
+        } else if loading_phase == LoadingPhase::Visible {
+            div().size_full().flex().flex_col().children((0..3).map(|index| {
+                div().h(row_height).w_full().px_3().py(ui_px(6.0)).child(
+                    crate::ui::card(&theme).h_full().p_4().gap_3()
+                        .child(div().w(px(if index == 1 { 160.0 } else { 200.0 })).h(px(13.0)).rounded(px(3.0)).bg(theme.overlay_strong))
+                        .child(div().w(px(260.0)).max_w(gpui::relative(0.8)).h(px(10.0)).rounded(px(3.0)).bg(theme.overlay_strong))
+                        .child(div().w(px(180.0)).h(px(10.0)).rounded(px(3.0)).bg(theme.overlay_strong)),
+                )
+            })).into_any_element()
         } else if self.visible.is_empty() {
             self.render_empty(cx).into_any_element()
         } else {

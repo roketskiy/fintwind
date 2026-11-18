@@ -224,7 +224,7 @@ impl Fintwind {
             .child(div().flex_1().min_h(px(16.0)))
             .child(self.render_empty_state(true, cx))
             .children(self.render_permission(cx))
-            .child(self.render_composer(window, cx))
+            .child(self.render_composer(window, true, cx))
             .child(self.render_workspace_footer(cx))
             .child(
                 div().flex_1().min_h(px(16.0)).relative().child(
@@ -383,7 +383,7 @@ impl Render for Fintwind {
                         .children(self.render_permission(cx))
                         .when(self.selected_project().is_some(), |element| {
                             element
-                                .child(self.render_composer(window, cx))
+                                .child(self.render_composer(window, empty, cx))
                                 .child(self.render_workspace_footer(cx))
                         })
                         .when_some(transition, |element, (transition, remaining, _)| {
@@ -406,20 +406,6 @@ impl Render for Fintwind {
                     // own surface must round away from both corner cutouts.
                     .rounded_tl(px(WORKSPACE_CORNER_RADIUS))
                     .rounded_tr(px(WORKSPACE_CORNER_RADIUS))
-                    // External-path drops bubble from descendants, so handle
-                    // them once on the chat column rather than also on the
-                    // composer card. The same column is the drop group the
-                    // card highlights against, so a drag over the transcript
-                    // lights the composer before the pointer reaches it.
-                    // Keep the receiver absent when there is no project or
-                    // composer to own the resulting attachments.
-                    .when(self.selected_project().is_some(), |element| {
-                        element
-                            .group(super::composer::CHAT_FILE_DROP_GROUP)
-                            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
-                                this.stage_dropped_files(paths, window, cx);
-                            }))
-                    })
                     .when(panels.sidebar > 0.0, |element| {
                         element.border_l_1().border_color(theme.sidebar_border)
                     })
@@ -647,6 +633,7 @@ impl Render for Fintwind {
                             .mb(px(WORKSPACE_EDGE_GAP))
                             .mr(px(WORKSPACE_EDGE_GAP))
                             .flex()
+                            .relative()
                             .bg(theme.surface)
                             // The card floats in the rail-colored frame: the
                             // bottom and right edge gaps expose it, and all
@@ -702,6 +689,26 @@ impl Render for Fintwind {
                                                         .h_full(),
                                                 ),
                                             ),
+                                    )
+                                },
+                            )
+                            .when(
+                                self.mode == WorkspaceMode::Sessions
+                                    && self.selected_project().is_some(),
+                                |card| {
+                                    card.on_drop(cx.listener(
+                                        |this, paths: &ExternalPaths, window, cx| {
+                                            this.stage_dropped_files(paths, window, cx);
+                                        },
+                                    ))
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .inset_0()
+                                            .rounded(px(WORKSPACE_CORNER_RADIUS))
+                                            .drag_over::<ExternalPaths>(move |style, _, _, _| {
+                                                style.border_2().border_color(theme.accent)
+                                            }),
                                     )
                                 },
                             ),

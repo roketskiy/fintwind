@@ -702,8 +702,8 @@ impl Fintwind {
         self.ssh.workspaces.get(&self.ssh.active_workspace?).cloned()
     }
 
-    pub(super) fn has_workspace_owner(&self) -> bool {
-        self.ssh.workspace_owner.is_some()
+    pub(super) fn can_switch_to_ssh_workspace(&self, host: Uuid) -> bool {
+        self.ssh.workspaces.contains_key(&host) || self.ssh_client_for(host).is_some()
     }
 
     pub(super) fn ssh_workspace_owner(&self) -> Option<Entity<Self>> {
@@ -730,7 +730,7 @@ impl Fintwind {
             let Some(entity) = entity.upgrade() else { return; };
             entity.update(cx, |app, cx| {
                 if app.ssh.restoring_workspace == Some(host)
-                    && app.ssh.active_workspace.is_none()
+                    && app.ssh.active_workspace != Some(host)
                     && app.mode == WorkspaceMode::Sessions
                     && let Some(workspace) = app.open_ssh_workspace(host, window, cx)
                 {
@@ -751,90 +751,39 @@ impl Fintwind {
         action: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) {
         if let Some(owner) = self.ssh_workspace_owner() {
-            self.hide_workspace_webviews(cx);
             window.defer(cx, move |window, cx| owner.update(cx, |app, cx| action(app, window, cx)));
         } else {
             action(self, window, cx);
         }
     }
 
-    pub(super) fn return_to_local_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(owner) = self.ssh.workspace_owner.as_ref().and_then(|owner| owner.upgrade()) {
-            self.hide_workspace_webviews(cx);
-            owner.update(cx, |app, cx| {
-                app.ssh.active_workspace = None;
-                app.ssh.restoring_workspace = None;
-                window.focus(&app.composer_focus(cx), cx);
-                cx.notify();
-            });
-        }
-    }
-
-    pub(super) fn activate_local_sidebar_target(
+    pub(super) fn switch_sidebar_host(
         &mut self,
-        id: Uuid,
-        is_session: bool,
+        host: Option<Uuid>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.ssh.active_workspace = None;
-        if is_session {
-            self.select_session(id, cx);
-        } else {
-            self.select_project(id, cx);
-        }
-        window.focus(&self.composer_focus(cx), cx);
-        cx.notify();
-    }
-
-    pub(super) fn select_ssh_workspace_project(
-        &mut self,
-        host: Uuid,
-        project_id: Uuid,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(project) = self.ssh.catalogs.get(&host)
-            .and_then(|catalog| catalog.projects.iter().find(|project| project.id == project_id))
-            .cloned() else { return; };
-        self.open_registered_ssh_project(host, project, window, cx);
-    }
-
-    pub(super) fn select_ssh_workspace_session(
-        &mut self,
-        host: Uuid,
-        project_id: Uuid,
-        session_id: Uuid,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.can_open_ssh_session(host, session_id, cx) {
+        self.cancel_ssh_navigation_restore();
+        let Some(host) = host else {
+            if let Some(workspace) = self.active_ssh_workspace() {
+                workspace.update(cx, |app, cx| app.hide_workspace_webviews(cx));
+            }
+            self.ssh.active_workspace = None;
+            window.focus(&self.composer_focus(cx), cx);
+            cx.notify();
             return;
-        }
-        let Some(catalog) = self.ssh.catalogs.get(&host) else { return; };
-        let Some(project) = catalog.projects.iter().find(|project| project.id == project_id).cloned() else { return; };
-        let Some(session) = catalog.sessions.iter().find(|session| session.id == session_id).cloned() else { return; };
+        };
         if let Some(workspace) = self.open_ssh_workspace(host, window, cx) {
-            workspace.update(cx, |app, cx| {
-                if !app.state.projects.iter().any(|existing| existing.id == project_id) {
-                    app.state.projects.push(project);
-                }
-                if !app.state.sessions.iter().any(|existing| existing.id == session_id) {
-                    app.state.sessions.push(session);
-                }
-                app.select_session(session_id, cx);
-                window.focus(&app.composer_focus(cx), cx);
-            });
+            window.focus(&workspace.read(cx).composer_focus(cx), cx);
+        } else {
+            let (connecting, can_connect, _) = self.project_host_connection(Some(host));
+            if connecting || can_connect {
+                self.ssh.restoring_workspace = Some(host);
+            }
+            if can_connect {
+                self.connect_project_host(host, cx);
+            }
         }
-    }
-
-    pub(super) fn can_open_ssh_session(&self, host: Uuid, session_id: Uuid, cx: &App) -> bool {
-        self.ssh_client_for(host).is_some()
-            || self.ssh.workspaces.get(&host).is_some_and(|workspace| {
-                workspace.read(cx).state.sessions.iter().any(|session| {
-                    session.id == session_id && session.detail_loaded
-                })
-            })
     }
 
     pub(super) fn open_registered_ssh_project(
@@ -879,7 +828,13 @@ impl Fintwind {
             self.ssh.workspaces.insert(host, workspace.clone());
             workspace
         };
-        self.hide_workspace_webviews(cx);
+        if let Some(previous) = self.active_ssh_workspace() {
+            if previous != workspace {
+                previous.update(cx, |app, cx| app.hide_workspace_webviews(cx));
+            }
+        } else {
+            self.hide_workspace_webviews(cx);
+        }
         self.ssh.restoring_workspace = None;
         self.ssh.active_workspace = Some(host);
         cx.notify();
@@ -1496,6 +1451,19 @@ impl Fintwind {
                 {
                     this.report_add_project_error(error, cx);
                 }
+                if this.ssh.restoring_workspace == Some(id) && this.ssh_client_for(id).is_none() {
+                    this.cancel_ssh_navigation_restore();
+                    let (_, _, error) = this.project_host_connection(Some(id));
+                    let error = error.unwrap_or_else(|| tr!("ssh.backend_unavailable"));
+                    if let Some(workspace) = this.active_ssh_workspace() {
+                        workspace.update(cx, |app, cx| {
+                            app.show_toast_with_tone(error, ToastTone::Alert);
+                            cx.notify();
+                        });
+                    } else {
+                        this.show_toast_with_tone(error, ToastTone::Alert);
+                    }
+                }
                 cx.notify();
             });
         })
@@ -1663,6 +1631,7 @@ impl Fintwind {
         self.ssh.catalog_tasks.insert(id, task);
     }
 
+    #[cfg(test)]
     pub(super) fn ssh_project_catalog(&self, id: Uuid) -> Option<&RemoteTaskStateSnapshot> {
         self.ssh.catalogs.get(&id)
     }

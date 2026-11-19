@@ -332,25 +332,8 @@ async fn inspect(profile: &mut Profile, action: Option<SshConnectionAction>) -> 
             .and_then(|system| deploy::LinuxTarget::from_system(system))
     {
         let detected = deploy::detect(&session).await?;
-        if let deploy::Detection::Running { port, token_file } = &detected
-            && action != Some(SshConnectionAction::Deploy)
-        {
-            endpoint = Some((*port, token_file.clone()));
-        } else if action.is_some() {
-            if let deploy::Detection::Running { port, token_file } = &detected {
-                let connection = tunnel::Connection::open_with_reconnect(
-                    session.clone(),
-                    *port,
-                    token_file,
-                    None::<fn() -> std::future::Ready<Result<client::Handle<HostKey>>>>,
-                ).await?;
-                let client = connection.client();
-                tokio::task::spawn_blocking(move || {
-                    require_idle_daemon(&client)
-                }).await??;
-            }
-            let allow_existing_without_asset = !matches!(detected, deploy::Detection::Running { .. });
-            match deploy::ensure_current(&session, target, allow_existing_without_asset).await {
+        if let Some(action) = action {
+            match deploy::ensure_current(&session, target, &detected, action).await {
                 Ok(address) => endpoint = Some(address),
                 Err(error) => {
                     return Ok(Probe::BackendUnavailable(
@@ -413,13 +396,9 @@ fn probe_opencode(client: &fintwind_client::DaemonClient) -> Option<(bool, Optio
     }
 }
 
-fn require_idle_daemon(client: &fintwind_client::DaemonClient) -> Result<()> {
+fn remote_daemon_busy(client: &fintwind_client::DaemonClient) -> Result<bool> {
     let snapshot = super::runtime::load_remote_task_state(client)?;
-    ensure!(
-        !snapshot.sessions.iter().any(|session| session.status.is_busy()),
-        "{}", tr!("ssh.update_busy"),
-    );
-    Ok(())
+    Ok(snapshot.sessions.iter().any(|session| session.status.is_busy()))
 }
 
 pub(super) fn settings_opencode_workspace(

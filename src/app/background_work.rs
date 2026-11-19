@@ -2437,10 +2437,10 @@ fn render_background_summary_section(
     handle: ContextMenuHandle,
     weak: WeakEntity<Fintwind>,
     theme: &Theme,
-    empty_label: String,
+    empty_label: Option<String>,
 ) -> Div {
     let mut rows = div().w_full().flex().flex_col().gap(px(2.0));
-    if entries.is_empty() {
+    if entries.is_empty() && let Some(empty_label) = empty_label {
         rows = rows.child(
             div()
                 .px(px(8.0))

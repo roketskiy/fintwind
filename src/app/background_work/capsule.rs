@@ -1,8 +1,10 @@
 use super::*;
 use crate::ui::loading::{LoadingDelay, LoadingPhase};
 use crate::ui::menu::{popover_covering_trigger, toggle_popover};
+use ely_gpui_component::buttons::{Button, ButtonVariant};
 use ely_gpui_component::motion::Spinner;
-use ely_gpui_component::theme::IconSize;
+use ely_gpui_component::primitives::IconName;
+use ely_gpui_component::theme::{ControlSize, IconSize};
 use ely_gpui_component::typography::tabular;
 use fintwind_protocol::pull_request::{
     PullRequest, PullRequestChecks, PullRequestSnapshot, PullRequestState, PullRequestUnavailable,
@@ -90,6 +92,7 @@ impl Fintwind {
                 if open {
                     *previous_focus.borrow_mut() = window.focused(cx);
                     let tab = toggle_weak.update(cx, |this, cx| {
+                        this.task_capsule_inactive_agents = None;
                         this.refresh_selected_branch_snapshot(cx);
                         this.refresh_capsule_tab(cx);
                         this.task_capsule_tab
@@ -453,17 +456,27 @@ impl Fintwind {
             .map(|r| r.ordered_items())
             .unwrap_or_default();
         let mut agents = Vec::new();
+        let mut inactive_agents = Vec::new();
+        let mut inactive_count = 0;
         let mut processes = Vec::new();
+        let inactive_open = self.task_capsule_inactive_agents == Some(session_id);
         let now_ms = unix_time_millis();
         for item in items {
+            let subagent = item.key.kind == BackgroundWorkKind::Subagent;
+            let inactive = subagent && !item.status.is_live();
+            if inactive {
+                inactive_count += 1;
+                if !inactive_open {
+                    continue;
+                }
+            }
             let provider_id = &item.key.provider_id;
             let kind = item.key.kind as u8;
             let entry = BackgroundSummaryEntry {
                 key: item.key.clone(),
                 title: item.title.clone(),
                 status: item.status,
-                elapsed: (item.key.kind != BackgroundWorkKind::Subagent
-                    || item.status != BackgroundWorkStatus::Completed)
+                elapsed: (!subagent || item.status != BackgroundWorkStatus::Completed)
                     .then(|| format_working_elapsed(work_elapsed_seconds(item, now_ms))),
                 can_stop: item.can_stop,
                 row_focus: self.transcript_control_focus(
@@ -475,26 +488,67 @@ impl Fintwind {
                     cx,
                 ),
             };
-            if item.key.kind == BackgroundWorkKind::Subagent {
+            if inactive {
+                inactive_agents.push(entry);
+            } else if subagent {
                 agents.push(entry);
             } else {
                 processes.push(entry);
             }
         }
         let weak = cx.entity().downgrade();
+        let mut subagents = render_background_summary_section(
+            tr!("background.agents"),
+            agents,
+            session_id,
+            handle.clone(),
+            weak.clone(),
+            &theme,
+            (inactive_count == 0).then(|| tr!("background.no_agents")),
+        );
+        if inactive_count > 0 {
+            let focus = self
+                .transcript_control_focus("capsule-inactive-agents", cx)
+                .tab_stop(true);
+            let disclosure = Button::new(
+                "capsule-inactive-agents",
+                tr!("background.inactive_agents", count = inactive_count),
+            )
+            .variant(ButtonVariant::Ghost)
+            .size(ControlSize::Sm)
+            .icon(if inactive_open {
+                IconName::ChevronDown
+            } else {
+                IconName::ChevronRight
+            })
+            .focus_handle(&focus)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.task_capsule_inactive_agents = (!inactive_open).then_some(session_id);
+                cx.notify();
+            }));
+            subagents = subagents
+                .child(div().child(disclosure))
+                .when(inactive_open, |section| {
+                    section.child(
+                        div().pl(px(12.0)).flex().flex_col().gap(px(2.0)).children(
+                            inactive_agents.into_iter().map(|entry| {
+                                render_background_summary_row(
+                                    entry,
+                                    session_id,
+                                    handle.clone(),
+                                    weak.clone(),
+                                    &theme,
+                                )
+                            }),
+                        ),
+                    )
+                });
+        }
         div()
             .flex()
             .flex_col()
             .gap(px(12.0))
-            .child(render_background_summary_section(
-                tr!("background.agents"),
-                agents,
-                session_id,
-                handle.clone(),
-                weak.clone(),
-                &theme,
-                tr!("background.no_agents"),
-            ))
+            .child(subagents)
             .child(render_background_summary_section(
                 tr!("background.title"),
                 processes,
@@ -502,7 +556,7 @@ impl Fintwind {
                 handle.clone(),
                 weak,
                 &theme,
-                tr!("background.no_work"),
+                Some(tr!("background.no_work")),
             ))
     }
 

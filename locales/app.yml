@@ -2554,6 +2554,8 @@ background.processes:
   en: Background processes
 background.agents:
   en: Subagents
+background.inactive_agents:
+  en: Inactive subagents (%{count})
 background.no_agents:
   en: No subagents
 background.process:

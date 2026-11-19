@@ -4,7 +4,9 @@ use std::time::Duration;
 use crate::DaemonSupervisor;
 use anyhow::{Context, Result, ensure};
 use fintwind_protocol::settings::{
-    DaemonSettings, GENERAL_WORKSPACE_PATH_KEY, OPENCODE_BINARY_PATH_KEY,
+    AUTO_COMPACT_ENABLED_KEY, AUTO_COMPACT_THRESHOLD_PERCENT_KEY, BACKGROUND_COMPACT_ENABLED_KEY,
+    BROWSER_TOOLS_ENABLED_KEY, DaemonSettings, GENERAL_WORKSPACE_PATH_KEY, NETWORK_PROXY_URL_KEY,
+    OPENCODE_BINARY_PATH_KEY, SCHEDULED_TOOLS_ENABLED_KEY, WATCHDOG_ENABLED_KEY,
 };
 use russh::{ChannelMsg, client};
 use tokio::{net::TcpListener, task::JoinSet};
@@ -98,10 +100,39 @@ pub fn change_skill(
     Ok(())
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GeneralSetting {
     OpenCodePath,
     Workspace,
+    NetworkProxy,
+    BrowserTools,
+    ScheduledTools,
+    Watchdog,
+    AutoCompact,
+    CompactThreshold,
+    BackgroundCompact,
+}
+
+impl GeneralSetting {
+    fn key(self) -> &'static str {
+        use GeneralSetting::*;
+        match self {
+            OpenCodePath => OPENCODE_BINARY_PATH_KEY,
+            Workspace => GENERAL_WORKSPACE_PATH_KEY,
+            NetworkProxy => NETWORK_PROXY_URL_KEY,
+            BrowserTools => BROWSER_TOOLS_ENABLED_KEY,
+            ScheduledTools => SCHEDULED_TOOLS_ENABLED_KEY,
+            Watchdog => WATCHDOG_ENABLED_KEY,
+            AutoCompact => AUTO_COMPACT_ENABLED_KEY,
+            CompactThreshold => AUTO_COMPACT_THRESHOLD_PERCENT_KEY,
+            BackgroundCompact => BACKGROUND_COMPACT_ENABLED_KEY,
+        }
+    }
+
+    pub fn supported_by(self, settings: &DaemonSettings) -> bool {
+        matches!(self, Self::OpenCodePath | Self::Workspace)
+            || settings.supports_general_setting(self.key())
+    }
 }
 
 pub fn save_general_setting(
@@ -110,16 +141,35 @@ pub fn save_general_setting(
     value: &str,
 ) -> Result<DaemonSettings> {
     use crate::{Command, ResponsePayload};
+    use GeneralSetting::*;
     let client = client
         .filter(|client| !client.is_disconnected())
         .context("SSH daemon is offline")?;
-    ensure!(
-        value.is_empty() || (value.starts_with('/') && !value.chars().any(char::is_control)),
-        "expected an absolute Linux path"
-    );
-    let key = match field {
-        GeneralSetting::OpenCodePath => OPENCODE_BINARY_PATH_KEY,
-        GeneralSetting::Workspace => GENERAL_WORKSPACE_PATH_KEY,
+    let value = value.trim();
+    let key = field.key();
+    let expected: Option<serde_json::Value> = match field {
+        OpenCodePath | Workspace if value.is_empty() => None,
+        OpenCodePath | Workspace => {
+            ensure!(
+                value.starts_with('/') && !value.chars().any(char::is_control),
+                "expected an absolute Linux path"
+            );
+            Some(value.into())
+        }
+        NetworkProxy if value.is_empty() => None,
+        NetworkProxy => Some(
+            fintwind_protocol::http::normalize_proxy_url(value)
+                .context("invalid proxy address")?
+                .into(),
+        ),
+        CompactThreshold => {
+            let percent = value.trim_end_matches('%').trim().parse::<u8>()?;
+            ensure!((1..=99).contains(&percent), "expected a threshold from 1% to 99%");
+            Some(percent.into())
+        }
+        BrowserTools | ScheduledTools | Watchdog | AutoCompact | BackgroundCompact => {
+            Some(value.parse::<bool>()?.into())
+        }
     };
     let request = |command| {
         client.request_with_timeout(
@@ -134,12 +184,16 @@ pub fn save_general_setting(
         _ => anyhow::bail!("invalid settings response"),
     };
     let mut settings = read()?;
-    if value.is_empty() {
-        settings.extra.remove(key);
-    } else {
-        settings.extra.insert(key.into(), value.into());
+    ensure!(field.supported_by(&settings), "SSH daemon does not support this setting");
+    settings.extra.remove(fintwind_protocol::settings::GENERAL_SETTINGS_CAPABILITIES_KEY);
+    match &expected {
+        Some(value) => {
+            settings.extra.insert(key.into(), value.clone());
+        }
+        None => {
+            settings.extra.remove(key);
+        }
     }
-    let expected = settings.extra.get(key).cloned();
     ensure!(
         matches!(
             request(Command::UpdateSettings { settings })?,

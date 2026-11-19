@@ -116,7 +116,7 @@ async fn bridge(
                 ensure!(change.is_err_and(|error| error.to_string() == "SSH daemon is offline"), "disconnected client unexpectedly accepted a settings write");
                 ensure!(read_settings(&recovered)?.general_workspace_path().is_some_and(|path| path.ends_with("settings-workspace")), "offline write changed remote settings");
                 ensure!(read_settings(&local.0)? == local.1, "Windows daemon settings changed");
-                let detail = "remote OpenCode and workspace paths saved and reread; disconnected write refused; separate Windows daemon settings unchanged";
+                let detail = "remote settings saved and reread; unverified OpenCode features and disconnected writes refused; Windows daemon settings unchanged";
                 println!("PASS remote_general_settings: {detail}");
                 let _ = report.send(Check { name: "remote_general_settings", passed: true, detail: detail.into() });
                 Ok::<_, anyhow::Error>(())
@@ -275,16 +275,52 @@ fn verify_settings_write(
         first.opencode_binary_path() == Some(binary),
         "OpenCode path did not persist"
     );
-    let second = save_general_setting(Some(remote.clone()), GeneralSetting::Workspace, workspace)?;
+    save_general_setting(Some(remote.clone()), GeneralSetting::Workspace, workspace)?;
+    for (field, value) in [
+        (GeneralSetting::NetworkProxy, "http://127.0.0.1:9"),
+        (GeneralSetting::BrowserTools, "true"),
+        (GeneralSetting::ScheduledTools, "true"),
+        (GeneralSetting::Watchdog, "false"),
+        (GeneralSetting::AutoCompact, "false"),
+        (GeneralSetting::CompactThreshold, "78%"),
+        (GeneralSetting::BackgroundCompact, "false"),
+    ] {
+        save_general_setting(Some(remote.clone()), field, value)?;
+    }
+    let second = read_settings(&remote)?;
     ensure!(
         second.opencode_binary_path() == Some(binary)
             && second.general_workspace_path() == Some(workspace),
         "remote settings were not preserved"
     );
-    ensure!(
-        read_settings(&remote)? == second,
-        "remote settings did not reread"
-    );
+    ensure!(second.network_proxy_url() == Some("http://127.0.0.1:9")
+        && second.browser_tools_enabled()
+        && second.scheduled_tools_enabled()
+        && !second.watchdog_enabled()
+        && !second.auto_compact_enabled()
+        && !second.background_compact_enabled()
+        && second.auto_compact_threshold_percent() == 78,
+        "remote general settings did not reread");
+    ensure!(save_general_setting(Some(remote.clone()), GeneralSetting::CompactThreshold, "100%").is_err(),
+        "invalid threshold was accepted");
+    ensure!(read_settings(&remote)? == second, "invalid threshold modified remote settings");
+    let cleared = save_general_setting(Some(remote.clone()), GeneralSetting::NetworkProxy, "")?;
+    ensure!(cleared.network_proxy_url().is_none(), "remote proxy could not be cleared");
+    let unavailable = save_general_setting(Some(remote.clone()), GeneralSetting::OpenCodePath, "/bin/sh")?;
+    for field in [
+        GeneralSetting::BrowserTools,
+        GeneralSetting::ScheduledTools,
+        GeneralSetting::AutoCompact,
+        GeneralSetting::CompactThreshold,
+        GeneralSetting::BackgroundCompact,
+    ] {
+        ensure!(!field.supported_by(&unavailable), "unverified OpenCode advertised {field:?}");
+    }
+    ensure!(save_general_setting(Some(remote.clone()), GeneralSetting::ScheduledTools, "false")
+        .is_err_and(|error| error.to_string() == "SSH daemon does not support this setting"),
+        "unsupported setting update was accepted");
+    let restored = save_general_setting(Some(remote), GeneralSetting::OpenCodePath, binary)?;
+    ensure!(GeneralSetting::ScheduledTools.supported_by(&restored), "OpenCode capability was not restored");
     Ok((local, local_before))
 }
 

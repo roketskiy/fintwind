@@ -1189,6 +1189,43 @@ fn scheduled_outcome(
     }
 }
 
+fn settings_for_client(settings: crate::DaemonSettings) -> crate::DaemonSettings {
+    #[cfg(target_os = "linux")]
+    {
+        use fintwind_protocol::settings::*;
+
+        let mut settings = settings;
+        let mut capabilities = vec![NETWORK_PROXY_URL_KEY, WATCHDOG_ENABLED_KEY];
+        ensure_shell_environment();
+        let version = crate::model::provider_probe(&settings, None)
+            .path
+            .as_deref()
+            .and_then(crate::model::probe_provider_version)
+            .and_then(|version| semver::Version::parse(&version).ok());
+        if let Some(version) = version {
+            if version >= semver::Version::new(2, 1, 4) {
+                capabilities.extend([BROWSER_TOOLS_ENABLED_KEY, SCHEDULED_TOOLS_ENABLED_KEY]);
+            }
+            if version >= semver::Version::new(2, 3, 1)
+                && std::env::var_os("OPENCODE_CONFIG").is_none()
+            {
+                capabilities.extend([
+                    AUTO_COMPACT_ENABLED_KEY,
+                    AUTO_COMPACT_THRESHOLD_PERCENT_KEY,
+                    BACKGROUND_COMPACT_ENABLED_KEY,
+                ]);
+            }
+        }
+        settings.extra.insert(
+            GENERAL_SETTINGS_CAPABILITIES_KEY.into(),
+            serde_json::json!(capabilities),
+        );
+        settings
+    }
+    #[cfg(not(target_os = "linux"))]
+    settings
+}
+
 impl Backend for FintwindBackend {
     fn browser_mcp(&self) -> Option<Arc<crate::browser_mcp::Registry>> {
         Some(self.browser_mcp.clone())
@@ -1521,7 +1558,7 @@ impl Backend for FintwindBackend {
                 })
             }
             Command::GetSettings => Ok(ResponsePayload::Settings {
-                settings: self.settings.get(),
+                settings: settings_for_client(self.settings.get()),
             }),
             Command::LoadOpenCodeProviders => Ok(ResponsePayload::Json {
                 value: serde_json::to_value(fintwind_client::opencode_config::load_providers()?
@@ -1686,7 +1723,10 @@ impl Backend for FintwindBackend {
                     );
                     self.settings.replace(current.clone())?;
                 }
-                Ok(ResponsePayload::OpenCodeInstalled { settings: current })
+                drop(_settings_guard);
+                Ok(ResponsePayload::OpenCodeInstalled {
+                    settings: settings_for_client(current),
+                })
             }
             Command::UpdateOpenCode { path, version } => {
                 let _operation = self

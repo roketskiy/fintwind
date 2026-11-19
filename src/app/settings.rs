@@ -594,7 +594,7 @@ impl Fintwind {
                     }),
             ))
             .child(match page {
-                SettingsPage::General if self.settings_machine_selected() => self.render_ssh_general(cx),
+                SettingsPage::General if self.settings_machine_selected() => self.render_ssh_general(window, cx),
                 SettingsPage::General => self.render_general_settings(window, cx),
                 SettingsPage::Ssh => self.render_ssh_page(cx),
                 SettingsPage::RemoteControl => self.render_remote_control(window, cx),

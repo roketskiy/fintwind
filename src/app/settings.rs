@@ -1197,7 +1197,7 @@ impl Fintwind {
                         theme,
                     ))
                     .child(settings_separator(theme))
-                    .child(self.render_session_cleanup(cx)),
+                    .child(self.render_session_cleanup(None, cx)),
             )
             .child(
                 div()

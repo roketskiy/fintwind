@@ -191,6 +191,9 @@ pub enum Command {
         turns_to_remove: usize,
     },
     GetSettings,
+    SetOpenCodeGeneralSetting {
+        setting: crate::settings::OpenCodeGeneralSetting,
+    },
     LoadOpenCodeProviders,
     SaveOpenCodeProviders {
         providers: Value,

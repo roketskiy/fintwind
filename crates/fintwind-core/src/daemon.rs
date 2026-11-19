@@ -1203,6 +1203,21 @@ fn settings_for_client(settings: crate::DaemonSettings) -> crate::DaemonSettings
             .and_then(crate::model::probe_provider_version)
             .and_then(|version| semver::Version::parse(&version).ok());
         if let Some(version) = version {
+            if version.major == 2 {
+                capabilities.push(SESSION_CLEANUP_CAPABILITY);
+                if let Ok(shell) = fintwind_client::opencode_shell::load() {
+                    capabilities.push(OPENCODE_SHELL_KEY);
+                    settings.extra.insert(OPENCODE_SHELL_KEY.into(), serde_json::json!(shell));
+                }
+                if let Ok(todo) = fintwind_client::opencode_todo::load() {
+                    capabilities.push(OPENCODE_TODO_KEY);
+                    settings.extra.insert(OPENCODE_TODO_KEY.into(), todo.into());
+                }
+                if let Ok(image) = fintwind_client::opencode_image_generate::load() {
+                    capabilities.push(OPENCODE_IMAGE_MODEL_KEY);
+                    settings.extra.insert(OPENCODE_IMAGE_MODEL_KEY.into(), serde_json::json!(image.model));
+                }
+            }
             if version >= semver::Version::new(2, 1, 4) {
                 capabilities.extend([BROWSER_TOOLS_ENABLED_KEY, SCHEDULED_TOOLS_ENABLED_KEY]);
             }
@@ -1560,6 +1575,28 @@ impl Backend for FintwindBackend {
             Command::GetSettings => Ok(ResponsePayload::Settings {
                 settings: settings_for_client(self.settings.get()),
             }),
+            Command::SetOpenCodeGeneralSetting { setting } => {
+                use fintwind_protocol::settings::OpenCodeGeneralSetting;
+                let _gate = self.settings_update_gate.lock();
+                match setting {
+                    OpenCodeGeneralSetting::Shell(shell) => {
+                        if let Some(shell) = shell.as_deref() {
+                            crate::model::validate_opencode_binary_path(shell)?;
+                        }
+                        fintwind_client::opencode_shell::save(shell.as_deref())?;
+                    }
+                    OpenCodeGeneralSetting::Todo(enabled) => fintwind_client::opencode_todo::save(enabled)?,
+                    OpenCodeGeneralSetting::ImageModel(model) => {
+                        fintwind_client::opencode_image_generate::save(
+                            &fintwind_client::opencode_image_generate::ImageGenerateConfig {
+                                model,
+                                legacy_boolean: false,
+                            },
+                        )?;
+                    }
+                }
+                Ok(ResponsePayload::Ack)
+            }
             Command::LoadOpenCodeProviders => Ok(ResponsePayload::Json {
                 value: serde_json::to_value(fintwind_client::opencode_config::load_providers()?
                     .into_iter().map(fintwind_client::opencode_config::ProviderConfigEntry::from).collect::<Vec<_>>())?,
@@ -1665,13 +1702,17 @@ impl Backend for FintwindBackend {
                     .as_deref()
                     .and_then(crate::model::probe_provider_version);
                 let (latest_version, update_available, check_error) =
-                    if let Some(current) = &current_version {
+                    if let (Some(current), Some(binary)) = (&current_version, &probe.path) {
                         match crate::opencode_management::latest_version_from(
                             crate::opencode_management::LATEST_URL,
                         ) {
                             Ok(latest) => {
                                 match crate::opencode_management::is_newer(current, &latest) {
-                                    Ok(available) => (Some(latest), available, None),
+                                    Ok(true) => match crate::opencode_management::upgrade_manager(binary) {
+                                        Ok(_) => (Some(latest), true, None),
+                                        Err(error) => (Some(latest), false, Some(error.to_string())),
+                                    },
+                                    Ok(false) => (Some(latest), false, None),
                                     Err(error) => (Some(latest), false, Some(error.to_string())),
                                 }
                             }
@@ -3252,6 +3293,7 @@ fn handle_driver_command(
         | Command::AbandonSubmission { .. }
         | Command::Start { .. }
         | Command::GetSettings
+        | Command::SetOpenCodeGeneralSetting { .. }
         | Command::LoadOpenCodeProviders
         | Command::SaveOpenCodeProviders { .. }
         | Command::LoadOpenCodeMcp

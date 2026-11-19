@@ -16,6 +16,7 @@ use russh::keys::{HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate, load_s
 use serde::{Deserialize, Serialize};
 
 use super::providers_page::labeled_field;
+use super::settings::OpenCodeManagementAction;
 use super::*;
 use crate::ui::ActivationExt;
 use crate::ui::loading::{LoadingDelay, LoadingPhase};
@@ -78,6 +79,19 @@ enum Deployment {
     Start,
 }
 
+enum RemoteOpenCodeResult {
+    Checked {
+        installed: bool,
+        version: Option<String>,
+        update: Option<(PathBuf, String)>,
+        error: Option<String>,
+    },
+    Changed {
+        settings: fintwind_protocol::settings::DaemonSettings,
+        version: Option<String>,
+    },
+}
+
 #[derive(Default)]
 pub(super) struct SshPage {
     mcp: mcp::RemoteMcp,
@@ -90,6 +104,8 @@ pub(super) struct SshPage {
     general_pending: bool,
     general_loading: RefCell<Option<LoadingDelay<(Uuid, bool)>>>,
     general_error: Option<(Uuid, bool, String)>,
+    opencode_action: Option<(Uuid, OpenCodeManagementAction)>,
+    opencode_updates: HashMap<Uuid, (PathBuf, String)>,
     #[cfg(test)]
     test_location_picker: bool,
     project_connection: Option<tunnel::Connection>,
@@ -669,6 +685,28 @@ fn ssh_info(label: String, value: impl IntoElement, theme: Theme) -> Div {
 }
 
 impl Fintwind {
+    pub(super) fn apply_ssh_cleanup_snapshot(
+        &mut self,
+        host: Uuid,
+        snapshot: RemoteTaskStateSnapshot,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(workspace) = self.ssh.workspaces.get(&host) {
+            workspace.update(cx, |workspace, cx| {
+                workspace.apply_remote_task_state(snapshot.clone(), cx);
+            });
+        }
+        self.ssh.catalogs.insert(host, snapshot);
+        self.sidebar_rows_fingerprint.set(None);
+    }
+    fn sync_remote_todo(&mut self, settings: &fintwind_protocol::settings::DaemonSettings) {
+        let enabled = settings.extra.get(fintwind_protocol::settings::OPENCODE_TODO_KEY)
+            .and_then(serde_json::Value::as_bool).unwrap_or(false);
+        if self.state.todo_enabled != enabled {
+            self.state.todo_enabled = enabled;
+            self.invalidate_capsule_todos();
+        }
+    }
     pub(super) fn ssh_connection_for_quit(&mut self, cx: &App) -> Option<Arc<tunnel::Connection>> {
         if let Some(connection) = self.ssh.project_connection.take() {
             return Some(Arc::new(connection));
@@ -803,6 +841,9 @@ impl Fintwind {
                 app.ssh.workspace_owner = Some(owner);
                 app.ssh.project_machine = Some(profile.name.clone());
                 app.ssh.project_profile = Some(profile);
+                if let Some(settings) = self.ssh.remote_settings.get(&host) {
+                    app.sync_remote_todo(settings);
+                }
             });
             self.ssh.workspaces.insert(host, workspace.clone());
             workspace
@@ -1375,6 +1416,7 @@ impl Fintwind {
                         this.ssh.last_read.insert(id, values);
                         this.ssh.deployments.remove(&id);
                         this.ssh.opencode_installed.remove(&id);
+                        this.ssh.opencode_updates.remove(&id);
                         if let Some(installed) = opencode {
                             this.ssh.opencode_installed.insert(id, installed);
                         }
@@ -1732,7 +1774,7 @@ impl Fintwind {
             return;
         }
         let Some(client) = self.ssh_client_for(id) else {
-            self.ssh.general_error = Some((id, editing, tr!("ssh.offline")));
+            self.show_toast(tr!("ssh.offline"));
             cx.notify();
             return;
         };
@@ -1761,8 +1803,15 @@ impl Fintwind {
                 if app.ssh.profiles.iter().find(|p| p.id == id) == profile.as_ref() {
                     match result {
                         Ok((settings, opencode)) => {
+                            if let Some(workspace) = app.ssh.workspaces.get(&id) {
+                                workspace.update(cx, |workspace, cx| {
+                                    workspace.sync_remote_todo(&settings);
+                                    cx.notify();
+                                });
+                            }
                             app.ssh.remote_settings.insert(id, settings);
                             if let Some(opencode) = opencode {
+                                app.ssh.opencode_updates.remove(&id);
                                 app.ssh.opencode_installed.remove(&id);
                                 if let Some((installed, version)) = opencode {
                                     app.ssh.opencode_installed.insert(id, installed);
@@ -1779,9 +1828,29 @@ impl Fintwind {
                             if editing {
                                 app.ssh.general_edit = None;
                             }
+                            use tunnel::GeneralSetting::*;
+                            let name = match field {
+                                OpenCodePath => tr!("settings.opencode_binary"),
+                                Workspace => tr!("settings.general_workspace"),
+                                NetworkProxy => tr!("settings.network_proxy"),
+                                BrowserTools => tr!("settings.browser_tools"),
+                                ScheduledTools => tr!("settings.scheduled_tools"),
+                                Watchdog => tr!("settings.watchdog"),
+                                AutoCompact => tr!("settings.auto_compact"),
+                                CompactThreshold => tr!("settings.auto_compact_threshold"),
+                                BackgroundCompact => tr!("settings.background_compact"),
+                                OpenCodeShell => tr!("settings.opencode_shell"),
+                                Todo => tr!("settings.todo_list"),
+                                ImageModel => tr!("settings.image_generation_model"),
+                            };
+                            app.show_success_toast(tr!("settings.option_updated", name = name));
                         }
                         Err(error) => {
-                            app.ssh.general_error = Some((id, editing, error.to_string()));
+                            let message = error.to_string();
+                            if editing {
+                                app.ssh.general_error = Some((id, true, message.clone()));
+                            }
+                            app.show_toast(message);
                         }
                     }
                 } else {
@@ -1793,15 +1862,31 @@ impl Fintwind {
         .detach();
     }
 
-    fn install_ssh_opencode(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        if self.ssh.general_pending
-            || self.ssh.machine != Some(id)
-            || self.ssh.opencode_installed.get(&id) != Some(&false)
-        {
+    fn manage_ssh_opencode(
+        &mut self,
+        id: Uuid,
+        action: OpenCodeManagementAction,
+        cx: &mut Context<Self>,
+    ) {
+        use fintwind_client::{Command, ResponsePayload};
+        use OpenCodeManagementAction::{Check, Install, Update};
+
+        if self.ssh.general_pending || self.ssh.general_edit.is_some() || self.ssh.machine != Some(id) {
             return;
         }
+        let command = match action {
+            Check => Command::CheckOpenCodeUpdate,
+            Install if self.ssh.opencode_installed.get(&id) == Some(&false) => Command::InstallOpenCode,
+            Update => {
+                let Some((path, version)) = self.ssh.opencode_updates.get(&id).cloned() else {
+                    return;
+                };
+                Command::UpdateOpenCode { path, version }
+            }
+            Install => return,
+        };
         let Some(client) = self.ssh_client_for(id) else {
-            self.ssh.general_error = Some((id, false, tr!("ssh.offline")));
+            self.show_toast(tr!("ssh.offline"));
             cx.notify();
             return;
         };
@@ -1812,6 +1897,7 @@ impl Fintwind {
             .find(|profile| profile.id == id)
             .cloned();
         self.ssh.general_pending = true;
+        self.ssh.opencode_action = Some((id, action));
         self.ssh.general_error = None;
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -1819,27 +1905,38 @@ impl Fintwind {
                 .background_executor()
                 .spawn(async move {
                     let nil = Uuid::nil();
-                    let fintwind_client::ResponsePayload::OpenCodeInstalled { settings } = client
-                        .request_with_timeout(
-                        nil,
-                        nil,
-                        fintwind_client::Command::InstallOpenCode,
-                        Duration::from_secs(330),
-                    )?
-                    else {
-                        anyhow::bail!("invalid daemon response");
+                    let response = client.request_with_timeout(nil, nil, command, Duration::from_secs(330))?;
+                    let settings = match (response, action) {
+                        (ResponsePayload::OpenCodeInstalled { settings }, Install) => settings,
+                        (ResponsePayload::Ack, Update) => {
+                            match client.request(nil, nil, Command::GetSettings)? {
+                                ResponsePayload::Settings { settings } => settings,
+                                _ => anyhow::bail!("invalid daemon settings response"),
+                            }
+                        }
+                        (ResponsePayload::OpenCodeUpdateStatus {
+                            path, current_version, latest_version, update_available, check_error,
+                        }, Check) => {
+                            return Ok(RemoteOpenCodeResult::Checked {
+                                installed: path.is_some(),
+                                version: current_version,
+                                update: path.zip(latest_version).filter(|_| update_available),
+                                error: check_error,
+                            });
+                        }
+                        _ => anyhow::bail!("invalid OpenCode management response"),
                     };
-                    Ok::<_, anyhow::Error>((
-                        settings,
-                        probe_opencode(&client).and_then(|(_, version)| version),
-                    ))
+                    let version = probe_opencode(&client).and_then(|(_, version)| version);
+                    Ok::<_, anyhow::Error>(RemoteOpenCodeResult::Changed { settings, version })
                 })
                 .await;
             let _ = this.update(cx, |app, cx| {
                 app.ssh.general_pending = false;
+                app.ssh.opencode_action = None;
                 if app.ssh.profiles.iter().find(|profile| profile.id == id) == profile.as_ref() {
+                    app.ssh.opencode_updates.remove(&id);
                     match result {
-                        Ok((settings, version)) => {
+                        Ok(RemoteOpenCodeResult::Changed { settings, version }) => {
                             app.ssh.remote_settings.insert(id, settings);
                             app.ssh.opencode_installed.insert(id, true);
                             if let (Some(value), Some(version)) = (
@@ -1851,14 +1948,32 @@ impl Fintwind {
                             ) {
                                 *value = version;
                             }
-                            app.show_toast(tr!("settings.opencode_installed"));
+                            app.show_success_toast(if action == Install {
+                                tr!("settings.opencode_installed")
+                            } else {
+                                tr!("settings.opencode_updated")
+                            });
+                        }
+                        Ok(RemoteOpenCodeResult::Checked { installed, version, update, error }) => {
+                            app.ssh.opencode_installed.insert(id, installed);
+                            if let Some(value) = app.ssh.last_read.get_mut(&id).and_then(|values| values.first_mut()) {
+                                *value = version.clone().unwrap_or_default();
+                            }
+                            if let Some(error) = error {
+                                app.show_toast(tr!("settings.opencode_check_failed", error = error));
+                            } else if let Some(update) = update {
+                                if let Some(current) = version {
+                                    app.show_success_toast(tr!("settings.opencode_update_available", current = current, latest = update.1));
+                                }
+                                app.ssh.opencode_updates.insert(id, update);
+                            } else if let Some(current) = version {
+                                app.show_success_toast(tr!("settings.opencode_up_to_date", current = current));
+                            } else if !installed {
+                                app.show_toast(tr!("settings.opencode_not_installed"));
+                            }
                         }
                         Err(error) => {
-                            app.ssh.general_error = Some((
-                                id,
-                                false,
-                                tr!("settings.opencode_operation_failed", error = error),
-                            ))
+                            app.show_toast(tr!("settings.opencode_operation_failed", error = error));
                         }
                     }
                 }
@@ -1905,6 +2020,7 @@ impl Fintwind {
         }
         if let Some(settings) = settings {
             use tunnel::GeneralSetting;
+            use fintwind_protocol::settings::{OPENCODE_IMAGE_MODEL_KEY, OPENCODE_SHELL_KEY, OPENCODE_TODO_KEY, SESSION_CLEANUP_CAPABILITY};
             use super::settings::{
                 settings_card, settings_group_title, settings_row, settings_separator,
             };
@@ -1924,6 +2040,22 @@ impl Fintwind {
                     None,
                     tr!("settings.network_proxy"),
                     settings.network_proxy_url().map(str::to_owned),
+                ),
+                (
+                    GeneralSetting::OpenCodeShell,
+                    "ssh-opencode-shell",
+                    "icons/terminal-square.svg",
+                    None,
+                    tr!("settings.opencode_shell"),
+                    settings.extra.get(OPENCODE_SHELL_KEY).and_then(serde_json::Value::as_str).map(str::to_owned),
+                ),
+                (
+                    GeneralSetting::ImageModel,
+                    "ssh-image-model",
+                    "icons/provider-opencode.svg",
+                    None,
+                    tr!("settings.image_generation_model"),
+                    settings.extra.get(OPENCODE_IMAGE_MODEL_KEY).and_then(serde_json::Value::as_str).map(str::to_owned),
                 ),
                 (
                     GeneralSetting::CompactThreshold,
@@ -1958,6 +2090,7 @@ impl Fintwind {
                         ))
                     };
                     let features = [
+                        ("ssh-todo", "icons/list.svg", tr!("settings.todo_list"), GeneralSetting::Todo, settings.extra.get(OPENCODE_TODO_KEY).and_then(serde_json::Value::as_bool).unwrap_or(false)),
                         ("ssh-browser-tools", "icons/globe.svg", tr!("settings.browser_tools"), GeneralSetting::BrowserTools, settings.browser_tools_enabled()),
                         ("ssh-scheduled-tools", "icons/calendar.svg", tr!("settings.scheduled_tools"), GeneralSetting::ScheduledTools, settings.scheduled_tools_enabled()),
                         ("ssh-watchdog", "icons/alert.svg", tr!("settings.watchdog"), GeneralSetting::Watchdog, settings.watchdog_enabled()),
@@ -1991,6 +2124,8 @@ impl Fintwind {
                     continue;
                 }
                 let description = value.clone().or_else(|| match field {
+                    GeneralSetting::OpenCodeShell => Some(tr!("settings.shell_default")),
+                    GeneralSetting::ImageModel => Some(tr!("settings.image_generation_model_auto")),
                     GeneralSetting::OpenCodePath => Some(tr!("settings.opencode_binary_auto")),
                     GeneralSetting::Workspace => Some(tr!("common.default")),
                     _ => None,
@@ -2011,49 +2146,48 @@ impl Fintwind {
                         .filter(|version| !version.is_empty())
                         .cloned();
                     let missing = self.ssh.opencode_installed.get(&id) == Some(&false);
+                    let update = self.ssh.opencode_updates.get(&id);
+                    let detail = if missing {
+                        Some(tr!("settings.opencode_not_installed"))
+                    } else if let (Some(current), Some((_, latest))) = (&version, update) {
+                        Some(tr!("settings.opencode_update_available", current = current, latest = latest))
+                    } else {
+                        version
+                    };
+                    use OpenCodeManagementAction::{Check, Install, Update};
+                    let actions = [
+                        (Install, missing, "ssh-opencode-install", tr!("settings.opencode_install")),
+                        (Check, !missing, "ssh-opencode-check", tr!("settings.opencode_check")),
+                        (Update, update.is_some(), "ssh-opencode-update", tr!("settings.opencode_update")),
+                    ];
                     card = card
                         .child(
                             settings_row(
                                 "icons/provider-opencode.svg",
                                 "OpenCode".into(),
-                                if missing {
-                                    Some(tr!("settings.opencode_not_installed"))
-                                } else {
-                                    version
-                                },
+                                detail,
                                 theme,
                             )
-                            .when(missing, |row| {
-                                let active = !saving
-                                    && (self.ssh.general_pending || phase == LoadingPhase::Visible);
-                                let focus =
-                                    self.transcript_control_focus("ssh-opencode-install", cx);
-                                row.child(ssh_wait_button(
+                            .children(actions.into_iter().filter_map(|(action, visible, key, label)| {
+                                if !visible {
+                                    return None;
+                                }
+                                let active = self.ssh.opencode_action == Some((id, action));
+                                let focus = self.transcript_control_focus(key, cx);
+                                Some(ssh_wait_button(
                                     cx,
                                     theme,
-                                    "ssh-opencode-install",
+                                    key,
                                     &focus,
-                                    tr!("settings.opencode_install"),
+                                    label,
                                     ButtonVariant::Outline,
-                                    ready && !active,
+                                    ready && !self.ssh.general_pending && !saving,
                                     active,
-                                    !saving && phase == LoadingPhase::Visible,
-                                    move |app, cx| app.install_ssh_opencode(id, cx),
+                                    active && phase == LoadingPhase::Visible,
+                                    move |app, cx| app.manage_ssh_opencode(id, action, cx),
                                 ))
-                            }),
+                            })),
                         )
-                        .children(self.ssh.general_error.iter().filter_map(
-                            |(host, editing, error)| {
-                                (*host == id && !*editing).then(|| {
-                                    div()
-                                        .px(px(20.0))
-                                        .pb(px(10.0))
-                                        .text_size(ui_px(12.0))
-                                        .text_color(theme.danger_text)
-                                        .child(error.clone())
-                                })
-                            },
-                        ))
                         .child(settings_separator(theme));
                 }
                 if ready && editing.is_none() {
@@ -2137,6 +2271,9 @@ impl Fintwind {
                             },
                         )),
                 );
+            }
+            if settings.supports_general_setting(SESSION_CLEANUP_CAPABILITY) {
+                body = body.child(settings_card(theme).child(self.render_session_cleanup(Some(id), cx)));
             }
         }
         body.into_any_element()

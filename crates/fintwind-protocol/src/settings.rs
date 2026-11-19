@@ -126,6 +126,18 @@ impl DaemonSettings {
 
 pub const SCHEDULED_TOOLS_ENABLED_KEY: &str = "scheduled_tools_enabled";
 pub const GENERAL_SETTINGS_CAPABILITIES_KEY: &str = "general_settings_capabilities";
+pub const OPENCODE_SHELL_KEY: &str = "opencode_shell";
+pub const OPENCODE_TODO_KEY: &str = "opencode_todo";
+pub const OPENCODE_IMAGE_MODEL_KEY: &str = "opencode_image_model";
+pub const SESSION_CLEANUP_CAPABILITY: &str = "session_cleanup";
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OpenCodeGeneralSetting {
+    Shell(Option<String>),
+    Todo(bool),
+    ImageModel(Option<String>),
+}
 pub const OPENCODE_BINARY_PATH_KEY: &str = "opencode_binary_path";
 pub const GENERAL_WORKSPACE_PATH_KEY: &str = "general_workspace_path";
 pub const BROWSER_TOOLS_ENABLED_KEY: &str = "browser_tools_enabled";

@@ -1517,6 +1517,7 @@ pub struct Fintwind {
     /// flicker when app activation invalidates the query.
     visible_branch_snapshot: Option<(PathBuf, BranchSnapshot)>,
     task_capsule_tab: background_work::capsule::CapsuleTab,
+    task_capsule_inactive_agents: Option<Uuid>,
     /// The selected session's newest todo list. Kept parsed across frames; a
     /// cache miss is one transcript scan, not a scan per frame.
     capsule_todos: RefCell<Option<(Uuid, Option<Rc<background_work::todo::TodoSnapshot>>)>>,
@@ -4026,6 +4027,7 @@ impl Fintwind {
                 sidebar_branches: QueryCache::new(4 * MAX_CACHED_WORKSPACES),
                 visible_branch_snapshot: None,
                 task_capsule_tab: background_work::capsule::CapsuleTab::Changes,
+                task_capsule_inactive_agents: None,
                 capsule_todos: RefCell::new(None),
                 capsule_pull_requests: QueryCache::new(MAX_CACHED_WORKSPACES),
                 capsule_pull_requests_previous: None,

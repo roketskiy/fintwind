@@ -1254,6 +1254,7 @@ background.title: 后台工作
 background.description: 查看智能体启动的进程和子智能体
 background.processes: 后台进程
 background.agents: 子智能体
+background.inactive_agents: 未运行的子智能体（%{count}）
 background.no_agents: 暂无子智能体
 background.process: 进程
 background.monitor: 监控

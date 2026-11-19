@@ -1182,6 +1182,7 @@ background.title: バックグラウンド
 background.description: エージェントが起動したプロセスとサブエージェントを確認します
 background.processes: バックグラウンドプロセス
 background.agents: サブエージェント
+background.inactive_agents: 稼働していないサブエージェント（%{count}）
 background.no_agents: サブエージェントなし
 background.process: プロセス
 background.monitor: モニター

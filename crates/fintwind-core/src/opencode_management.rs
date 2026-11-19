@@ -230,14 +230,18 @@ pub fn install_with(manager: &PackageManager, version: &str) -> Result<PathBuf> 
 }
 
 pub fn upgrade(binary: &Path, version: &str) -> Result<String> {
-    let manager = [PackageManagerKind::Npm, PackageManagerKind::Bun]
+    let manager = upgrade_manager(binary)?;
+    upgrade_with(&manager, binary, version)
+}
+
+pub(crate) fn upgrade_manager(binary: &Path) -> Result<PackageManager> {
+    [PackageManagerKind::Npm, PackageManagerKind::Bun]
         .into_iter()
         .filter_map(|kind| PackageManager::discover(kind).ok())
         .find(|manager| manager.owns(binary))
         .context(
             "the selected OpenCode is not managed by the current npm or Bun global installation",
-        )?;
-    upgrade_with(&manager, binary, version)
+        )
 }
 
 pub fn upgrade_with(manager: &PackageManager, binary: &Path, version: &str) -> Result<String> {

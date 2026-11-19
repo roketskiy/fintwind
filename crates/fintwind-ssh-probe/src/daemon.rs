@@ -284,6 +284,9 @@ fn verify_settings_write(
         (GeneralSetting::AutoCompact, "false"),
         (GeneralSetting::CompactThreshold, "78%"),
         (GeneralSetting::BackgroundCompact, "false"),
+        (GeneralSetting::OpenCodeShell, "/bin/bash"),
+        (GeneralSetting::Todo, "true"),
+        (GeneralSetting::ImageModel, "fixture/fixture-model"),
     ] {
         save_general_setting(Some(remote.clone()), field, value)?;
     }
@@ -313,14 +316,26 @@ fn verify_settings_write(
         GeneralSetting::AutoCompact,
         GeneralSetting::CompactThreshold,
         GeneralSetting::BackgroundCompact,
+        GeneralSetting::OpenCodeShell,
+        GeneralSetting::Todo,
+        GeneralSetting::ImageModel,
     ] {
         ensure!(!field.supported_by(&unavailable), "unverified OpenCode advertised {field:?}");
     }
     ensure!(save_general_setting(Some(remote.clone()), GeneralSetting::ScheduledTools, "false")
         .is_err_and(|error| error.to_string() == "SSH daemon does not support this setting"),
         "unsupported setting update was accepted");
-    let restored = save_general_setting(Some(remote), GeneralSetting::OpenCodePath, binary)?;
+    let restored = save_general_setting(Some(remote.clone()), GeneralSetting::OpenCodePath, binary)?;
     ensure!(GeneralSetting::ScheduledTools.supported_by(&restored), "OpenCode capability was not restored");
+    ensure!(restored.supports_general_setting(fintwind_protocol::settings::SESSION_CLEANUP_CAPABILITY), "session cleanup was not advertised");
+    ensure!(matches!(remote.request_with_timeout(
+        Uuid::nil(), Uuid::nil(), Command::PreviewSessionCleanup {
+            binary: binary.into(),
+            period: Default::default(),
+            visible_session_ids: Vec::new(),
+        }, Duration::from_secs(30),
+    )?, ResponsePayload::SessionCleanupPreview { preview } if preview.session_ids.is_empty()),
+        "empty SSH fixture did not return an empty cleanup preview");
     Ok((local, local_before))
 }
 

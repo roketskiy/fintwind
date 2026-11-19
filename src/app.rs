@@ -646,7 +646,7 @@ struct PreparedDriver {
     events: Receiver<DriverEvent>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct RemoteTaskStateSnapshot {
     projects: Vec<Project>,
     sessions: Vec<AgentSession>,
@@ -1902,7 +1902,7 @@ pub struct Fintwind {
     /// The settings category shown while the workspace is in the settings
     /// mode. It survives leaving and re-entering settings.
     settings_page: SettingsPage,
-    session_cleanup: session_cleanup::CleanupState,
+    session_cleanup: HashMap<Option<Uuid>, session_cleanup::CleanupState>,
     scheduled_tasks_view: Entity<scheduled::ScheduledTasksView>,
     /// The Skills page's library snapshot, scanned off-thread. Frames read
     /// only this; `None` means the first scan has not landed yet.
@@ -2941,6 +2941,12 @@ impl Fintwind {
             save_error: projectless_save_error,
         } = loaded;
         state.apply_daemon_settings(daemon.settings());
+        if embedded {
+            state.todo_enabled = daemon.settings().extra
+                .get(fintwind_protocol::settings::OPENCODE_TODO_KEY)
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+        }
         if store.publishes_daemon_settings() && let Err(error) = daemon.update_settings(state.daemon_settings()) {
             eprintln!("could not normalize daemon settings after migration: {error:#}");
         }
@@ -3192,7 +3198,9 @@ impl Fintwind {
                 window.display(cx).and_then(|display| display.uuid().ok()),
             ));
         }
-        crate::theme::apply_theme_preference(state.theme, state.theme_scheme, window, cx);
+        if !embedded {
+            crate::theme::apply_theme_preference(state.theme, state.theme_scheme, window, cx);
+        }
         crate::platform::set_sidebar_material_width(window, sidebar_width);
         let project_paths = state
             .projects
@@ -3367,44 +3375,48 @@ impl Fintwind {
 
             // Align to the next minute so 07:00 and 19:00 take effect at the
             // boundary. Rechecking also handles clock and time-zone changes.
-            cx.spawn_in(window, async move |this, cx| {
-                loop {
-                    let elapsed_ms = Local::now().timestamp_millis().rem_euclid(60_000) as u64;
-                    cx.background_executor()
-                        .timer(Duration::from_millis(60_000 - elapsed_ms))
-                        .await;
-                    if this
-                        .update_in(cx, |this, window, cx| {
-                            if crate::theme::refresh_automatic_theme(
-                                this.state.theme,
-                                this.state.theme_scheme,
-                                window,
-                                cx,
-                            ) {
-                                cx.notify();
-                            }
-                        })
-                        .is_err()
-                    {
-                        break;
+            if !embedded {
+                cx.spawn_in(window, async move |this, cx| {
+                    loop {
+                        let elapsed_ms = Local::now().timestamp_millis().rem_euclid(60_000) as u64;
+                        cx.background_executor()
+                            .timer(Duration::from_millis(60_000 - elapsed_ms))
+                            .await;
+                        if this
+                            .update_in(cx, |this, window, cx| {
+                                if crate::theme::refresh_automatic_theme(
+                                    this.state.theme,
+                                    this.state.theme_scheme,
+                                    window,
+                                    cx,
+                                ) {
+                                    cx.notify();
+                                }
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
                     }
-                }
-            })
-            .detach();
+                })
+                .detach();
+            }
 
             cx.observe_window_bounds(window, |this: &mut Self, window, cx| {
                 this.capture_window_state(window, cx);
             })
             .detach();
 
-            cx.observe_window_activation(window, |this: &mut Self, window, cx| {
+            cx.observe_window_activation(window, move |this: &mut Self, window, cx| {
                 if window.is_window_active() {
-                    if crate::theme::refresh_automatic_theme(
-                        this.state.theme,
-                        this.state.theme_scheme,
-                        window,
-                        cx,
-                    ) {
+                    if !embedded
+                        && crate::theme::refresh_automatic_theme(
+                            this.state.theme,
+                            this.state.theme_scheme,
+                            window,
+                            cx,
+                        )
+                    {
                         cx.notify();
                     }
                     this.reload_clean_right_panel_file_editors(cx);
@@ -4215,7 +4227,7 @@ impl Fintwind {
                 scene_overlay_enabled,
                 mode: WorkspaceMode::default(),
                 settings_page: SettingsPage::General,
-                session_cleanup: session_cleanup::CleanupState::default(),
+                session_cleanup: HashMap::new(),
                 scheduled_tasks_view,
                 skills_catalog: None,
                 skills_scan_generation: 0,

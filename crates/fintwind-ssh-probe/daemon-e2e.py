@@ -135,11 +135,17 @@ def verify_compaction(opencode, data, cwd, env):
             while time.monotonic() < deadline and child.poll() is None:
                 try:
                     with opener.open(request, timeout=2) as response:
-                        configs = [entry["info"]["compaction"] for entry in json.load(response)
-                                   if "compaction" in entry.get("info", {})]
-                    if configs and configs[-1] == expected:
-                        return expected
-                    raise AssertionError(f"OpenCode effective compaction settings: {configs}")
+                        effective = {}
+                        for entry in json.load(response):
+                            effective.update(entry.get("info", {}))
+                    experimental = effective.get("experimental", {})
+                    assert effective.get("compaction") == expected, effective.get("compaction")
+                    assert effective.get("shell") == "/bin/bash", effective.get("shell")
+                    assert experimental.get("todo") is True, experimental.get("todo")
+                    assert experimental.get("image_generate", {}).get("model") == {
+                        "providerID": "fixture", "model": "fixture-model"
+                    }, experimental
+                    return {"compaction": expected, "shell": effective["shell"], "experimental": experimental}
                 except OSError:
                     time.sleep(0.1)
             raise RuntimeError("OpenCode did not expose its runtime config")
@@ -617,7 +623,7 @@ def local():
                 try:
                     ssh_process.stdin.write("verify-compaction\n")
                     ssh_process.stdin.flush()
-                    proof["opencode_effective_compaction"] = receive(30)
+                    proof["opencode_effective_settings"] = receive(30)
                 except Exception:
                     proof["all_passed"] = False
                     raise

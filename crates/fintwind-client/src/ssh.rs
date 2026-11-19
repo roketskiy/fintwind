@@ -111,6 +111,9 @@ pub enum GeneralSetting {
     AutoCompact,
     CompactThreshold,
     BackgroundCompact,
+    OpenCodeShell,
+    Todo,
+    ImageModel,
 }
 
 impl GeneralSetting {
@@ -126,6 +129,9 @@ impl GeneralSetting {
             AutoCompact => AUTO_COMPACT_ENABLED_KEY,
             CompactThreshold => AUTO_COMPACT_THRESHOLD_PERCENT_KEY,
             BackgroundCompact => BACKGROUND_COMPACT_ENABLED_KEY,
+            OpenCodeShell => fintwind_protocol::settings::OPENCODE_SHELL_KEY,
+            Todo => fintwind_protocol::settings::OPENCODE_TODO_KEY,
+            ImageModel => fintwind_protocol::settings::OPENCODE_IMAGE_MODEL_KEY,
         }
     }
 
@@ -148,8 +154,8 @@ pub fn save_general_setting(
     let value = value.trim();
     let key = field.key();
     let expected: Option<serde_json::Value> = match field {
-        OpenCodePath | Workspace if value.is_empty() => None,
-        OpenCodePath | Workspace => {
+        OpenCodePath | Workspace | OpenCodeShell | ImageModel if value.is_empty() => None,
+        OpenCodePath | Workspace | OpenCodeShell => {
             ensure!(
                 value.starts_with('/') && !value.chars().any(char::is_control),
                 "expected an absolute Linux path"
@@ -167,7 +173,11 @@ pub fn save_general_setting(
             ensure!((1..=99).contains(&percent), "expected a threshold from 1% to 99%");
             Some(percent.into())
         }
-        BrowserTools | ScheduledTools | Watchdog | AutoCompact | BackgroundCompact => {
+        ImageModel => {
+            ensure!(value.split_once('/').is_some_and(|(provider, model)| !provider.is_empty() && !model.is_empty()) && !value.chars().any(char::is_whitespace), "expected provider/model");
+            Some(value.into())
+        }
+        BrowserTools | ScheduledTools | Watchdog | AutoCompact | BackgroundCompact | Todo => {
             Some(value.parse::<bool>()?.into())
         }
     };
@@ -185,7 +195,23 @@ pub fn save_general_setting(
     };
     let mut settings = read()?;
     ensure!(field.supported_by(&settings), "SSH daemon does not support this setting");
+    use fintwind_protocol::settings::OpenCodeGeneralSetting;
+    let provider_setting = match field {
+        OpenCodeShell => Some(OpenCodeGeneralSetting::Shell((!value.is_empty()).then(|| value.to_owned()))),
+        ImageModel => Some(OpenCodeGeneralSetting::ImageModel((!value.is_empty()).then(|| value.to_owned()))),
+        Todo => Some(OpenCodeGeneralSetting::Todo(value.parse()?)),
+        _ => None,
+    };
+    if let Some(setting) = provider_setting {
+        ensure!(matches!(request(Command::SetOpenCodeGeneralSetting { setting })?, ResponsePayload::Ack), "settings save was not acknowledged");
+        let actual = read()?;
+        ensure!(actual.extra.get(key).filter(|value| !value.is_null()) == expected.as_ref(), "settings were changed before confirmation");
+        return Ok(actual);
+    }
     settings.extra.remove(fintwind_protocol::settings::GENERAL_SETTINGS_CAPABILITIES_KEY);
+    for key in [OpenCodeShell.key(), ImageModel.key(), Todo.key()] {
+        settings.extra.remove(key);
+    }
     match &expected {
         Some(value) => {
             settings.extra.insert(key.into(), value.clone());

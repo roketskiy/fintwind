@@ -302,11 +302,13 @@ settings.mermaid_visualization_description: 仅新会话
 settings.keep_screen_awake: 保持屏幕常亮
 settings.keep_screen_awake_description: 开启后，应用运行期间屏幕与系统保持唤醒
 settings.auto_compact: 自动压缩
-settings.auto_compact_description: 上下文达到下方阈值时压缩一次，前台会话与子代理都适用
+settings.auto_compact_description: 由 OpenCode 在达到下方阈值时自动压缩
 settings.auto_compact_threshold: 压缩阈值
-settings.auto_compact_threshold_description: 用量到不了阈值的窗口不受影响，仍走服务商默认压缩
-settings.auto_compact_threshold_placeholder: 如 500K
-settings.auto_compact_threshold_invalid: 阈值格式不对
+settings.auto_compact_threshold_description: 模型输入窗口的占用比例。工作区或自定义 OpenCode 配置优先。
+settings.auto_compact_threshold_placeholder: 如 85%
+settings.auto_compact_threshold_invalid: 请输入 1% 到 99% 的整数百分比
+settings.background_compact: 后台压缩
+settings.background_compact_description: 需要 OpenCode 2.3.1 或更新版本。通常可在距压缩阈值约 6 万 token 时开始生成后台摘要。
 settings.network_proxy: 网络代理
 settings.opencode_check: 检查更新
 settings.opencode_checking: 正在检查…
@@ -1055,7 +1057,7 @@ session.turn_failed: 本轮未返回响应即告结束
 session.steer_rejected: 无法向智能体补充指示（%{error}）；消息已排队，将作为后续消息发送
 session.steer_rejected_plain: 无法向智能体补充指示；消息已排队，将作为后续消息发送
 session.compaction_requested: 已请求压缩上下文：提供方将在下一个安全节点开始总结
-session.auto_compaction_started: 上下文达到阈值，开始自动压缩
+session.auto_compaction_started: 正在自动压缩上下文
 session.compaction_completed: 上下文已压缩
 session.compaction_failed: 上下文压缩失败
 session.compaction_unavailable: 当前没有运行中的提供方，无法压缩该任务的上下文

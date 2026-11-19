@@ -5,12 +5,18 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 pub use fintwind_protocol::settings::DaemonSettings;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use uuid::Uuid;
 
 pub struct DaemonSettingsStore {
     path: PathBuf,
     settings: Mutex<DaemonSettings>,
+}
+
+static OPENCODE_CONFIG: RwLock<Option<PathBuf>> = RwLock::new(None);
+
+pub(crate) fn opencode_config_path() -> Option<PathBuf> {
+    OPENCODE_CONFIG.read().clone()
 }
 
 impl DaemonSettingsStore {
@@ -73,6 +79,21 @@ impl DaemonSettingsStore {
         self.settings.lock().clone()
     }
 
+    pub(crate) fn publish_opencode_config(&self, settings: &DaemonSettings) -> io::Result<()> {
+        let path = self.path.with_file_name("fintwind-opencode.json");
+        let buffer = 100 - settings.auto_compact_threshold_percent();
+        let config = serde_json::json!({
+            "compaction": {
+                "auto": settings.auto_compact_enabled(),
+                "background": settings.background_compact_enabled(),
+                "buffer": format!("{buffer}%"),
+            }
+        });
+        write_atomic(&path, &config)?;
+        *OPENCODE_CONFIG.write() = Some(path);
+        Ok(())
+    }
+
     pub fn replace(&self, mut settings: DaemonSettings) -> io::Result<()> {
         settings.discard_legacy_app_keys();
         let mut current = self.settings.lock();
@@ -95,7 +116,7 @@ fn quarantine_corrupt_settings(path: &Path) -> io::Result<PathBuf> {
     Ok(backup)
 }
 
-fn write_atomic(path: &Path, settings: &DaemonSettings) -> io::Result<()> {
+fn write_atomic(path: &Path, settings: &impl serde::Serialize) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }

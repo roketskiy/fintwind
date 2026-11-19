@@ -961,33 +961,7 @@ impl Fintwind {
                 // Background work is session state, not turn output. It must
                 // survive a settled or rewound turn and therefore bypasses
                 // `accepts_turn_output` deliberately.
-                let auto_compact_probe = match &event {
-                    BackgroundWorkEvent::Upsert(item)
-                        if item.key.kind == BackgroundWorkKind::Subagent =>
-                    {
-                        Some((item.key.clone(), item.context_tokens))
-                    }
-                    BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Finished {
-                        key,
-                        ..
-                    }) => {
-                        self.auto_compacted_children.retain(|(session, provider)| {
-                            *session != session_id || *provider != key.provider_id
-                        });
-                        None
-                    }
-                    _ => None,
-                };
                 self.handle_background_work_event(session_id, event);
-                if let Some((key, tokens)) = auto_compact_probe {
-                    self.maybe_auto_compact_child(
-                        session_id,
-                        &key,
-                        tokens,
-                        &runtime.driver,
-                        allow_follow_up_work,
-                    );
-                }
             }
             DriverEvent::Permission {
                 request_id,
@@ -1184,17 +1158,6 @@ impl Fintwind {
                     }
                     self.state.mark_session_dirty(session_id);
                 }
-                // Occupancy only arrives on settled steps (`session.usage.
-                // updated` carries totals, never the live context), so this
-                // is naturally once per step, not per delta.
-                if let Some(tokens) = context_tokens {
-                    self.maybe_auto_compact_session(
-                        session_id,
-                        tokens,
-                        &runtime.driver,
-                        allow_follow_up_work,
-                    );
-                }
             }
             DriverEvent::ContextCompositionUpdated(composition) => {
                 if let Some(session) = self.state.session_mut(session_id) {
@@ -1260,6 +1223,7 @@ impl Fintwind {
                 }
             }
             DriverEvent::CompactionUpdated(state) => {
+                self.update_auto_compaction_badge(session_id, &state, cx);
                 // Compaction is conversation plumbing, not turn output: it can
                 // start, settle, or fail while no turn is live — the
                 // provider's own automatic overflow compaction emits the same
@@ -1303,7 +1267,7 @@ impl Fintwind {
                 if previous != Some(state.status) && self.state.selected_session == Some(session_id)
                 {
                     match state.status {
-                        CompactionStatus::Completed => {
+                        CompactionStatus::Completed if state.reason.as_deref() != Some("auto") => {
                             self.show_toast(tr!("session.compaction_completed"));
                         }
                         CompactionStatus::Failed => {
@@ -1313,7 +1277,9 @@ impl Fintwind {
                                 cx,
                             );
                         }
-                        CompactionStatus::Running | CompactionStatus::Cancelled => {}
+                        CompactionStatus::Completed
+                        | CompactionStatus::Running
+                        | CompactionStatus::Cancelled => {}
                     }
                 }
             }

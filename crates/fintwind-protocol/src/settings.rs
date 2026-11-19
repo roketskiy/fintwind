@@ -51,6 +51,7 @@ impl DaemonSettings {
             "language",
             "computer_use_enabled",
             "computer_use_allowed_apps",
+            "auto_compact_threshold_tokens",
         ] {
             self.extra.remove(key);
         }
@@ -84,13 +85,16 @@ impl DaemonSettings {
             .filter(|url| !url.is_empty())
     }
 
-    /// Whether the client compacts a session whose live context occupancy
-    /// reaches [`AUTO_COMPACT_THRESHOLD_TOKENS_DEFAULT`]. On by default: the
-    /// provider's own near-limit auto compaction stays armed as the net, so
-    /// this only moves compression earlier.
     pub fn auto_compact_enabled(&self) -> bool {
         self.extra
             .get(AUTO_COMPACT_ENABLED_KEY)
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+    }
+
+    pub fn background_compact_enabled(&self) -> bool {
+        self.extra
+            .get(BACKGROUND_COMPACT_ENABLED_KEY)
             .and_then(Value::as_bool)
             .unwrap_or(true)
     }
@@ -102,22 +106,13 @@ impl DaemonSettings {
             .unwrap_or(true)
     }
 
-    /// Live context tokens at which the client requests a compaction, for
-    /// the foreground session and every live subagent alike. Absolute, not a
-    /// percentage: windows smaller than this never reach it and stay on the
-    /// provider's own auto compaction. Clamped to a sane range; a missing or
-    /// non-numeric value reads as the default.
-    pub fn auto_compact_threshold_tokens(&self) -> u64 {
+    pub fn auto_compact_threshold_percent(&self) -> u8 {
         self.extra
-            .get(AUTO_COMPACT_THRESHOLD_TOKENS_KEY)
+            .get(AUTO_COMPACT_THRESHOLD_PERCENT_KEY)
             .and_then(Value::as_u64)
-            .map(|tokens| {
-                tokens.clamp(
-                    AUTO_COMPACT_THRESHOLD_TOKENS_MIN,
-                    AUTO_COMPACT_THRESHOLD_TOKENS_MAX,
-                )
-            })
-            .unwrap_or(AUTO_COMPACT_THRESHOLD_TOKENS_DEFAULT)
+            .filter(|percent| (1..=99).contains(percent))
+            .map(|percent| percent as u8)
+            .unwrap_or(DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT)
     }
 }
 
@@ -128,10 +123,6 @@ pub const BROWSER_TOOLS_ENABLED_KEY: &str = "browser_tools_enabled";
 pub const NETWORK_PROXY_URL_KEY: &str = "network_proxy_url";
 pub const AUTO_COMPACT_ENABLED_KEY: &str = "auto_compact_enabled";
 pub const WATCHDOG_ENABLED_KEY: &str = "watchdog_enabled";
-pub const AUTO_COMPACT_THRESHOLD_TOKENS_KEY: &str = "auto_compact_threshold_tokens";
-/// Default trigger: half of a 1M window. Smaller windows never reach it and
-/// stay on the provider's own near-limit auto compaction, which Fintwind
-/// never reconfigures.
-pub const AUTO_COMPACT_THRESHOLD_TOKENS_DEFAULT: u64 = 500_000;
-pub const AUTO_COMPACT_THRESHOLD_TOKENS_MIN: u64 = 10_000;
-pub const AUTO_COMPACT_THRESHOLD_TOKENS_MAX: u64 = 100_000_000;
+pub const BACKGROUND_COMPACT_ENABLED_KEY: &str = "background_compact_enabled";
+pub const AUTO_COMPACT_THRESHOLD_PERCENT_KEY: &str = "auto_compact_threshold_percent";
+pub const DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT: u8 = 85;

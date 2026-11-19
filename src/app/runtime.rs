@@ -519,6 +519,7 @@ impl Fintwind {
             self.runtime_attach_pending.remove(session_id);
             self.runtime_attach_misses.remove(session_id);
             self.runtimes.remove(session_id);
+            self.auto_compaction_badges.remove(session_id);
             self.background_work.remove(session_id);
             self.remove_right_panel_session_state(*session_id);
         }
@@ -2377,79 +2378,6 @@ impl Fintwind {
             self.show_toast(tr!("session.compaction_unavailable"));
         }
         cx.notify();
-    }
-
-    /// Edge-triggered client-side early compaction for the foreground
-    /// session. Fires once when live occupancy reaches the configured
-    /// absolute threshold and re-arms when occupancy falls back below it,
-    /// so one crossing compacts exactly once. The provider's own near-limit
-    /// auto compaction stays armed regardless; a session that never reaches
-    /// the threshold stays on that default.
-    pub(super) fn maybe_auto_compact_session(
-        &mut self,
-        session_id: Uuid,
-        tokens: u64,
-        driver: &DriverHandle,
-        allow_request: bool,
-    ) {
-        let threshold = self.state.auto_compact_threshold_tokens.max(1);
-        if !self.state.auto_compact_enabled || tokens < threshold {
-            self.auto_compacted_sessions.remove(&session_id);
-            return;
-        }
-        if !allow_request {
-            return;
-        }
-        let already_running = self
-            .state
-            .sessions
-            .iter()
-            .find(|session| session.id == session_id)
-            .and_then(|session| session.compaction.as_ref().map(|c| c.status))
-            == Some(CompactionStatus::Running);
-        if already_running || !self.auto_compacted_sessions.insert(session_id) {
-            return;
-        }
-        driver.compact();
-        if self.state.selected_session == Some(session_id) {
-            self.show_toast(tr!("session.auto_compaction_started"));
-        }
-    }
-
-    /// Same edge trigger for one live subagent child, keyed by
-    /// (parent session, child provider id). The child's occupancy arrives
-    /// on its card via driver Upserts; the flag clears when the child
-    /// settles or drops back below the threshold.
-    pub(super) fn maybe_auto_compact_child(
-        &mut self,
-        session_id: Uuid,
-        key: &BackgroundWorkKey,
-        tokens: Option<u64>,
-        driver: &DriverHandle,
-        allow_request: bool,
-    ) {
-        let fingerprint = (session_id, key.provider_id.clone());
-        let threshold = self.state.auto_compact_threshold_tokens.max(1);
-        let below =
-            !self.state.auto_compact_enabled || tokens.is_none_or(|tokens| tokens < threshold);
-        if below {
-            self.auto_compacted_children.remove(&fingerprint);
-            return;
-        }
-        if !allow_request {
-            return;
-        }
-        let live = self
-            .background_work
-            .get(&session_id)
-            .is_some_and(|registry| registry.is_live(key));
-        if !live || !self.auto_compacted_children.insert(fingerprint) {
-            return;
-        }
-        driver.compact_child(key.provider_id.clone());
-        if self.state.selected_session == Some(session_id) {
-            self.show_toast(tr!("session.auto_compaction_started"));
-        }
     }
 
     pub(super) fn submit_composer_submission(

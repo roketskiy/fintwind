@@ -1165,6 +1165,24 @@ impl Fintwind {
                             )
                             .w(px(120.0)),
                         ),
+                    )
+                    .child(settings_separator(theme))
+                    .child(
+                        settings_row(
+                            "icons/archive.svg",
+                            tr!("settings.background_compact"),
+                            Some(tr!("settings.background_compact_description")),
+                            theme,
+                        )
+                        .child(toggle_switch(
+                            "background-compact-toggle",
+                            self.state.background_compact_enabled,
+                            false,
+                            theme,
+                            window,
+                            cx,
+                            |this: &mut Self, _, cx| this.toggle_background_compact(cx),
+                        )),
                     ),
             )
             .child(settings_group_title(tr!("settings.group_data"), theme))
@@ -2445,7 +2463,7 @@ impl Fintwind {
         cx.notify();
     }
 
-    fn set_auto_compact_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+    pub(super) fn set_auto_compact_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if self.state.auto_compact_enabled == enabled {
             return;
         }
@@ -2460,51 +2478,40 @@ impl Fintwind {
         cx.notify();
     }
 
-    /// Apply a validated early-compaction threshold. Out-of-range values
-    /// land on the nearest bound; the field is re-synced so it always shows
-    /// the stored value.
-    fn set_auto_compact_threshold_tokens(&mut self, tokens: u64, cx: &mut Context<Self>) {
-        let tokens = tokens.clamp(
-            fintwind_protocol::settings::AUTO_COMPACT_THRESHOLD_TOKENS_MIN,
-            fintwind_protocol::settings::AUTO_COMPACT_THRESHOLD_TOKENS_MAX,
-        );
-        if self.state.auto_compact_threshold_tokens == tokens {
-            return;
-        }
-        self.state.auto_compact_threshold_tokens = tokens;
-        self.sync_auto_compact_threshold_input(cx);
+    pub(super) fn toggle_background_compact(&mut self, cx: &mut Context<Self>) {
+        self.state.background_compact_enabled = !self.state.background_compact_enabled;
         if self.save() {
-            self.show_success_toast(tr!(
-                "settings.option_updated",
-                name = tr!("settings.auto_compact_threshold")
-            ));
+            self.show_success_toast(if self.state.background_compact_enabled {
+                tr!("settings.toggle_on", name = tr!("settings.background_compact"))
+            } else {
+                tr!("settings.toggle_off", name = tr!("settings.background_compact"))
+            });
         }
         cx.notify();
     }
 
-    /// Commit the threshold field on Enter. Accepts the same `128k`/`1M`
-    /// forms as the provider window field; anything else toasts and
-    /// restores the stored value.
     pub(super) fn confirm_auto_compact_threshold(&mut self, cx: &mut Context<Self>) {
-        let text = self.auto_compact_threshold_input.read(cx).content();
-        match fintwind_client::custom_providers::parse_context_window(&text) {
-            Some(tokens)
-                if tokens >= fintwind_protocol::settings::AUTO_COMPACT_THRESHOLD_TOKENS_MIN =>
-            {
-                self.set_auto_compact_threshold_tokens(tokens, cx)
+        let text = self.auto_compact_threshold_input.read(cx).content().trim();
+        let percent = text.strip_suffix('%').unwrap_or(text).trim().parse::<u8>();
+        if let Some(percent) = percent.ok().filter(|percent| (1..=99).contains(percent)) {
+            if self.state.auto_compact_threshold_percent != percent {
+                self.state.auto_compact_threshold_percent = percent;
+                if self.save() {
+                    self.show_success_toast(tr!(
+                        "settings.option_updated",
+                        name = tr!("settings.auto_compact_threshold")
+                    ));
+                }
             }
-            _ => {
-                self.show_toast(tr!("settings.auto_compact_threshold_invalid"));
-                self.sync_auto_compact_threshold_input(cx);
-                cx.notify();
-            }
+        } else {
+            self.show_toast(tr!("settings.auto_compact_threshold_invalid"));
         }
+        self.sync_auto_compact_threshold_input(cx);
+        cx.notify();
     }
 
     fn sync_auto_compact_threshold_input(&mut self, cx: &mut Context<Self>) {
-        let text = fintwind_client::custom_providers::format_context_window(
-            self.state.auto_compact_threshold_tokens,
-        );
+        let text = format!("{}%", self.state.auto_compact_threshold_percent);
         self.auto_compact_threshold_input.update(cx, |input, cx| {
             input.set_content(text, cx);
         });

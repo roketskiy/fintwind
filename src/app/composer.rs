@@ -3904,6 +3904,7 @@ impl Fintwind {
         let branch_selector = self.render_branch_selector(cx);
 
         let usage_meter = self.render_usage_meter(cx);
+        let auto_compaction = self.render_auto_compaction_badge(cx);
         div()
             .flex_none()
             .px(px(20.0))
@@ -3931,6 +3932,7 @@ impl Fintwind {
                     .child(worktree_selector)
                     .children(branch_selector)
                     .child(div().flex_1())
+                    .children(auto_compaction)
                     .children(usage_meter),
             )
     }

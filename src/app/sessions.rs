@@ -1297,6 +1297,7 @@ impl Fintwind {
     }
 
     pub(super) fn reset_session_runtime(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
+        self.auto_compaction_badges.remove(&session_id);
         if self.state.selected_session == Some(session_id) {
             self.pause_browser_automation(cx);
             self.revoke_all_browser_shares(cx);

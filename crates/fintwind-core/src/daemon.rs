@@ -99,6 +99,7 @@ impl FintwindBackend {
             .parent()
             .context("task database has no parent directory")?;
         let configured = settings.get();
+        settings.publish_opencode_config(&configured)?;
         let root = crate::projectless::configured_workspace_root(&configured, data_directory)?;
         if let Err(error) = crate::projectless::prepare_workspace_root(&configured, data_directory)
         {
@@ -1552,19 +1553,26 @@ impl Backend for FintwindBackend {
             }
             Command::UpdateSettings { settings } => {
                 let _gate = self.settings_update_gate.lock();
+                let previous = self.settings.get();
                 let data_directory = self
                     .task_store
                     .path()
                     .parent()
                     .context("task database has no parent directory")?;
-                let root = if settings.general_workspace_path()
-                    != self.settings.get().general_workspace_path()
-                {
+                let root = if settings.general_workspace_path() != previous.general_workspace_path() {
                     crate::projectless::prepare_workspace_root(&settings, data_directory)?
                 } else {
                     crate::projectless::configured_workspace_root(&settings, data_directory)?
                 };
-                self.settings.replace(settings)?;
+                self.settings.replace(settings.clone())?;
+                if (settings.auto_compact_enabled() != previous.auto_compact_enabled()
+                    || settings.background_compact_enabled() != previous.background_compact_enabled()
+                    || settings.auto_compact_threshold_percent() != previous.auto_compact_threshold_percent())
+                    && let Err(error) = self.settings.publish_opencode_config(&settings)
+                {
+                    self.settings.replace(previous)?;
+                    return Err(error.into());
+                }
                 self.watchdog_enabled.store(self.settings.get().watchdog_enabled(), Ordering::Release);
                 crate::projectless::set_workspace_root(Some(root));
                 // Persisting alone keeps the MCP host on its previous state;

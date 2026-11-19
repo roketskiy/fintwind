@@ -1,4 +1,5 @@
 use crate::theme::ui_px;
+use gpui::{BoxShadow, hsla, relative};
 
 use super::*;
 
@@ -767,12 +768,9 @@ impl Fintwind {
     /// user navigates away.
     pub(super) fn render_active_toast(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         self.start_toast_dismiss_timer(cx);
-        let toast = self
-            .toast
-            .as_ref()
-            .map(|toast| (toast.message.clone(), toast.tone, toast.id));
-        toast.map(|(message, tone, generation)| {
-            let toast = self.render_toast(message, tone, generation, cx);
+        let exiting = self.toast.is_none();
+        self.toast.as_ref().or(self.exiting_toast.as_ref()).map(|state| {
+            let toast = self.render_toast(state, exiting, cx);
             if self.add_project_dialog.is_some() {
                 gpui::deferred(toast)
                     .with_priority(super::add_project_dialog::ADD_PROJECT_LAYER_PRIORITY + 2)
@@ -785,26 +783,28 @@ impl Fintwind {
 
     fn render_toast(
         &self,
-        message: String,
-        tone: ToastTone,
-        generation: u64,
+        state: &ToastState,
+        exiting: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = Theme::current(cx);
+        let tone = state.tone;
+        let generation = state.id;
+        let reduced_motion = cx.reduce_motion();
         let (status_icon, status_color) = match tone {
             ToastTone::Alert => ("icons/alert.svg", theme.danger),
-            ToastTone::Success => ("icons/check.svg", theme.success),
+            ToastTone::Success => ("icons/check.svg", theme.accent),
             ToastTone::Progress(_) => ("icons/loader-circle.svg", theme.accent),
         };
         let palette = MarkdownPalette::from_theme(&theme);
         let text_ctx = MarkdownCtx::new(
             format!("toast-{generation}"),
             &palette,
-            MarkdownMetrics::compact(),
+            MarkdownMetrics::user_message(),
             self.toast_selection.clone(),
         );
         let message = md::render::plain_text(
-            message,
+            state.message.clone(),
             md::render::sans_family(),
             FontWeight::NORMAL,
             theme.text,
@@ -812,38 +812,95 @@ impl Fintwind {
         );
         let dismiss = div()
             .id(SharedString::from(format!("dismiss-toast-{generation}")))
-            .debug_selector(|| "dismiss-notification-toast".into())
-            .tab_index(0)
-            .size(px(26.0))
+            .size(px(28.0))
             .flex_none()
-            .rounded(px(6.0))
+            .rounded(px(10.0))
             .flex()
             .items_center()
             .justify_center()
             .cursor_default()
-            .focus_visible(|style| style.border_1().border_color(theme.accent))
-            .hover(|element| element.bg(theme.overlay))
-            .active(|element| element.bg(theme.overlay_strong))
-            .tooltip(Tooltip::text(tr!("common.dismiss_notification")))
             .child(icon("icons/x.svg", 12.0, theme.text_tertiary))
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.hide_toast();
-                cx.notify();
-                cx.stop_propagation();
-            }))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                if matches!(event.keystroke.key.as_str(), "enter" | "space" | "escape") {
-                    this.hide_toast();
-                    cx.notify();
-                    cx.stop_propagation();
-                }
-            }));
+            .when(!exiting, |dismiss| {
+                dismiss
+                    .debug_selector(|| "dismiss-notification-toast".into())
+                    .track_focus(&self.toast_dismiss_focus)
+                    .tab_index(0)
+                    .focus_visible(|style| style.border_1().border_color(theme.accent))
+                    .hover(|element| element.bg(theme.overlay))
+                    .active(|element| element.bg(theme.overlay_strong))
+                    .tooltip(Tooltip::text(tr!("common.dismiss_notification")))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.dismiss_toast(cx);
+                        cx.stop_propagation();
+                    }))
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space" | "escape") {
+                            this.dismiss_toast(cx);
+                            cx.stop_propagation();
+                        }
+                    }))
+            });
 
-        div()
+        let status = div()
+            .size(px(24.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(8.0))
+            .bg(status_color.opacity(0.12))
+            .child(if matches!(tone, ToastTone::Progress(_)) && !exiting {
+                crate::ui::motion::spin(icon(status_icon, 14.0, status_color))
+            } else {
+                icon(status_icon, 14.0, status_color).into_any_element()
+            });
+        let content = div()
+            .flex_1()
+            .min_w_0()
+            .whitespace_normal()
+            .flex()
+            .flex_col()
+            .gap(px(4.0))
+            .child(message)
+            .when_some(match tone { ToastTone::Progress(percent) => percent, _ => None }, |content, percent| {
+                content.child(ely_gpui_component::motion::ProgressBar::new(
+                    "toast-operation-progress", f32::from(percent) / 100.0,
+                ))
+            });
+        let row = div()
+            .relative()
+            .w_full()
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .child(status)
+            .child(content)
+            .when(tone != ToastTone::Success, |row| row.child(dismiss));
+        let row = if state.finished_progress && !exiting && !reduced_motion {
+            row.with_animation(
+                SharedString::from(format!("toast-result-{generation}")),
+                Animation::new(Duration::from_millis(380)).with_easing(ease_out_quint()),
+                |row, delta| row.top(px(5.0 * (1.0 - delta))).opacity(delta),
+            ).into_any_element()
+        } else {
+            row.into_any_element()
+        };
+        let sheen = (tone == ToastTone::Success && !reduced_motion && !exiting).then(|| {
+            let shine = theme.text.opacity(if theme.is_dark { 0.035 } else { 0.025 });
+            div().absolute().top_0().bottom_0().w(relative(0.28))
+                .bg(linear_gradient(90.0, linear_color_stop(shine.opacity(0.0), 0.0), linear_color_stop(shine, 0.5)))
+                .with_animation(
+                    SharedString::from(format!("toast-sheen-{generation}")),
+                    Animation::new(Duration::from_millis(900)).with_easing(ease_out_quint()),
+                    |sheen, delta| sheen.left(relative(-0.28 + 1.28 * delta)).opacity(1.0 - delta),
+                )
+        });
+
+        let layer = div()
             .id(SharedString::from(format!("toast-layer-{generation}")))
             .absolute()
             .left_0()
-            .top(px(56.0))
+            .top(px(60.0))
             .w_full()
             .px(px(20.0))
             .flex()
@@ -851,52 +908,58 @@ impl Fintwind {
             .child(
                 div()
                     .id(SharedString::from(format!("toast-{generation}")))
-                    .occlude()
+                    .relative()
+                    .overflow_hidden()
+                    .when(!exiting, |card| card.occlude())
                     .max_w(px(560.0))
                     .min_w_0()
-                    .px(px(10.0))
-                    .py(px(7.0))
-                    .rounded(px(10.0))
+                    .min_h(px(40.0))
+                    .pl(px(8.0))
+                    .pr(px(if tone == ToastTone::Success { 12.0 } else { 6.0 }))
+                    .py(px(5.0))
+                    .rounded(px(16.0))
                     .border_1()
-                    .border_color(theme.border_strong)
-                    .bg(theme.raised)
-                    .shadow_lg()
+                    .border_color(theme.border)
+                    .bg(linear_gradient(180.0, linear_color_stop(theme.raised, 0.0), linear_color_stop(theme.surface, 1.0)))
+                    .shadow(vec![
+                        BoxShadow::new(px(0.0), px(16.0), hsla(0.0, 0.0, 0.0, if theme.is_dark { 0.24 } else { 0.08 })).blur_radius(px(36.0)),
+                        BoxShadow::new(px(0.0), px(3.0), hsla(0.0, 0.0, 0.0, if theme.is_dark { 0.16 } else { 0.05 })).blur_radius(px(10.0)),
+                    ])
                     .flex()
                     .items_center()
                     .gap(px(8.0))
-                    .text_size(ui_px(11.5))
-                    .line_height(ui_px(16.0))
+                    .text_size(ui_px(14.0))
+                    .line_height(ui_px(20.0))
                     .text_color(theme.text)
-                    .on_hover(cx.listener(|this, hovering: &bool, _, cx| {
-                        this.set_toast_hovered(*hovering, cx);
-                    }))
-                    .on_click(|_, _, cx| cx.stop_propagation())
-                    .child(md::render::frame_reset(self.toast_selection.clone()))
-                    .child(if matches!(tone, ToastTone::Progress(_)) {
-                        crate::ui::motion::spin(icon(status_icon, 14.0, status_color))
-                    } else {
-                        icon(status_icon, 14.0, status_color).into_any_element()
-                    })
-                    .child(div().flex_1().min_w_0().whitespace_normal().flex().flex_col().gap(px(5.0)).child(message)
-                        .when_some(match tone { ToastTone::Progress(percent) => percent, _ => None }, |content, percent| {
-                            content.child(ely_gpui_component::motion::ProgressBar::new(
-                                "toast-operation-progress", f32::from(percent) / 100.0,
-                            ))
+                    .when(!exiting, |card| {
+                        card.on_hover(cx.listener(|this, hovering: &bool, _, cx| {
+                            this.set_toast_hovered(*hovering, cx);
                         }))
-                    .child(dismiss)
-                    .child(self.toast_selection_input()),
-            )
-            // Keep the toast top-centered just beneath Fintwind's 48px header.
-            // GPUI's animation path honors the system reduce-motion preference
-            // and resolves immediately.
-            .with_animation(
+                        .on_click(|_, _, cx| cx.stop_propagation())
+                        .child(md::render::frame_reset(self.toast_selection.clone()))
+                        .child(self.toast_selection_input())
+                    })
+                    .children(sheen)
+                    .child(row),
+            );
+        if exiting {
+            layer.with_animation(
+                SharedString::from(format!("toast-exit-{generation}")),
+                Animation::new(TOAST_EXIT_DURATION).with_easing(|delta| delta * delta),
+                |element, delta| element.top(px(60.0 - 6.0 * delta)).opacity(1.0 - delta),
+            ).into_any_element()
+        } else if reduced_motion {
+            layer.into_any_element()
+        } else {
+            layer.with_animation(
                 SharedString::from(format!("toast-enter-{generation}")),
-                Animation::new(TOAST_ANIMATION_DURATION).with_easing(ease_out_quint()),
+                Animation::new(Duration::from_millis(500)).with_easing(ease_out_quint()),
                 |element, delta| {
                     element
-                        .top(px(48.0 + 8.0 * delta))
-                        .opacity(0.4 + 0.6 * delta)
+                        .top(px(50.0 + 10.0 * delta))
+                        .opacity(delta)
                 },
-            )
+            ).into_any_element()
+        }
     }
 }

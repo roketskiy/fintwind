@@ -273,8 +273,7 @@ impl Fintwind {
     fn finish_add_project_toast(&mut self, message: String, tone: ToastTone, always_show: bool) {
         let clone_toast = self.add_project_dialog.as_mut().and_then(|dialog| dialog.clone_toast.take());
         if let Some(toast) = self.toast.as_mut().filter(|toast| Some(toast.id) == clone_toast) {
-            toast.tone = tone;
-            toast.message = message;
+            toast.finish_progress(message, tone);
         } else if always_show || clone_toast.is_some() {
             self.show_toast_with_tone(message, tone);
         }

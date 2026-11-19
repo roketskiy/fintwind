@@ -1033,6 +1033,7 @@ branches.choose: 选择分支
 branches.checked_out_elsewhere: 已在另一个工作树中检出
 workspace.work_in: 工作位置
 workspace.local: 本地
+workspace.current_worktree: 当前工作区
 workspace.new_worktree: 新建工作树
 workspace.workspace: 工作区
 workspace.worktree: 工作树

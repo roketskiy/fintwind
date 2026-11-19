@@ -1208,6 +1208,11 @@ fn settings_for_client(settings: crate::DaemonSettings) -> crate::DaemonSettings
                 if let Ok(shell) = fintwind_client::opencode_shell::load() {
                     capabilities.push(OPENCODE_SHELL_KEY);
                     settings.extra.insert(OPENCODE_SHELL_KEY.into(), serde_json::json!(shell));
+                    let options: Vec<_> = fintwind_client::opencode_shell::detect()
+                        .into_iter()
+                        .map(|option| serde_json::json!({"label": option.label, "path": option.path}))
+                        .collect();
+                    settings.extra.insert(OPENCODE_SHELL_OPTIONS_KEY.into(), serde_json::json!(options));
                 }
                 if let Ok(todo) = fintwind_client::opencode_todo::load() {
                     capabilities.push(OPENCODE_TODO_KEY);

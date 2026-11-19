@@ -3761,6 +3761,12 @@ impl Fintwind {
         let can_configure_workspace = self
             .selected_session()
             .is_some_and(|session| !session.has_started() && !session.is_busy());
+        let workspace = self
+            .selected_session()
+            .map(|session| session.workspace.clone())
+            .unwrap_or_default();
+        let local_selected = workspace.is_local();
+        let worktree_selected = workspace.is_worktree();
 
         let project_handle = self.menu_handle("workspace-project", cx);
         let project_trigger = MenuChip::new("workspace-project")
@@ -3831,74 +3837,41 @@ impl Fintwind {
                         .icon("icons/x.svg")
                         .selected(projectless_selected),
                     );
+                    if !projectless_selected {
+                        items.push(MenuItem::Separator);
+                        let local = weak.clone();
+                        items.push(
+                            MenuItem::new(tr!("workspace.current_worktree"), move |_, cx| {
+                                if !local_selected {
+                                    let _ = local.update(cx, |this, cx| {
+                                        this.select_workspace(SessionWorkspace::Local, cx);
+                                    });
+                                }
+                            })
+                            .icon("icons/folder.svg")
+                            .selected(local_selected),
+                        );
+                        let worktree = weak.clone();
+                        items.push(
+                            MenuItem::new(tr!("workspace.new_worktree"), move |_, cx| {
+                                if !worktree_selected {
+                                    let _ = worktree.update(cx, |this, cx| {
+                                        this.select_workspace(
+                                            SessionWorkspace::NewWorktree { base_branch: None },
+                                            cx,
+                                        );
+                                    });
+                                }
+                            })
+                            .icon("icons/fork.svg")
+                            .selected(worktree_selected),
+                        );
+                    }
                     items
                 },
             )
         } else {
             project_trigger.into_any_element()
-        };
-
-        let workspace = self
-            .selected_session()
-            .map(|session| session.workspace.clone())
-            .unwrap_or_default();
-        let workspace_label = match &workspace {
-            SessionWorkspace::Local => SharedString::from(tr!("workspace.local")),
-            SessionWorkspace::NewWorktree { .. } => {
-                SharedString::from(tr!("workspace.new_worktree"))
-            }
-            SessionWorkspace::Worktree { branch, .. } => SharedString::from(branch.clone()),
-        };
-        let workspace_icon = if workspace.is_local() {
-            "icons/laptop.svg"
-        } else {
-            "icons/fork.svg"
-        };
-        let worktree_handle = self.menu_handle("workspace-worktree", cx);
-        let worktree_trigger = MenuChip::new("workspace-worktree")
-            .icon(workspace_icon, theme.text_tertiary)
-            .label(workspace_label)
-            .caret(false)
-            .disabled(!can_configure_workspace)
-            .selected(can_configure_workspace && worktree_handle.is_open())
-            .max_w(px(180.0));
-        let worktree_selector = if can_configure_workspace {
-            let local_selected = workspace.is_local();
-            let worktree_selected = workspace.is_worktree();
-            let weak = cx.entity().downgrade();
-            dropdown_menu(
-                worktree_trigger,
-                "workspace-worktree-menu",
-                &worktree_handle,
-                MenuAlign::AboveLeft,
-                move |_| {
-                    let local = weak.clone();
-                    let worktree = weak.clone();
-                    vec![
-                        MenuItem::Header(tr!("workspace.work_in").into()),
-                        MenuItem::new(tr!("workspace.local"), move |_, cx| {
-                            let _ = local.update(cx, |this, cx| {
-                                this.select_workspace(SessionWorkspace::Local, cx);
-                            });
-                        })
-                        .icon("icons/laptop.svg")
-                        .selected(local_selected),
-                        MenuItem::new(tr!("workspace.new_worktree"), move |_, cx| {
-                            let _ = worktree.update(cx, |this, cx| {
-                                this.select_workspace(
-                                    SessionWorkspace::NewWorktree { base_branch: None },
-                                    cx,
-                                );
-                            });
-                        })
-                        .icon("icons/fork.svg")
-                        .selected(worktree_selected)
-                        .disabled(projectless_selected),
-                    ]
-                },
-            )
-        } else {
-            worktree_trigger.into_any_element()
         };
 
         let branch_selector = self.render_branch_selector(cx);
@@ -3929,7 +3902,6 @@ impl Fintwind {
                     .text_size(ui_px(11.5))
                     .line_height(ui_px(15.0))
                     .child(project_selector)
-                    .child(worktree_selector)
                     .children(branch_selector)
                     .child(div().flex_1())
                     .children(auto_compaction)

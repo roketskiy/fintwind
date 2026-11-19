@@ -2105,6 +2105,8 @@ workspace.work_in:
   en: Work in
 workspace.local:
   en: Local
+workspace.current_worktree:
+  en: Current workspace
 workspace.new_worktree:
   en: New worktree
 workspace.workspace:

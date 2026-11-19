@@ -57,6 +57,15 @@ pub(super) fn settings_card(theme: Theme) -> Div {
         .shadow_xs()
 }
 
+pub(super) fn settings_section(title: String, card: Div, theme: Theme) -> Div {
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .child(settings_group_title(title, theme))
+        .child(card)
+}
+
 /// The quiet square carrying a row's icon.
 pub(super) fn settings_icon_chip(path: &'static str, theme: Theme) -> Div {
     div()
@@ -341,6 +350,8 @@ impl Fintwind {
             self.reset_providers_page(cx);
         }
         if page == SettingsPage::General && !self.settings_machine_selected() {
+            self.network_proxy_input.update(cx, |input, _| input.set_read_only(false));
+            self.auto_compact_threshold_input.update(cx, |input, _| input.set_read_only(false));
             // The threshold field always shows the stored value on entry;
             // a rejected edit restores it here as well as on commit.
             self.sync_auto_compact_threshold_input(cx);
@@ -348,6 +359,10 @@ impl Fintwind {
             self.load_opencode_shell(cx);
             self.load_image_generate(cx);
             self.manage_opencode(OpenCodeManagementAction::Check, cx);
+        }
+        if page == SettingsPage::General && self.settings_machine_selected() {
+            self.sync_ssh_general_inputs(cx);
+            self.load_ssh_image_models(cx);
         }
         if page == SettingsPage::McpServers || page == SettingsPage::McpMarket {
             // Same contract as Providers: transient editors drop, the roster
@@ -806,8 +821,8 @@ impl Fintwind {
             },
         );
         div()
-            .child(settings_group_title(tr!("settings.group_environment"), theme))
-            .child(
+            .child(settings_section(
+                tr!("settings.group_environment"),
                 settings_card(theme)
                     .child(self.render_opencode_version_setting(cx))
                     .child(settings_separator(theme))
@@ -880,9 +895,10 @@ impl Fintwind {
                             )
                         }),
                     ),
-            )
-            .child(settings_group_title(tr!("settings.group_features"), theme))
-            .child(
+                theme,
+            ))
+            .child(settings_section(
+                tr!("settings.group_features"),
                 settings_card(theme)
                     .child(
                         settings_row(
@@ -1124,9 +1140,10 @@ impl Fintwind {
                             },
                         )),
                     ),
-            )
-            .child(settings_group_title(tr!("settings.group_context"), theme))
-            .child(
+                theme,
+            ))
+            .child(settings_section(
+                tr!("settings.group_context"),
                 settings_card(theme)
                     .child(
                         settings_row(
@@ -1184,9 +1201,10 @@ impl Fintwind {
                             |this: &mut Self, _, cx| this.toggle_background_compact(cx),
                         )),
                     ),
-            )
-            .child(settings_group_title(tr!("settings.group_data"), theme))
-            .child(
+                theme,
+            ))
+            .child(settings_section(
+                tr!("settings.group_data"),
                 settings_card(theme)
                     .child(self.render_general_workspace_setting(cx))
                     .child(settings_separator(theme))
@@ -1198,7 +1216,8 @@ impl Fintwind {
                     ))
                     .child(settings_separator(theme))
                     .child(self.render_session_cleanup(None, cx)),
-            )
+                theme,
+            ))
             .child(
                 div()
                     .mt(px(12.0))
@@ -2491,6 +2510,10 @@ impl Fintwind {
     }
 
     pub(super) fn confirm_auto_compact_threshold(&mut self, cx: &mut Context<Self>) {
+        if self.settings_machine_selected() {
+            self.confirm_ssh_general_input(fintwind_client::ssh::GeneralSetting::CompactThreshold, cx);
+            return;
+        }
         let text = self.auto_compact_threshold_input.read(cx).content().trim();
         let percent = text.strip_suffix('%').unwrap_or(text).trim().parse::<u8>();
         if let Some(percent) = percent.ok().filter(|percent| (1..=99).contains(percent)) {
@@ -2544,6 +2567,10 @@ impl Fintwind {
     /// scheme is assumed) and explicit `http(s)://` addresses; an empty field
     /// clears the proxy; anything else toasts and restores the stored value.
     pub(super) fn confirm_network_proxy(&mut self, cx: &mut Context<Self>) {
+        if self.settings_machine_selected() {
+            self.confirm_ssh_general_input(fintwind_client::ssh::GeneralSetting::NetworkProxy, cx);
+            return;
+        }
         let text = self.network_proxy_input.read(cx).content().to_owned();
         match fintwind_protocol::http::normalize_proxy_url(&text) {
             Some(url) => self.set_network_proxy_url(Some(url), cx),

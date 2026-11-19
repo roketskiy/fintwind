@@ -18,8 +18,10 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.3.2]
+
 ```
-+--------------- [ UNRELEASED ] ---------------+
++----------------- [ 0.3.2 ] ------------------+
 |                                              |
 | opencode 2  支持到 2.3.2                     |
 |                                              |

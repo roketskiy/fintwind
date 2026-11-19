@@ -3041,6 +3041,7 @@ impl Fintwind {
         let network_proxy_input = cx.new(|cx| {
             ComposerInput::new(window, cx)
                 .search_field()
+                .submit_empty()
                 .placeholder(tr!("settings.network_proxy_placeholder"))
         });
         let provider_form_name = cx.new(|cx| {

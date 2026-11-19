@@ -46,6 +46,7 @@ impl DaemonSettings {
     pub fn discard_legacy_app_keys(&mut self) {
         for key in [
             GENERAL_SETTINGS_CAPABILITIES_KEY,
+            OPENCODE_SHELL_OPTIONS_KEY,
             "analytics_enabled",
             "favorite_models",
             "theme",
@@ -127,6 +128,7 @@ impl DaemonSettings {
 pub const SCHEDULED_TOOLS_ENABLED_KEY: &str = "scheduled_tools_enabled";
 pub const GENERAL_SETTINGS_CAPABILITIES_KEY: &str = "general_settings_capabilities";
 pub const OPENCODE_SHELL_KEY: &str = "opencode_shell";
+pub const OPENCODE_SHELL_OPTIONS_KEY: &str = "opencode_shell_options";
 pub const OPENCODE_TODO_KEY: &str = "opencode_todo";
 pub const OPENCODE_IMAGE_MODEL_KEY: &str = "opencode_image_model";
 pub const SESSION_CLEANUP_CAPABILITY: &str = "session_cleanup";

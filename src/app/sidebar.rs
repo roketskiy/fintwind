@@ -1875,12 +1875,7 @@ impl Fintwind {
                     .clone()
                     .cached(StyleRefinement::default().flex_1().min_w(px(0.0)).h_full()),
             )
-            .children(self.ssh_project_machine().map(|machine| {
-                let label = if self.daemon.client().is_disconnected() {
-                    format!("{machine} · {}", tr!("ssh.offline"))
-                } else {
-                    machine.to_owned()
-                };
+            .children((self.ssh_project_machine().is_some() && self.daemon.client().is_disconnected()).then(|| {
                 div()
                     .flex_none()
                     .max_w(px(160.0))
@@ -1888,7 +1883,7 @@ impl Fintwind {
                     .truncate()
                     .text_size(ui_px(11.0))
                     .text_color(theme.text_muted)
-                    .child(label)
+                    .child(tr!("ssh.offline"))
             }))
     }
     pub(super) fn render_empty_state(&self, centered: bool, cx: &mut Context<Self>) -> Div {

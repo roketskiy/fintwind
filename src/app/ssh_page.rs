@@ -104,6 +104,9 @@ pub(super) struct SshPage {
     general_pending: bool,
     general_loading: RefCell<Option<LoadingDelay<(Uuid, bool)>>>,
     general_error: Option<(Uuid, bool, String)>,
+    general_image_models: HashMap<Uuid, Vec<fintwind_client::models_dev::ImageModelChoice>>,
+    general_image_loading: HashSet<Uuid>,
+    general_image_errors: HashSet<Uuid>,
     opencode_action: Option<(Uuid, OpenCodeManagementAction)>,
     opencode_updates: HashMap<Uuid, (PathBuf, String)>,
     #[cfg(test)]
@@ -1421,6 +1424,9 @@ impl Fintwind {
                             this.ssh.opencode_installed.insert(id, installed);
                         }
                         this.ssh.remote_settings.insert(id, connection.settings());
+                        if this.ssh.machine == Some(id) && this.settings_page == SettingsPage::General {
+                            this.sync_ssh_general_inputs(cx);
+                        }
                         if let Some(current) = this.ssh.connections.get_mut(&id)
                             && this.ssh.workspaces.contains_key(&id)
                         {
@@ -1433,6 +1439,9 @@ impl Fintwind {
                             this.ssh.ready.insert(id);
                         } else {
                             this.ssh.ready.remove(&id);
+                        }
+                        if this.ssh.machine == Some(id) && this.settings_page == SettingsPage::General {
+                            this.load_ssh_image_models(cx);
                         }
                         if this.ssh.machine == Some(id)
                             && this.mode == WorkspaceMode::Settings
@@ -1739,6 +1748,8 @@ impl Fintwind {
                                     app.reset_provider_auth_target(cx);
                                     app.ssh.mcp = Default::default();
                                     app.reset_settings_rosters(cx);
+                                    app.ssh.general_edit = None;
+                                    app.ssh.general_error = None;
                                     app.ssh.machine = id;
                                     app.reset_skills_machine(cx);
                                     app.open_settings_page(app.settings_page, cx);
@@ -1751,6 +1762,110 @@ impl Fintwind {
                 },
             ))
             .into_any_element()
+    }
+
+    pub(super) fn sync_ssh_general_inputs(&mut self, cx: &mut Context<Self>) {
+        self.sync_ssh_general_input(tunnel::GeneralSetting::NetworkProxy, cx);
+        self.sync_ssh_general_input(tunnel::GeneralSetting::CompactThreshold, cx);
+    }
+
+    fn sync_ssh_general_input(&mut self, field: tunnel::GeneralSetting, cx: &mut Context<Self>) {
+        let Some(settings) = self.ssh.machine.and_then(|id| self.ssh.remote_settings.get(&id))
+        else {
+            return;
+        };
+        match field {
+            tunnel::GeneralSetting::NetworkProxy => {
+                let proxy = settings.network_proxy_url().unwrap_or_default().to_owned();
+                self.network_proxy_input
+                    .update(cx, |input, cx| input.set_content(proxy, cx));
+            }
+            tunnel::GeneralSetting::CompactThreshold => {
+                let threshold = format!("{}%", settings.auto_compact_threshold_percent());
+                self.auto_compact_threshold_input
+                    .update(cx, |input, cx| input.set_content(threshold, cx));
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn load_ssh_image_models(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.ssh.machine else {
+            return;
+        };
+        if self.ssh.general_image_loading.contains(&id)
+            || !self.ssh.remote_settings.get(&id).is_some_and(|settings| {
+                tunnel::GeneralSetting::ImageModel.supported_by(settings)
+            })
+        {
+            return;
+        }
+        let Some(client) = self.ssh_client_for(id) else {
+            return;
+        };
+        self.ssh.general_image_loading.insert(id);
+        self.ssh.general_image_errors.remove(&id);
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let (binary, directory) = tunnel::opencode_workspace(&client)?;
+                    match client.request_with_timeout(
+                        Uuid::nil(),
+                        Uuid::nil(),
+                        fintwind_client::Command::FetchImageModels { binary, directory },
+                        Duration::from_secs(90),
+                    )? {
+                        fintwind_client::ResponsePayload::Json { value } => Ok(
+                            serde_json::from_value::<Vec<fintwind_client::models_dev::ImageModelChoice>>(value)?,
+                        ),
+                        _ => anyhow::bail!("Invalid image model inventory"),
+                    }
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.ssh.general_image_loading.remove(&id);
+                match result {
+                    Ok(models) => {
+                        this.ssh.general_image_models.insert(id, models);
+                    }
+                    Err(error) => {
+                        this.ssh.general_image_errors.insert(id);
+                        if this.ssh.machine == Some(id)
+                            && this.mode == WorkspaceMode::Settings
+                            && this.settings_page == SettingsPage::General
+                        {
+                            this.show_toast(tr!(
+                                "settings.image_generation_load_failed",
+                                error = error.to_string()
+                            ));
+                        }
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(super) fn confirm_ssh_general_input(
+        &mut self,
+        field: tunnel::GeneralSetting,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(id) = self.ssh.machine else {
+            return;
+        };
+        let value = match field {
+            tunnel::GeneralSetting::NetworkProxy => {
+                self.network_proxy_input.read(cx).content().to_owned()
+            }
+            tunnel::GeneralSetting::CompactThreshold => {
+                self.auto_compact_threshold_input.read(cx).content().to_owned()
+            }
+            _ => return,
+        };
+        self.write_ssh_general(id, field, value, false, cx);
     }
 
     fn save_ssh_general(&mut self, cx: &mut Context<Self>) {
@@ -1810,6 +1925,11 @@ impl Fintwind {
                                 });
                             }
                             app.ssh.remote_settings.insert(id, settings);
+                            if app.ssh.machine == Some(id)
+                                && matches!(field, tunnel::GeneralSetting::NetworkProxy | tunnel::GeneralSetting::CompactThreshold)
+                            {
+                                app.sync_ssh_general_input(field, cx);
+                            }
                             if let Some(opencode) = opencode {
                                 app.ssh.opencode_updates.remove(&id);
                                 app.ssh.opencode_installed.remove(&id);
@@ -1851,6 +1971,11 @@ impl Fintwind {
                                 app.ssh.general_error = Some((id, true, message.clone()));
                             }
                             app.show_toast(message);
+                            if app.ssh.machine == Some(id)
+                                && matches!(field, tunnel::GeneralSetting::NetworkProxy | tunnel::GeneralSetting::CompactThreshold)
+                            {
+                                app.sync_ssh_general_input(field, cx);
+                            }
                         }
                     }
                 } else {
@@ -1988,9 +2113,9 @@ impl Fintwind {
         let Some(id) = self.ssh.machine else {
             return div().into_any_element();
         };
-        let Some(profile) = self.ssh.profiles.iter().find(|p| p.id == id) else {
+        if !self.ssh.profiles.iter().any(|profile| profile.id == id) {
             return div().into_any_element();
-        };
+        }
         let ready = self.ssh.ready.contains(&id);
         let saving = self.ssh.general_edit.is_some();
         let phase = ssh_wait_phase(
@@ -2000,12 +2125,7 @@ impl Fintwind {
             cx,
         );
         let settings = self.ssh.remote_settings.get(&id);
-        let mut body = div().mt(px(8.0)).flex().flex_col().gap(px(12.0)).child(
-            div()
-                .text_size(ui_px(12.0))
-                .text_color(theme.text_secondary)
-                .child(profile.name.clone()),
-        );
+        let mut body = div().flex().flex_col();
         if !ready {
             body = body.child(
                 div()
@@ -2020,16 +2140,23 @@ impl Fintwind {
         }
         if let Some(settings) = settings {
             use tunnel::GeneralSetting;
-            use fintwind_protocol::settings::{OPENCODE_IMAGE_MODEL_KEY, OPENCODE_SHELL_KEY, OPENCODE_TODO_KEY, SESSION_CLEANUP_CAPABILITY};
+            use fintwind_protocol::settings::{OPENCODE_IMAGE_MODEL_KEY, OPENCODE_SHELL_KEY, OPENCODE_SHELL_OPTIONS_KEY, OPENCODE_TODO_KEY, SESSION_CLEANUP_CAPABILITY};
             use super::settings::{
-                settings_card, settings_group_title, settings_row, settings_separator,
+                settings_card, settings_section, settings_row, settings_separator,
             };
-            for (field, key, glyph, group, label, value) in [
+            let mut environment = Vec::<AnyElement>::new();
+            let mut opencode_version = None;
+            let mut opencode_binary = None;
+            let mut features = Vec::<AnyElement>::new();
+            let mut context = Vec::<AnyElement>::new();
+            let mut data = Vec::<AnyElement>::new();
+            let mut image_model = None;
+            let mut threshold = None;
+            for (field, key, glyph, label, value) in [
                 (
                     tunnel::GeneralSetting::OpenCodePath,
                     "ssh-opencode",
                     "icons/terminal.svg",
-                    Some(tr!("settings.group_environment")),
                     tr!("settings.opencode_binary"),
                     settings.opencode_binary_path().map(str::to_owned),
                 ),
@@ -2037,7 +2164,6 @@ impl Fintwind {
                     GeneralSetting::NetworkProxy,
                     "ssh-network-proxy",
                     "icons/globe.svg",
-                    None,
                     tr!("settings.network_proxy"),
                     settings.network_proxy_url().map(str::to_owned),
                 ),
@@ -2045,7 +2171,6 @@ impl Fintwind {
                     GeneralSetting::OpenCodeShell,
                     "ssh-opencode-shell",
                     "icons/terminal-square.svg",
-                    None,
                     tr!("settings.opencode_shell"),
                     settings.extra.get(OPENCODE_SHELL_KEY).and_then(serde_json::Value::as_str).map(str::to_owned),
                 ),
@@ -2053,7 +2178,6 @@ impl Fintwind {
                     GeneralSetting::ImageModel,
                     "ssh-image-model",
                     "icons/provider-opencode.svg",
-                    None,
                     tr!("settings.image_generation_model"),
                     settings.extra.get(OPENCODE_IMAGE_MODEL_KEY).and_then(serde_json::Value::as_str).map(str::to_owned),
                 ),
@@ -2061,7 +2185,6 @@ impl Fintwind {
                     GeneralSetting::CompactThreshold,
                     "ssh-compact-threshold",
                     "icons/gauge.svg",
-                    None,
                     tr!("settings.auto_compact_threshold"),
                     Some(format!("{}%", settings.auto_compact_threshold_percent())),
                 ),
@@ -2069,15 +2192,14 @@ impl Fintwind {
                     tunnel::GeneralSetting::Workspace,
                     "ssh-workspace",
                     "icons/folder.svg",
-                    Some(tr!("settings.group_data")),
                     tr!("settings.general_workspace"),
                     settings.general_workspace_path().map(str::to_owned),
                 ),
             ] {
                 if field == GeneralSetting::CompactThreshold {
                     let disabled = !ready || self.ssh.general_pending || saving;
-                    let mut toggle = |key, glyph, label, field, enabled: bool| {
-                        settings_row(glyph, label, None, theme).child(crate::ui::toggle_switch(
+                    let mut toggle = |key, glyph, label, description, field, enabled: bool| {
+                        settings_row(glyph, label, description, theme).child(crate::ui::toggle_switch(
                             key,
                             enabled,
                             disabled,
@@ -2089,49 +2211,42 @@ impl Fintwind {
                             },
                         ))
                     };
-                    let features = [
-                        ("ssh-todo", "icons/list.svg", tr!("settings.todo_list"), GeneralSetting::Todo, settings.extra.get(OPENCODE_TODO_KEY).and_then(serde_json::Value::as_bool).unwrap_or(false)),
-                        ("ssh-browser-tools", "icons/globe.svg", tr!("settings.browser_tools"), GeneralSetting::BrowserTools, settings.browser_tools_enabled()),
-                        ("ssh-scheduled-tools", "icons/calendar.svg", tr!("settings.scheduled_tools"), GeneralSetting::ScheduledTools, settings.scheduled_tools_enabled()),
-                        ("ssh-watchdog", "icons/alert.svg", tr!("settings.watchdog"), GeneralSetting::Watchdog, settings.watchdog_enabled()),
+                    let feature_toggles = [
+                        ("ssh-browser-tools", "icons/app-window.svg", tr!("settings.browser_tools"), Some(tr!("settings.browser_tools_description")), GeneralSetting::BrowserTools, settings.browser_tools_enabled()),
+                        ("ssh-todo", "icons/list.svg", tr!("settings.todo_list"), Some(tr!("settings.todo_list_description")), GeneralSetting::Todo, settings.extra.get(OPENCODE_TODO_KEY).and_then(serde_json::Value::as_bool).unwrap_or(false)),
+                        ("ssh-scheduled-tools", "icons/clock.svg", tr!("settings.scheduled_tools"), Some(tr!("settings.scheduled_tools_description")), GeneralSetting::ScheduledTools, settings.scheduled_tools_enabled()),
+                        ("ssh-watchdog", "icons/alert.svg", tr!("settings.watchdog"), None, GeneralSetting::Watchdog, settings.watchdog_enabled()),
                     ];
-                    let context = [
-                        ("ssh-auto-compact", "icons/archive.svg", tr!("settings.auto_compact"), GeneralSetting::AutoCompact, settings.auto_compact_enabled()),
-                        ("ssh-background-compact", "icons/archive.svg", tr!("settings.background_compact"), GeneralSetting::BackgroundCompact, settings.background_compact_enabled()),
+                    let context_toggles = [
+                        ("ssh-auto-compact", "icons/archive.svg", tr!("settings.auto_compact"), Some(tr!("settings.auto_compact_description")), GeneralSetting::AutoCompact, settings.auto_compact_enabled()),
+                        ("ssh-background-compact", "icons/archive.svg", tr!("settings.background_compact"), Some(tr!("settings.background_compact_description")), GeneralSetting::BackgroundCompact, settings.background_compact_enabled()),
                     ];
-                    for (group, rows, has_threshold) in [
-                        (tr!("settings.group_features"), features.as_slice(), false),
-                        (tr!("settings.group_context"), context.as_slice(), field.supported_by(settings)),
+                    for (target, rows) in [
+                        (&mut features, feature_toggles.as_slice()),
+                        (&mut context, context_toggles.as_slice()),
                     ] {
-                        let mut rows = rows.iter().filter(|row| row.3.supported_by(settings)).peekable();
-                        if rows.peek().is_none() {
-                            if has_threshold {
-                                body = body.child(settings_group_title(group, theme));
-                            }
-                            continue;
+                        for (key, glyph, label, description, setting, enabled) in rows.iter().filter(|row| row.4.supported_by(settings)) {
+                            target.push(toggle(*key, *glyph, label.clone(), description.clone(), *setting, *enabled).into_any_element());
                         }
-                        let mut card = settings_card(theme);
-                        for (index, (key, glyph, label, setting, enabled)) in rows.enumerate() {
-                            if index > 0 {
-                                card = card.child(settings_separator(theme));
-                            }
-                            card = card.child(toggle(*key, *glyph, label.clone(), *setting, *enabled));
-                        }
-                        body = body.child(settings_group_title(group, theme)).child(card);
                     }
                 }
                 if !field.supported_by(settings) {
                     continue;
                 }
-                let description = value.clone().or_else(|| match field {
-                    GeneralSetting::OpenCodeShell => Some(tr!("settings.shell_default")),
-                    GeneralSetting::ImageModel => Some(tr!("settings.image_generation_model_auto")),
+                let description = match field {
+                    GeneralSetting::NetworkProxy => Some(tr!("settings.network_proxy_description")),
+                    GeneralSetting::CompactThreshold => Some(tr!("settings.auto_compact_threshold_description")),
+                    GeneralSetting::OpenCodeShell if !settings.extra.contains_key(OPENCODE_SHELL_OPTIONS_KEY) => value.clone().or_else(|| Some(tr!("settings.shell_default"))),
+                    GeneralSetting::OpenCodeShell => Some(tr!("settings.opencode_shell_description")),
+                    GeneralSetting::ImageModel => Some(tr!("settings.image_generation_model_description")),
+                    _ => value.clone().or_else(|| match field {
                     GeneralSetting::OpenCodePath => Some(tr!("settings.opencode_binary_auto")),
                     GeneralSetting::Workspace => Some(tr!("common.default")),
                     _ => None,
-                });
+                    }),
+                };
                 let mut row = settings_row(glyph, label, description, theme);
-                let mut card = settings_card(theme);
+                let card = div().w_full().flex().flex_col();
                 let editing = self
                     .ssh
                     .general_edit
@@ -2160,8 +2275,7 @@ impl Fintwind {
                         (Check, !missing, "ssh-opencode-check", tr!("settings.opencode_check")),
                         (Update, update.is_some(), "ssh-opencode-update", tr!("settings.opencode_update")),
                     ];
-                    card = card
-                        .child(
+                    opencode_version = Some(
                             settings_row(
                                 "icons/provider-opencode.svg",
                                 "OpenCode".into(),
@@ -2186,14 +2300,104 @@ impl Fintwind {
                                     active && phase == LoadingPhase::Visible,
                                     move |app, cx| app.manage_ssh_opencode(id, action, cx),
                                 ))
-                            })),
-                        )
-                        .child(settings_separator(theme));
+                            })).into_any_element(),
+                        );
                 }
-                if ready && editing.is_none() {
+                let direct_input = match field {
+                    GeneralSetting::NetworkProxy => Some(("ssh-network-proxy-field", self.network_proxy_input.clone(), 220.0)),
+                    GeneralSetting::CompactThreshold => Some(("ssh-auto-compact-threshold-field", self.auto_compact_threshold_input.clone(), 120.0)),
+                    _ => None,
+                };
+                if field == GeneralSetting::OpenCodeShell && settings.extra.get(OPENCODE_SHELL_OPTIONS_KEY).is_some_and(serde_json::Value::is_array) {
+                    let selected = value.clone();
+                    let options = settings.extra.get(OPENCODE_SHELL_OPTIONS_KEY).and_then(serde_json::Value::as_array)
+                        .into_iter().flatten().filter_map(|option| Some((
+                            option.get("label")?.as_str()?.to_owned(),
+                            option.get("path")?.as_str()?.to_owned(),
+                        ))).collect::<Vec<_>>();
+                    let label = selected.as_ref().map(|path| options.iter().find(|(_, option)| option == path)
+                        .map(|(label, _)| label.clone()).unwrap_or_else(|| path.clone()))
+                        .unwrap_or_else(|| tr!("settings.shell_default"));
+                    let handle = self.menu_handle("ssh-opencode-shell-selector", cx);
+                    let weak = cx.entity().downgrade();
+                    row = row.child(dropdown_menu(
+                        MenuChip::new("ssh-opencode-shell-selector").label(label).outlined()
+                            .selected(handle.is_open()).w(px(220.0)).justify_between()
+                            .disabled(!ready || self.ssh.general_pending || saving),
+                        "ssh-opencode-shell-menu", &handle, MenuAlign::BelowRight,
+                        move |_| {
+                            let target = weak.clone();
+                            let mut items = vec![MenuItem::new(tr!("settings.shell_default"), move |_, cx| {
+                                let _ = target.update(cx, |app, cx| app.write_ssh_general(id, GeneralSetting::OpenCodeShell, String::new(), false, cx));
+                            }).selected(selected.is_none())];
+                            if let Some(path) = selected.as_ref().filter(|path| !options.iter().any(|(_, option)| option == *path)) {
+                                items.push(MenuItem::new(path.clone(), |_, _| {}).disabled(true).selected(true));
+                            }
+                            for (label, path) in &options {
+                                let target = weak.clone();
+                                let path = path.clone();
+                                let is_selected = selected.as_deref() == Some(path.as_str());
+                                items.push(MenuItem::new(label.clone(), move |_, cx| {
+                                    let _ = target.update(cx, |app, cx| app.write_ssh_general(id, GeneralSetting::OpenCodeShell, path.clone(), false, cx));
+                                }).selected(is_selected));
+                            }
+                            items
+                        },
+                    ));
+                } else if field == GeneralSetting::ImageModel {
+                    let selected = value.clone();
+                    let retry = !self.ssh.general_image_models.contains_key(&id)
+                        || self.ssh.general_image_errors.contains(&id);
+                    let models = self.ssh.general_image_models.get(&id).cloned().unwrap_or_default();
+                    let loading = self.ssh.general_image_loading.contains(&id);
+                    let label = selected.as_ref().map(|model| {
+                        models.iter().find(|choice| &choice.id == model)
+                            .map(|choice| choice.label.clone()).unwrap_or_else(|| model.clone())
+                    }).unwrap_or_else(|| tr!("settings.image_generation_model_auto"));
+                    let handle = self.menu_handle("ssh-image-model-selector", cx);
+                    let weak = cx.entity().downgrade();
+                    row = row.child(dropdown_menu(
+                        MenuChip::new("ssh-image-model-selector")
+                            .label(label)
+                            .outlined()
+                            .selected(handle.is_open())
+                            .w(px(220.0))
+                            .justify_between()
+                            .disabled(!ready || self.ssh.general_pending || saving || loading),
+                        "ssh-image-model-menu", &handle, MenuAlign::BelowRight,
+                        move |_| {
+                            let mut items = Vec::new();
+                            let target = weak.clone();
+                            items.push(MenuItem::new(tr!("settings.image_generation_model_auto"), move |_, cx| {
+                                let _ = target.update(cx, |app, cx| app.write_ssh_general(id, GeneralSetting::ImageModel, String::new(), false, cx));
+                            }).selected(selected.is_none()));
+                            if let Some(current) = selected.as_ref().filter(|current| !models.iter().any(|model| &model.id == *current)) {
+                                items.push(MenuItem::new(current.clone(), |_, _| {}).disabled(true).selected(true));
+                            }
+                            for model in &models {
+                                let target = weak.clone();
+                                let model_id = model.id.clone();
+                                items.push(MenuItem::new(format!("{} · {}", model.provider, model.label), move |_, cx| {
+                                    let _ = target.update(cx, |app, cx| app.write_ssh_general(id, GeneralSetting::ImageModel, model_id.clone(), false, cx));
+                                }).selected(selected.as_deref() == Some(model.id.as_str())));
+                            }
+                            if retry {
+                                let target = weak.clone();
+                                items.push(MenuItem::new(tr!("common.retry"), move |_, cx| {
+                                    let _ = target.update(cx, |app, cx| app.load_ssh_image_models(cx));
+                                }));
+                            }
+                            items
+                        },
+                    ));
+                } else if let Some((input_id, input, width)) = direct_input {
+                    input.update(cx, |input, _| input.set_read_only(!ready || self.ssh.general_pending));
+                    row = row.child(TextField::new(input_id, input).w(px(width)));
+                } else if ready && editing.is_none() {
+                    let custom = value.is_some();
                     let value = value.unwrap_or_default();
                     row = row.child(
-                        window_action(cx, key, tr!("ssh.edit"), move |app, window, cx| {
+                        window_action(cx, key, if field == GeneralSetting::OpenCodeShell && !value.is_empty() { value.clone() } else { tr!("ssh.edit") }, move |app, window, cx| {
                             if app.ssh.general_pending
                                 || app.ssh.machine != Some(id)
                                 || app.ssh_client_for(id).is_none()
@@ -2212,9 +2416,20 @@ impl Fintwind {
                         })
                         .disabled(self.ssh.general_pending),
                     );
+                    if custom && matches!(field, GeneralSetting::OpenCodePath | GeneralSetting::Workspace) {
+                        let label = if field == GeneralSetting::OpenCodePath {
+                            tr!("settings.opencode_binary_reset")
+                        } else {
+                            tr!("settings.general_workspace_reset")
+                        };
+                        row = row.child(
+                            action(cx, &theme, if field == GeneralSetting::OpenCodePath { "ssh-opencode-reset" } else { "ssh-workspace-reset" }, label, move |app, cx| {
+                                app.write_ssh_general(id, field, String::new(), false, cx);
+                            }).disabled(self.ssh.general_pending),
+                        );
+                    }
                 }
-                body = body.children(group.map(|group| settings_group_title(group, theme))).child(
-                    card.child(row)
+                let item = card.child(row)
                         .children(editing.map(|(_, _, input)| {
                             let pending = self.ssh.general_pending;
                             let showing = phase == LoadingPhase::Visible;
@@ -2269,11 +2484,50 @@ impl Fintwind {
                                         .child(error.clone())
                                 })
                             },
-                        )),
-                );
+                        )).into_any_element();
+                match field {
+                    GeneralSetting::OpenCodePath => opencode_binary = Some(item),
+                    GeneralSetting::NetworkProxy | GeneralSetting::OpenCodeShell => environment.push(item),
+                    GeneralSetting::ImageModel => image_model = Some(item),
+                    GeneralSetting::CompactThreshold => threshold = Some(item),
+                    GeneralSetting::Workspace => data.push(item),
+                    _ => {}
+                }
+            }
+            if let Some(version) = opencode_version {
+                environment.insert(0, version);
+            }
+            if let Some(binary) = opencode_binary {
+                environment.push(binary);
+            }
+            if let Some(image_model) = image_model {
+                let watchdog = usize::from(GeneralSetting::Watchdog.supported_by(settings));
+                features.insert(features.len().saturating_sub(watchdog), image_model);
+            }
+            if let Some(threshold) = threshold {
+                let background = usize::from(GeneralSetting::BackgroundCompact.supported_by(settings));
+                context.insert(context.len().saturating_sub(background), threshold);
             }
             if settings.supports_general_setting(SESSION_CLEANUP_CAPABILITY) {
-                body = body.child(settings_card(theme).child(self.render_session_cleanup(Some(id), cx)));
+                data.push(self.render_session_cleanup(Some(id), cx).into_any_element());
+            }
+            for (title, rows) in [
+                (tr!("settings.group_environment"), environment),
+                (tr!("settings.group_features"), features),
+                (tr!("settings.group_context"), context),
+                (tr!("settings.group_data"), data),
+            ] {
+                if rows.is_empty() {
+                    continue;
+                }
+                let mut card = settings_card(theme);
+                for (index, row) in rows.into_iter().enumerate() {
+                    if index > 0 {
+                        card = card.child(settings_separator(theme));
+                    }
+                    card = card.child(row);
+                }
+                body = body.child(settings_section(title, card, theme));
             }
         }
         body.into_any_element()

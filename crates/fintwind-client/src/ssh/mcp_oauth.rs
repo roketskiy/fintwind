@@ -1,4 +1,3 @@
-use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -9,21 +8,15 @@ use tokio::task::JoinSet;
 use tokio::time::timeout;
 
 use russh::client::{Handle, Handler};
-
-const LOOPBACK: Ipv4Addr = Ipv4Addr::LOCALHOST;
+use url::{Host, Url};
 
 pub async fn authenticate_mcp<H: Handler + Sync + 'static>(
     session: Handle<H>,
     binary: &str,
     workspace: &str,
     name: &str,
-    port: u16,
     mut authorization_url: impl FnMut(String) + Send,
 ) -> Result<()> {
-    ensure!(
-        port != 0,
-        "specify the callback port configured for the MCP server"
-    );
     ensure!(
         binary.starts_with('/') && workspace.starts_with('/'),
         "use absolute Linux paths"
@@ -33,9 +26,6 @@ pub async fn authenticate_mcp<H: Handler + Sync + 'static>(
         "invalid MCP name"
     );
 
-    let listener = TcpListener::bind((LOOPBACK, port))
-        .await
-        .with_context(|| format!("cannot listen on local 127.0.0.1:{port}"))?;
     let session = Arc::new(session);
     let command = format!(
         "cd {} && exec /usr/bin/timeout -k 5s 350s {} mcp auth {}",
@@ -44,10 +34,46 @@ pub async fn authenticate_mcp<H: Handler + Sync + 'static>(
         shell_arg(name)
     );
     let result = timeout(Duration::from_secs(360), async {
-        let relay = relay_callbacks(session.clone(), listener, port);
+        let (urls, mut pending) = tokio::sync::mpsc::channel(1);
+        let mut publish = |url| {
+            let _ = urls.try_send(url);
+        };
+        let auth = authenticate(&session, command, &mut publish);
+        tokio::pin!(auth);
+        let url = tokio::select! {
+            result = &mut auth => return result,
+            url = pending.recv() => url.context("OpenCode did not provide an authorization URL")?,
+        };
+        let redirect = url
+            .query_pairs()
+            .find(|(key, _)| key == "redirect_uri")
+            .context("The MCP authorization URL has no callback address")?
+            .1;
+        let callback = Url::parse(&redirect).context("Invalid MCP callback address")?;
+        ensure!(
+            callback.scheme() == "http"
+                && callback.username().is_empty()
+                && callback.password().is_none(),
+            "Expected an HTTP loopback OAuth callback"
+        );
+        let host = match callback.host() {
+            Some(Host::Domain("localhost")) => "127.0.0.1".to_owned(),
+            Some(Host::Ipv4(ip)) if ip.is_loopback() => ip.to_string(),
+            Some(Host::Ipv6(ip)) if ip.is_loopback() => ip.to_string(),
+            _ => anyhow::bail!("Expected a loopback OAuth callback"),
+        };
+        let port = callback
+            .port_or_known_default()
+            .filter(|port| *port != 0)
+            .context("Invalid MCP callback port")?;
+        let listener = TcpListener::bind((host.as_str(), port))
+            .await
+            .with_context(|| format!("Cannot open local MCP callback port {port}"))?;
+        authorization_url(url.into());
+        let relay = relay_callbacks(session.clone(), listener, host, port);
         tokio::pin!(relay);
         tokio::select! {
-            result = authenticate(&session, command, &mut authorization_url) => {
+            result = &mut auth => {
                 result?;
                 // The browser response may still be crossing the tunnel when the CLI exits.
                 let _ = timeout(Duration::from_secs(1), &mut relay).await;
@@ -76,7 +102,7 @@ fn shell_arg(value: &str) -> String {
 async fn authenticate<H: Handler>(
     session: &Handle<H>,
     command: String,
-    authorize: &mut (impl FnMut(String) + Send),
+    authorize: &mut (impl FnMut(Url) + Send),
 ) -> Result<()> {
     let mut channel = session.channel_open_session().await?;
     channel.exec(true, command).await?;
@@ -107,7 +133,7 @@ fn receive_url(
     buffer: &mut Vec<u8>,
     bytes: &[u8],
     sent: &mut bool,
-    authorize: &mut impl FnMut(String),
+    authorize: &mut impl FnMut(Url),
 ) -> Result<()> {
     if *sent {
         return Ok(());
@@ -128,9 +154,12 @@ fn receive_url(
                 .next()
                 .unwrap_or_default();
             let url = format!("https://{value}");
-            if url::Url::parse(&url).is_ok_and(|url| {
-                url.has_host() && url.username().is_empty() && url.password().is_none()
-            }) {
+            if let Ok(url) = Url::parse(&url)
+                && url.has_host()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.query_pairs().any(|(key, _)| key == "redirect_uri")
+            {
                 *sent = true;
                 authorize(url);
                 break;
@@ -144,6 +173,7 @@ fn receive_url(
 async fn relay_callbacks<H: Handler + Sync + 'static>(
     session: Arc<Handle<H>>,
     listener: TcpListener,
+    host: String,
     port: u16,
 ) -> Result<()> {
     let mut active = JoinSet::new();
@@ -152,10 +182,11 @@ async fn relay_callbacks<H: Handler + Sync + 'static>(
             connection = listener.accept(), if active.len() < 8 => {
                 let (mut browser, peer) = connection?;
                 let session = session.clone();
+                let host = host.clone();
                 active.spawn(async move {
                     let relay = async {
                         let channel = session.channel_open_direct_tcpip(
-                            "127.0.0.1", u32::from(port), "127.0.0.1", u32::from(peer.port()),
+                            host, u32::from(port), peer.ip().to_string(), u32::from(peer.port()),
                         ).await?;
                         tokio::io::copy_bidirectional(&mut browser, &mut channel.into_stream()).await?;
                         Ok::<_, anyhow::Error>(())

@@ -116,7 +116,6 @@ ssh.remove_body: 从此设备移除「%{name}」的连接配置。远端项目�
 ssh.edit_connection: 编辑连接
 ssh.remove_connection: 移除连接
 mcp.ssh_refresh: 刷新
-mcp.ssh_callback_port: OAuth 回调端口
 mcp.ssh_not_confirmed: 远端 MCP 服务未确认连接。
 ssh.key_changed: 主机指纹已变化，连接已阻止。
 ssh.connect_failed: 无法连接 SSH 服务器。
@@ -550,7 +549,7 @@ mcp.oauth_scope: Scope
 mcp.oauth_client_id_placeholder: "{env:MCP_CLIENT_ID}"
 mcp.oauth_client_secret_placeholder: "{env:MCP_CLIENT_SECRET}"
 mcp.oauth_scope_placeholder: 例如 tools:read tools:execute
-mcp.oauth_note: 远程服务器默认走 OAuth。点「在浏览器中登录」会通过正在运行的 OpenCode 拉起网页授权，凭据存在配置文件之外。只用请求头里的 API 密钥时请关闭。
+mcp.oauth_note: 如果此服务器使用请求头中的 API 密钥，请关闭 OAuth。
 mcp.oauth_sign_in: 在浏览器中登录
 mcp.oauth_cancel: 终止登录
 mcp.oauth_cancelled: 已终止浏览器登录

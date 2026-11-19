@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 from urllib.request import ProxyHandler, build_opener
+from urllib.parse import urlencode
 
 
 def fixture():
@@ -32,7 +33,8 @@ def fixture():
     with HTTPServer(("127.0.0.1", port), Callback) as server:
         server.timeout = 20
         server.received = False
-        print("https://example.invalid/authorize", flush=True)
+        query = urlencode({"redirect_uri": f"http://127.0.0.1:{port}/callback"})
+        print(f"https://example.invalid/authorize?{query}", flush=True)
         server.handle_request()
         return 0 if server.received else 1
 
@@ -59,12 +61,13 @@ def local():
                        input=("#!/usr/bin/python3\n" + source + "\nraise SystemExit(fixture())\n").encode(),
                        check=True, timeout=15)
         command = [args.probe, "--mcp-oauth", args.host, args.port, args.user, args.key,
-                   args.known_hosts, remote_file, remote_dir, f"fixture-{port}", str(port)]
+                   args.known_hosts, remote_file, remote_dir, f"fixture-{port}"]
         with subprocess.Popen(command, stdout=subprocess.PIPE, text=True) as child:
             try:
                 output = queue.Queue()
                 threading.Thread(target=lambda: output.put(child.stdout.readline()), daemon=True).start()
-                if output.get(timeout=20).strip() != "https://example.invalid/authorize":
+                query = urlencode({"redirect_uri": f"http://127.0.0.1:{port}/callback"})
+                if output.get(timeout=20).strip() != f"https://example.invalid/authorize?{query}":
                     raise RuntimeError("the desktop-side client did not receive the authorization URL")
                 browser = build_opener(ProxyHandler({}))
                 with browser.open(f"http://127.0.0.1:{port}/callback?code=fixture&state=fixture", timeout=8) as response:

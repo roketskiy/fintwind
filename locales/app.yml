@@ -272,8 +272,6 @@ settings.ssh:
   en: SSH Connections
 mcp.ssh_refresh:
   en: Refresh
-mcp.ssh_callback_port:
-  en: OAuth callback port
 mcp.ssh_not_confirmed:
   en: The remote MCP server did not confirm the connection.
 ssh.key_changed:
@@ -1147,7 +1145,7 @@ mcp.oauth_client_secret_placeholder:
 mcp.oauth_scope_placeholder:
   en: "e.g. tools:read tools:execute"
 mcp.oauth_note:
-  en: Remote servers use OAuth unless this is disabled. Sign in in browser starts the flow on the running OpenCode server and opens the provider's login page. Credentials stay outside the config file. Disable this for API keys in headers.
+  en: If this server uses an API key in the request headers, turn off OAuth.
 mcp.oauth_sign_in:
   en: Sign in in browser
 mcp.oauth_cancel:

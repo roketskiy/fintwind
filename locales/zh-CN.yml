@@ -282,7 +282,7 @@ settings.local_by_default: 默认存储在本地
 settings.local_by_default_description: 项目、对话和设置均存储在这台电脑上
 settings.image_generation: 图像生成
 settings.image_generation_description: 默认关闭。开启后，模型可用 image_generate 工具创建和编辑图像
-settings.image_generation_model: 默认模型
+settings.image_generation_model: 图片生成默认模型
 settings.image_generation_model_description: 请求未指定模型时使用
 settings.image_generation_model_auto: 自动
 settings.image_generation_load_failed: "读取图像生成设置失败：%{error}"
@@ -1390,6 +1390,8 @@ source_control.pull_done: Pull 完成
 source_control.push_done: Push 完成
 source_control.action_failed: Git 操作失败
 source_control.commit: 提交
+source_control.resolve_conflicts: 请先解决冲突
+source_control.branch_diverged: 分支已分叉
 source_control.commit_to: 提交到 %{branch}
 source_control.commit_message_on_branch: 消息（Ctrl+Enter在“%{branch}”提交）
 source_control.commit_and_push: 提交并推送

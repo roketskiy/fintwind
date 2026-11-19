@@ -1406,27 +1406,36 @@ pub(super) fn fenced_code(content: &str) -> Option<String> {
 
 pub(super) fn activity_header_title(activities: &[ActivityItem]) -> String {
     let now = unix_time_millis();
-    // Span, not a sum: parallel tools must not count the same time twice.
-    // Require timing for every item so old partial records do not undercount.
-    let span = activities.iter().try_fold(None, |span, activity| {
+    let mut first = None::<u64>;
+    let mut last = None::<u64>;
+    let mut partial = false;
+    for activity in activities {
         let (start, end) = if let Some(reasoning) = &activity.reasoning {
-            (reasoning.started_at_ms, Some(reasoning.finished_at_ms))
+            (Some(reasoning.started_at_ms), Some(reasoning.finished_at_ms))
         } else {
-            (activity.started_at_ms?, activity.finished_at_ms)
+            (activity.started_at_ms, activity.finished_at_ms)
         };
-        let end = if activity.complete { end? } else { now };
-        if start == 0 || end < start {
-            return None;
+        let start = start.filter(|start| *start > 0);
+        let end = if activity.complete { end } else { Some(now) }
+            .filter(|end| *end > 0 && start.is_none_or(|start| *end >= start));
+        partial |= start.is_none() || end.is_none();
+        if let Some(start) = start {
+            first = Some(first.map_or(start, |first| first.min(start)));
         }
-        Some(Some(
-            span.map_or((start, end), |(first, last): (u64, u64)| {
-                (first.min(start), last.max(end))
-            }),
-        ))
-    });
-    let duration = span
-        .flatten()
-        .map(|(start, end)| format_worked_duration(end.saturating_sub(start).div_ceil(1000)))
+        if let Some(end) = end {
+            last = Some(last.map_or(end, |last| last.max(end)));
+        }
+    }
+    let duration = first
+        .zip(last)
+        .and_then(|(start, end)| end.checked_sub(start))
+        .map(|span| {
+            if partial {
+                format!("≥ {}", format_worked_duration(span / 1000))
+            } else {
+                format_worked_duration(span.div_ceil(1000))
+            }
+        })
         .unwrap_or_else(|| "—".to_owned());
     let count = activities.len();
     let steps = if count == 1 {
@@ -2143,7 +2152,7 @@ mod message_time_tests {
 
         assert_eq!(activity_header_title(&activities), "2 seconds · 2 steps");
         activities[1].finished_at_ms = None;
-        assert_eq!(activity_header_title(&activities), "— · 2 steps");
+        assert_eq!(activity_header_title(&activities), "≥ 1 second · 2 steps");
         assert_eq!(activity_header_title(&activities[..1]), "1 second · 1 step");
         assert_eq!(activity_action_label(&activities[1]), "bash");
         assert_eq!(

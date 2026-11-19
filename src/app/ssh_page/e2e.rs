@@ -594,7 +594,8 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
             cx.update(|window, cx| {
                 desktop.update(cx, |app, cx| {
                     app.route_sidebar_host_action(window, cx, move |app, window, cx| {
-                        app.activate_local_sidebar_target(local_session_id, true, window, cx);
+                        app.switch_sidebar_host(None, window, cx);
+                        app.select_session(local_session_id, cx);
                     });
                 });
                 if live {
@@ -662,7 +663,7 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
                 }
                 cx.update(|window, cx| {
                     picker.update(cx, |app, cx| {
-                        app.select_ssh_workspace_session(profile_id, project.id, id, window, cx);
+                        app.switch_sidebar_host(Some(profile_id), window, cx);
                         assert!(app.active_ssh_workspace().is_some_and(|active| active == desktop));
                     });
                     assert_eq!(desktop.read(cx).state.selected_session, Some(id));

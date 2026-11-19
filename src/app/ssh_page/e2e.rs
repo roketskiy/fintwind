@@ -315,6 +315,7 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
     }
     let clone_disconnect = std::env::var_os("FINTWIND_SSH_E2E_CLONE_DISCONNECT").is_some();
     if clone_disconnect {
+        eprintln!("SSH E2E: starting clone to interrupt after progress");
         picker_cx.update(|_, cx| {
             repository.update(cx, |input, cx| input.set_content("https://github.com/git/git", cx));
             folder.update(cx, |input, cx| input.set_content("interrupted-clone", cx));
@@ -341,9 +342,9 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
             assert_eq!(input.read(cx).content(), fixture.workspace);
             assert_eq!(folder.read(cx).content(), "interrupted-clone");
         });
+        eprintln!("SSH E2E: interruption confirmed and clone inputs retained");
         let dismiss = picker_cx.debug_bounds("dismiss-notification-toast").unwrap();
         picker_cx.simulate_click(dismiss.center(), gpui::Modifiers::none());
-        picker_cx.run_until_parked();
     }
     let registration_retry = std::env::var_os("FINTWIND_SSH_E2E_REGISTRATION_RETRY").is_some();
     if registration_retry {
@@ -367,21 +368,39 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
         picker_cx.simulate_click(dismiss.center(), gpui::Modifiers::none());
         picker_cx.run_until_parked();
     }
-    let empty = picker_cx.debug_bounds(if registration_retry { "segment clone" } else { "segment empty" }).unwrap();
-    picker_cx.simulate_click(empty.center(), gpui::Modifiers::none());
-    picker_cx.run_until_parked();
+    if !clone_disconnect {
+        let mode = picker_cx.debug_bounds(if registration_retry { "segment clone" } else { "segment empty" }).unwrap();
+        picker_cx.simulate_click(mode.center(), gpui::Modifiers::none());
+        picker_cx.run_until_parked();
+    }
     picker_cx.update(|window, cx| {
         input.update(cx, |input, cx| {
             input.set_content(fixture.workspace.clone(), cx)
         });
-        folder.update(cx, |input, cx| input.set_content("new-remote-project", cx));
+        if clone_disconnect {
+            repository.update(cx, |input, cx| {
+                input.set_content("https://github.com/octocat/Hello-World", cx);
+            });
+        } else {
+            folder.update(cx, |input, cx| input.set_content("new-remote-project", cx));
+        }
         window.focus(&folder.read(cx).focus(), cx);
     });
-    picker_cx.run_until_parked();
-    picker_cx.simulate_keystrokes("enter");
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let desktop = loop {
+    if !clone_disconnect {
         picker_cx.run_until_parked();
+    }
+    picker_cx.simulate_keystrokes("enter");
+    if clone_disconnect {
+        eprintln!("SSH E2E: submitted clone retry at the same destination");
+    }
+    let deadline = Instant::now() + Duration::from_secs(if clone_disconnect { 135 } else { 15 });
+    let executor = picker_cx.update(|_, cx| cx.background_executor().clone());
+    let desktop = loop {
+        for _ in 0..32 {
+            if !executor.scheduler_executor().scheduler().as_test().unwrap().tick() {
+                break;
+            }
+        }
         if let Some(workspace) = picker_cx.read_entity(&picker, |app, _| app.active_ssh_workspace()) {
             break workspace;
         }
@@ -395,7 +414,7 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
     assert_eq!(chosen_id, profile_id);
     let project = picker_cx.read_entity(&desktop, |app, _| app.selected_project().unwrap().clone());
     let chosen_path = project.path.clone();
-    assert_eq!(chosen_path, cwd.join("new-remote-project"));
+    assert_eq!(chosen_path, cwd.join(if clone_disconnect { "interrupted-clone" } else { "new-remote-project" }));
     let workspace = chosen_path.to_str().unwrap().to_owned();
     let launch = prepare_project_launch(
         fixture.profile.clone(),
@@ -766,6 +785,7 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
                 "sshAuthenticationErrorToastAndRetry": true,
                 "reusedCloneAfterRegistrationFailure": registration_retry,
                 "interruptedCloneReportedUnconfirmed": clone_disconnect,
+                "interruptedCloneRetriedAtSamePath": clone_disconnect,
                 "openedLocalSidebarSession": switched_during_stream,
                 "switchedBetweenRemoteDaemons": peer_verified
             })).unwrap()).unwrap();

@@ -233,21 +233,24 @@ pub async fn create_project<H: client::Handler>(
         "expected a single folder name"
     );
     let repo = repository.map(github_repository).transpose()?;
-    let clone = repo.map_or(String::new(), |url| {
-        format!(
-            "LC_ALL=C GIT_TERMINAL_PROMPT=0 git clone --progress -- {} . >/dev/null || {{ cd .. && rmdir -- {} 2>/dev/null; exit 13; }}; ",
-            shell_arg(&url),
-            shell_arg(name),
-        )
-    });
     let script = format!(
-        "unset CDPATH; cd -P -- {} || exit 11; mkdir -- {} 2>/dev/null || {{ if [ -e {} ] || [ -L {} ]; then exit 12; fi; exit 11; }}; cd -P -- {} || exit 13; {clone}pwd -P",
+        "unset CDPATH; cd -P -- {} || exit 11; target=./{}; ",
         shell_arg(parent),
         shell_arg(name),
-        shell_arg(name),
-        shell_arg(name),
-        shell_arg(name),
     );
+    let script = if let Some(url) = repo {
+        format!(
+            "{script}if [ -e \"$target\" ] || [ -L \"$target\" ]; then exit 12; fi; \
+             staging=$(mktemp -d \"$PWD/.fintwind-clone.XXXXXXXX\") || exit 11; \
+             trap 'rm -rf -- \"$staging\"' EXIT; trap 'exit 13' HUP INT TERM; \
+             LC_ALL=C GIT_TERMINAL_PROMPT=0 git clone --progress -- {} \"$staging/repo\" >/dev/null || exit 13; \
+             mv -nT -- \"$staging/repo\" \"$target\" || exit 13; \
+             if [ -d \"$staging/repo\" ]; then exit 12; fi; cd -P -- \"$target\" || exit 13; pwd -P",
+            shell_arg(&url),
+        )
+    } else {
+        format!("{script}mkdir -- \"$target\" 2>/dev/null || {{ if [ -e \"$target\" ] || [ -L \"$target\" ]; then exit 12; fi; exit 11; }}; cd -P -- \"$target\" || exit 13; pwd -P")
+    };
     let mut channel = session.channel_open_session().await?;
     let operation = async {
         channel

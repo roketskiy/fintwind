@@ -943,7 +943,10 @@ impl Fintwind {
                         tokio::time::timeout(Duration::from_secs(20), authenticate(&profile))
                             .await??;
                     #[cfg(test)]
-                    if name == "interrupted-clone" && std::env::var_os("FINTWIND_SSH_E2E_CLONE_DISCONNECT").is_some() {
+                    if name == "interrupted-clone" && std::env::var_os("FINTWIND_SSH_E2E_CLONE_DISCONNECT").is_some() && {
+                        static INTERRUPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                        !INTERRUPTED.swap(true, std::sync::atomic::Ordering::Relaxed)
+                    } {
                         let (signal, started) = tokio::sync::oneshot::channel();
                         let mut signal = Some(signal);
                         let operation = tunnel::create_project(&session, &parent, &name, repository.as_deref(), |update| {

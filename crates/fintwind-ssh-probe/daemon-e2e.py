@@ -1,6 +1,7 @@
 """Run the Windows probe against an isolated Linux daemon over SSH."""
 
 import argparse
+import base64
 import contextlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -10,12 +11,14 @@ import queue
 import secrets
 import shlex
 import signal
+import socket
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+from urllib.request import ProxyHandler, Request, build_opener
 
 MODEL = "fixture/fixture-model"
 PROMPT = "Reply with a short greeting in plain text. Do not use tools."
@@ -112,6 +115,43 @@ class Provider(BaseHTTPRequestHandler):
         self.wfile.flush()
 
 
+def verify_compaction(opencode, data, cwd, env):
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    password = secrets.token_urlsafe(32)
+    opencode_env = {**env, "OPENCODE_CONFIG": str(data / "fintwind-opencode.json"),
+                    "OPENCODE_SERVER_USERNAME": "opencode", "OPENCODE_SERVER_PASSWORD": password,
+                    "OPENCODE_DISABLE_AUTOUPDATE": "1"}
+    request = Request(f"http://127.0.0.1:{port}/api/config", headers={
+        "Authorization": "Basic " + base64.b64encode(f"opencode:{password}".encode()).decode()})
+    opener = build_opener(ProxyHandler({}))
+    expected = {"auto": False, "background": False, "buffer": "22%"}
+    with subprocess.Popen([opencode, "serve", "--hostname", "127.0.0.1", "--port", str(port)],
+                          cwd=cwd, env=opencode_env, stdin=subprocess.DEVNULL,
+                          stdout=subprocess.DEVNULL, start_new_session=True) as child:
+        try:
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline and child.poll() is None:
+                try:
+                    with opener.open(request, timeout=2) as response:
+                        configs = [entry["info"]["compaction"] for entry in json.load(response)
+                                   if "compaction" in entry.get("info", {})]
+                    if configs and configs[-1] == expected:
+                        return expected
+                    raise AssertionError(f"OpenCode effective compaction settings: {configs}")
+                except OSError:
+                    time.sleep(0.1)
+            raise RuntimeError("OpenCode did not expose its runtime config")
+        finally:
+            if child.returncode is None:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                child.wait(timeout=5)
+
+
 def remote(daemon, opencode):
     token = sys.stdin.readline().strip()
     if not token:
@@ -201,7 +241,9 @@ def remote(daemon, opencode):
                         if peer:
                             response["peer"] = peer
                         print(json.dumps(response), flush=True)
-                        sys.stdin.read(1)
+                        if sys.stdin.readline().strip() == "verify-compaction":
+                            compaction = verify_compaction(opencode, data, cwd, env)
+                            print(json.dumps(compaction), flush=True)
                 finally:
                     if managed and (root / "daemon.log").is_file():
                         print((root / "daemon.log").read_text(errors="replace")[-4096:], file=sys.stderr, flush=True)
@@ -410,7 +452,6 @@ def local():
     if ns.managed_upgrade:
         command = ["env", "FINTWIND_SSH_MANAGED_FIXTURE=1", *command]
     if ns.native_mcp_oauth or ns.native_provider_oauth:
-        import socket
         if not ns.native_app:
             parser.error("--native-mcp-oauth requires --native-app")
         with socket.socket() as oauth, socket.socket() as callback:
@@ -571,6 +612,17 @@ def local():
             result = (settings_probe(ns.skills_local_daemon, args, env, skills=True) if ns.skills_local_daemon
                       else settings_probe(ns.settings_local_daemon, args, env) if ns.settings_local_daemon
                       else subprocess.run(args, env=env, timeout=155))
+            if result.returncode == 0 and ns.settings_local_daemon:
+                proof = json.loads(ns.report.read_text(encoding="utf-8"))
+                try:
+                    ssh_process.stdin.write("verify-compaction\n")
+                    ssh_process.stdin.flush()
+                    proof["opencode_effective_compaction"] = receive(30)
+                except Exception:
+                    proof["all_passed"] = False
+                    raise
+                finally:
+                    ns.report.write_text(json.dumps(proof, indent=2), encoding="utf-8")
             sys.exit(result.returncode)
         finally:
             ssh_process.stdin.close()

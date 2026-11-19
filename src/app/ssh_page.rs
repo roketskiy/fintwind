@@ -1594,18 +1594,40 @@ impl Fintwind {
         let task = cx.spawn(async move |this, cx| {
             let mut subscription = None;
             loop {
-                let refresh = if let Some(client) = clients.try_iter().last() {
+                let was_subscribed = subscription.is_some();
+                let client_changed = if let Some(client) = clients.try_iter().last() {
                     subscription = Some((client.subscribe_task_state(), client));
                     true
                 } else {
-                    subscription.as_ref().is_some_and(|(revisions, _)| {
-                        revisions.try_iter().last().is_some()
-                    })
+                    false
                 };
+                let refresh = client_changed || subscription.as_ref().is_some_and(|(revisions, _)| {
+                    revisions.try_iter().last().is_some()
+                });
                 if refresh && let Some((_, client)) = &subscription {
                     let client = client.clone();
                     let host = host.clone();
+                    let previous_settings = if client_changed && was_subscribed {
+                        let Ok(settings) = this.update(cx, |app, _| app.ssh.remote_settings.get(&id).cloned()) else {
+                            break;
+                        };
+                        settings
+                    } else {
+                        None
+                    };
+                    let refresh_settings = previous_settings.is_some();
                     let result = cx.background_executor().spawn(async move {
+                        let settings = if refresh_settings {
+                            let nil = Uuid::nil();
+                            match client.request_with_timeout(
+                                nil, nil, fintwind_client::Command::GetSettings, Duration::from_secs(10),
+                            ) {
+                                Ok(fintwind_client::ResponsePayload::Settings { settings }) => Some(settings),
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        };
                         let snapshot = super::runtime::load_remote_task_state(&client)?;
                         let persisted = catalog_path(id).and_then(|path| {
                             write_ssh_state(path, &serde_json::to_vec(&(&*host, &snapshot))?)
@@ -1613,10 +1635,16 @@ impl Fintwind {
                         if let Err(error) = persisted {
                             eprintln!("could not cache SSH catalog for {id}: {error:#}");
                         }
-                        Ok::<_, anyhow::Error>(snapshot)
+                        Ok::<_, anyhow::Error>((snapshot, settings))
                     }).await;
-                    if let Ok(snapshot) = result
+                    if let Ok((snapshot, settings)) = result
                         && this.update(cx, |app, cx| {
+                            if let Some(settings) = settings
+                                && !app.ssh.general_pending
+                                && app.ssh.remote_settings.get(&id) == previous_settings.as_ref()
+                            {
+                                app.ssh.remote_settings.insert(id, settings);
+                            }
                             app.ssh.catalogs.insert(id, snapshot);
                             app.sidebar_rows_fingerprint.set(None);
                             cx.notify();
@@ -1709,15 +1737,26 @@ impl Fintwind {
             return;
         };
         let (id, field) = (*id, *field);
+        let value = input.read(cx).content().trim().to_owned();
+        self.write_ssh_general(id, field, value, true, cx);
+    }
+
+    fn write_ssh_general(
+        &mut self,
+        id: Uuid,
+        field: tunnel::GeneralSetting,
+        value: String,
+        editing: bool,
+        cx: &mut Context<Self>,
+    ) {
         if self.ssh.general_pending || self.ssh.machine != Some(id) {
             return;
         }
         let Some(client) = self.ssh_client_for(id) else {
-            self.ssh.general_error = Some((id, true, tr!("ssh.offline")));
+            self.ssh.general_error = Some((id, editing, tr!("ssh.offline")));
             cx.notify();
             return;
         };
-        let value = input.read(cx).content().trim().to_owned();
         let profile = self
             .ssh
             .profiles
@@ -1758,10 +1797,12 @@ impl Fintwind {
                                     }
                                 }
                             }
-                            app.ssh.general_edit = None;
+                            if editing {
+                                app.ssh.general_edit = None;
+                            }
                         }
                         Err(error) => {
-                            app.ssh.general_error = Some((id, true, error.to_string()));
+                            app.ssh.general_error = Some((id, editing, error.to_string()));
                         }
                     }
                 } else {
@@ -1848,7 +1889,7 @@ impl Fintwind {
         .detach();
     }
 
-    pub(super) fn render_ssh_general(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_ssh_general(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         let Some(id) = self.ssh.machine else {
             return div().into_any_element();
@@ -1884,6 +1925,7 @@ impl Fintwind {
             );
         }
         if let Some(settings) = settings {
+            use tunnel::GeneralSetting;
             use super::settings::{
                 settings_card, settings_group_title, settings_row, settings_separator,
             };
@@ -1892,20 +1934,89 @@ impl Fintwind {
                     tunnel::GeneralSetting::OpenCodePath,
                     "ssh-opencode",
                     "icons/terminal.svg",
-                    tr!("settings.group_environment"),
+                    Some(tr!("settings.group_environment")),
                     tr!("settings.opencode_binary"),
-                    settings.opencode_binary_path(),
+                    settings.opencode_binary_path().map(str::to_owned),
+                ),
+                (
+                    GeneralSetting::NetworkProxy,
+                    "ssh-network-proxy",
+                    "icons/globe.svg",
+                    None,
+                    tr!("settings.network_proxy"),
+                    settings.network_proxy_url().map(str::to_owned),
+                ),
+                (
+                    GeneralSetting::CompactThreshold,
+                    "ssh-compact-threshold",
+                    "icons/gauge.svg",
+                    None,
+                    tr!("settings.auto_compact_threshold"),
+                    Some(format!("{}%", settings.auto_compact_threshold_percent())),
                 ),
                 (
                     tunnel::GeneralSetting::Workspace,
                     "ssh-workspace",
                     "icons/folder.svg",
-                    tr!("settings.group_data"),
+                    Some(tr!("settings.group_data")),
                     tr!("settings.general_workspace"),
-                    settings.general_workspace_path(),
+                    settings.general_workspace_path().map(str::to_owned),
                 ),
             ] {
-                let mut row = settings_row(glyph, label, value.map(str::to_owned), theme);
+                if field == GeneralSetting::CompactThreshold {
+                    let disabled = !ready || self.ssh.general_pending || saving;
+                    let mut toggle = |key, glyph, label, field, enabled: bool| {
+                        settings_row(glyph, label, None, theme).child(crate::ui::toggle_switch(
+                            key,
+                            enabled,
+                            disabled,
+                            theme,
+                            window,
+                            cx,
+                            move |app, _, cx| {
+                                app.write_ssh_general(id, field, (!enabled).to_string(), false, cx);
+                            },
+                        ))
+                    };
+                    let features = [
+                        ("ssh-browser-tools", "icons/globe.svg", tr!("settings.browser_tools"), GeneralSetting::BrowserTools, settings.browser_tools_enabled()),
+                        ("ssh-scheduled-tools", "icons/calendar.svg", tr!("settings.scheduled_tools"), GeneralSetting::ScheduledTools, settings.scheduled_tools_enabled()),
+                        ("ssh-watchdog", "icons/alert.svg", tr!("settings.watchdog"), GeneralSetting::Watchdog, settings.watchdog_enabled()),
+                    ];
+                    let context = [
+                        ("ssh-auto-compact", "icons/archive.svg", tr!("settings.auto_compact"), GeneralSetting::AutoCompact, settings.auto_compact_enabled()),
+                        ("ssh-background-compact", "icons/archive.svg", tr!("settings.background_compact"), GeneralSetting::BackgroundCompact, settings.background_compact_enabled()),
+                    ];
+                    for (group, rows, has_threshold) in [
+                        (tr!("settings.group_features"), features.as_slice(), false),
+                        (tr!("settings.group_context"), context.as_slice(), field.supported_by(settings)),
+                    ] {
+                        let mut rows = rows.iter().filter(|row| row.3.supported_by(settings)).peekable();
+                        if rows.peek().is_none() {
+                            if has_threshold {
+                                body = body.child(settings_group_title(group, theme));
+                            }
+                            continue;
+                        }
+                        let mut card = settings_card(theme);
+                        for (index, (key, glyph, label, setting, enabled)) in rows.enumerate() {
+                            if index > 0 {
+                                card = card.child(settings_separator(theme));
+                            }
+                            card = card.child(toggle(*key, *glyph, label.clone(), *setting, *enabled));
+                        }
+                        body = body.child(settings_group_title(group, theme)).child(card);
+                    }
+                }
+                if !field.supported_by(settings) {
+                    continue;
+                }
+                let description = value.clone().or_else(|| match field {
+                    GeneralSetting::OpenCodePath => Some(tr!("settings.opencode_binary_auto")),
+                    GeneralSetting::Workspace => Some(tr!("common.default")),
+                    _ => None,
+                });
+                let mut row = settings_row(glyph, label, description, theme);
                 let mut card = settings_card(theme);
                 let editing = self
                     .ssh
@@ -1967,7 +2078,7 @@ impl Fintwind {
                         .child(settings_separator(theme));
                 }
                 if ready && editing.is_none() {
-                    let value = value.unwrap_or_default().to_owned();
+                    let value = value.unwrap_or_default();
                     row = row.child(
                         window_action(cx, key, tr!("ssh.edit"), move |app, window, cx| {
                             if app.ssh.general_pending
@@ -1989,7 +2100,7 @@ impl Fintwind {
                         .disabled(self.ssh.general_pending),
                     );
                 }
-                body = body.child(settings_group_title(group, theme)).child(
+                body = body.children(group.map(|group| settings_group_title(group, theme))).child(
                     card.child(row)
                         .children(editing.map(|(_, _, input)| {
                             let pending = self.ssh.general_pending;

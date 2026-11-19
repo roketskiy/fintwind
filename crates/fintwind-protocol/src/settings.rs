@@ -45,6 +45,7 @@ impl DaemonSettings {
 
     pub fn discard_legacy_app_keys(&mut self) {
         for key in [
+            GENERAL_SETTINGS_CAPABILITIES_KEY,
             "analytics_enabled",
             "favorite_models",
             "theme",
@@ -55,6 +56,13 @@ impl DaemonSettings {
         ] {
             self.extra.remove(key);
         }
+    }
+
+    pub fn supports_general_setting(&self, key: &str) -> bool {
+        self.extra
+            .get(GENERAL_SETTINGS_CAPABILITIES_KEY)
+            .and_then(Value::as_array)
+            .is_some_and(|keys| keys.iter().any(|value| value.as_str() == Some(key)))
     }
 
     pub fn scheduled_tools_enabled(&self) -> bool {
@@ -117,6 +125,7 @@ impl DaemonSettings {
 }
 
 pub const SCHEDULED_TOOLS_ENABLED_KEY: &str = "scheduled_tools_enabled";
+pub const GENERAL_SETTINGS_CAPABILITIES_KEY: &str = "general_settings_capabilities";
 pub const OPENCODE_BINARY_PATH_KEY: &str = "opencode_binary_path";
 pub const GENERAL_WORKSPACE_PATH_KEY: &str = "general_workspace_path";
 pub const BROWSER_TOOLS_ENABLED_KEY: &str = "browser_tools_enabled";

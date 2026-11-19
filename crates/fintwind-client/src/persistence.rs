@@ -115,8 +115,8 @@ fn default_auto_compact_enabled() -> bool {
     true
 }
 
-fn default_auto_compact_threshold_tokens() -> u64 {
-    fintwind_protocol::settings::AUTO_COMPACT_THRESHOLD_TOKENS_DEFAULT
+fn default_auto_compact_threshold_percent() -> u8 {
+    fintwind_protocol::settings::DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT
 }
 
 fn default_right_panel_width() -> f32 {
@@ -308,13 +308,9 @@ pub struct AppSettings {
     /// default: it costs power, so enabling it is an explicit act.
     #[serde(default)]
     pub keep_screen_awake: bool,
-    /// Client-side early auto compaction: compact once live context
-    /// occupancy reaches the threshold below, for the foreground session
-    /// and live subagents alike. On by default; the provider's own
-    /// near-limit auto compaction stays armed regardless.
     pub auto_compact_enabled: bool,
-    /// Absolute live-context tokens triggering the early auto compaction.
-    pub auto_compact_threshold_tokens: u64,
+    pub background_compact_enabled: bool,
+    pub auto_compact_threshold_percent: u8,
     /// HTTP proxy address the app's own fetches and `opencode serve` children
     /// ride through, already validated into the `http://host:port` form the
     /// fetch layer expects. Empty reads as "no proxy".
@@ -340,8 +336,8 @@ impl Default for AppSettings {
             mermaid_visualization_enabled: false,
             keep_screen_awake: false,
             auto_compact_enabled: true,
-            auto_compact_threshold_tokens:
-                fintwind_protocol::settings::AUTO_COMPACT_THRESHOLD_TOKENS_DEFAULT,
+            background_compact_enabled: true,
+            auto_compact_threshold_percent: default_auto_compact_threshold_percent(),
             network_proxy_url: String::new(),
             transcript_width: DEFAULT_TRANSCRIPT_WIDTH,
         }
@@ -433,12 +429,12 @@ pub struct PersistedState {
     /// Hold the display and system awake for the app's whole runtime.
     #[serde(default)]
     pub keep_screen_awake: bool,
-    /// Client-side early auto compaction switch. On by default.
     #[serde(default = "default_auto_compact_enabled")]
     pub auto_compact_enabled: bool,
-    /// Absolute live-context tokens triggering the early auto compaction.
-    #[serde(default = "default_auto_compact_threshold_tokens")]
-    pub auto_compact_threshold_tokens: u64,
+    #[serde(default = "default_auto_compact_enabled")]
+    pub background_compact_enabled: bool,
+    #[serde(default = "default_auto_compact_threshold_percent")]
+    pub auto_compact_threshold_percent: u8,
     /// HTTP proxy address, validated on write; a hand-edited value is
     /// re-validated on load and an unusable one reads as empty.
     #[serde(default)]
@@ -509,8 +505,8 @@ impl PersistedState {
             mermaid_visualization_enabled: false,
             keep_screen_awake: false,
             auto_compact_enabled: true,
-            auto_compact_threshold_tokens:
-                fintwind_protocol::settings::AUTO_COMPACT_THRESHOLD_TOKENS_DEFAULT,
+            background_compact_enabled: true,
+            auto_compact_threshold_percent: default_auto_compact_threshold_percent(),
             network_proxy_url: String::new(),
             transcript_width: DEFAULT_TRANSCRIPT_WIDTH,
             sidebar_visible: true,
@@ -608,6 +604,7 @@ impl PersistedState {
 
     pub fn daemon_settings(&self) -> DaemonSettings {
         let mut extra = self.daemon_settings_extra.clone();
+        extra.remove("auto_compact_threshold_tokens");
         // The app-side toggle is the source of truth: whatever the daemon
         // file round-tripped back must not override the user's choice.
         extra.insert(
@@ -623,8 +620,12 @@ impl PersistedState {
             serde_json::Value::Bool(self.auto_compact_enabled),
         );
         extra.insert(
-            fintwind_protocol::settings::AUTO_COMPACT_THRESHOLD_TOKENS_KEY.to_owned(),
-            serde_json::Value::from(self.auto_compact_threshold_tokens),
+            fintwind_protocol::settings::BACKGROUND_COMPACT_ENABLED_KEY.to_owned(),
+            serde_json::Value::Bool(self.background_compact_enabled),
+        );
+        extra.insert(
+            fintwind_protocol::settings::AUTO_COMPACT_THRESHOLD_PERCENT_KEY.to_owned(),
+            serde_json::Value::from(self.auto_compact_threshold_percent),
         );
         extra.insert(
             fintwind_protocol::settings::NETWORK_PROXY_URL_KEY.to_owned(),
@@ -710,7 +711,8 @@ impl PersistedState {
             mermaid_visualization_enabled: self.mermaid_visualization_enabled,
             keep_screen_awake: self.keep_screen_awake,
             auto_compact_enabled: self.auto_compact_enabled,
-            auto_compact_threshold_tokens: self.auto_compact_threshold_tokens,
+            background_compact_enabled: self.background_compact_enabled,
+            auto_compact_threshold_percent: self.auto_compact_threshold_percent,
             network_proxy_url: self.network_proxy_url.clone(),
             transcript_width: self.transcript_width,
         }
@@ -753,7 +755,8 @@ impl PersistedState {
         self.mermaid_visualization_enabled = settings.mermaid_visualization_enabled;
         self.keep_screen_awake = settings.keep_screen_awake;
         self.auto_compact_enabled = settings.auto_compact_enabled;
-        self.auto_compact_threshold_tokens = settings.auto_compact_threshold_tokens;
+        self.background_compact_enabled = settings.background_compact_enabled;
+        self.auto_compact_threshold_percent = settings.auto_compact_threshold_percent.clamp(1, 99);
         self.network_proxy_url = settings.network_proxy_url;
         self.transcript_width = settings.transcript_width;
     }

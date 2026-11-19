@@ -8,6 +8,88 @@ use super::*;
 use crate::usage::{cache_hit_percent, format_first_token_ms, format_percent, format_tokens};
 
 impl Fintwind {
+    pub(super) fn update_auto_compaction_badge(
+        &mut self,
+        session_id: Uuid,
+        state: &CompactionState,
+        cx: &mut Context<Self>,
+    ) {
+        let current = self
+            .auto_compaction_badges
+            .get(&session_id)
+            .map(|(status, _)| *status);
+        if state.reason.as_deref() == Some("manual")
+            || state.status == CompactionStatus::Cancelled
+        {
+            self.auto_compaction_badges.remove(&session_id);
+            return;
+        }
+        if current == Some(state.status) {
+            return;
+        }
+        let now = Instant::now();
+        if state.status == CompactionStatus::Running {
+            if state.reason.as_deref() == Some("auto") {
+                self.auto_compaction_badges.insert(session_id, (state.status, now));
+            }
+        } else if current == Some(CompactionStatus::Running) {
+            self.auto_compaction_badges.insert(session_id, (state.status, now));
+            let timer = cx.background_executor().timer(std::time::Duration::from_secs(2));
+            cx.spawn(async move |this, cx| {
+                timer.await;
+                let _ = this.update(cx, |this, cx| {
+                    if this
+                        .auto_compaction_badges
+                        .get(&session_id)
+                        .is_some_and(|(_, since)| *since == now)
+                    {
+                        this.auto_compaction_badges.remove(&session_id);
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
+    }
+
+    pub(super) fn render_auto_compaction_badge(&self, cx: &App) -> Option<AnyElement> {
+        let session = self.selected_session()?;
+        let (status, _) = self.auto_compaction_badges.get(&session.id)?;
+        let theme = Theme::current(cx);
+        let (glyph, tooltip) = match status {
+            CompactionStatus::Running => (
+                crate::ui::motion::spin_slow(icon(
+                    "icons/loader-circle.svg",
+                    12.0,
+                    theme.text_secondary,
+                )),
+                tr!("session.auto_compaction_started"),
+            ),
+            CompactionStatus::Completed => (
+                icon("icons/check.svg", 12.0, theme.success).into_any_element(),
+                tr!("session.compaction_completed"),
+            ),
+            CompactionStatus::Failed => (
+                icon("icons/x.svg", 12.0, theme.danger).into_any_element(),
+                tr!("session.compaction_failed"),
+            ),
+            CompactionStatus::Cancelled => return None,
+        };
+        Some(
+            div()
+                .id("auto-compaction-status")
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(px(4.0))
+                .text_color(theme.text_secondary)
+                .tooltip(Tooltip::text(tooltip))
+                .child(glyph)
+                .child(tr!("settings.auto_compact"))
+                .into_any_element(),
+        )
+    }
+
     pub(super) fn usage_meter_available(&self) -> bool {
         self.selected_session().is_some()
     }

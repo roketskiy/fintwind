@@ -162,14 +162,6 @@ impl BackgroundWorkRegistry {
         registry
     }
 
-    /// Whether the card is still live. The client-side auto compaction
-    /// trigger reads this after applying the card Upsert.
-    pub(super) fn is_live(&self, key: &BackgroundWorkKey) -> bool {
-        self.items
-            .get(key)
-            .is_some_and(|item| item.status.is_live())
-    }
-
     fn snapshot(&self, key: &BackgroundWorkKey) -> Option<BackgroundWorkSnapshot> {
         let item = self.items.get(key)?.clone();
         Some(BackgroundWorkSnapshot {

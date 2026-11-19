@@ -582,6 +582,11 @@ impl OpenCodeServer {
             command.env(name, value);
         }
         command.env("OPENCODE_CONFIG_CONTENT", config);
+        if std::env::var_os("OPENCODE_CONFIG").is_none()
+            && let Some(path) = crate::settings::opencode_config_path()
+        {
+            command.env("OPENCODE_CONFIG", path);
+        }
         // The model traffic this server makes rides the configured proxy.
         // Setting the conventional variables overrides anything inherited from
         // the user's shell, and the loopback exemption keeps the server's own

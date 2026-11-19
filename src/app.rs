@@ -1631,14 +1631,7 @@ pub struct Fintwind {
     /// Long user messages the user re-expanded past their folded preview, in
     /// the main transcript and subagent transcripts alike. Runtime-only.
     expanded_user_messages: HashSet<Uuid>,
-    /// Sessions already served one client-side early auto compaction.
-    /// Edge trigger: cleared when occupancy falls back below the threshold,
-    /// so one crossing fires exactly once. Runtime-only.
-    auto_compacted_sessions: HashSet<Uuid>,
-    /// Same, per live subagent child: (parent session, child provider id).
-    /// Cleared when the child settles or its occupancy drops back.
-    /// Runtime-only.
-    auto_compacted_children: HashSet<(Uuid, String)>,
+    auto_compaction_badges: HashMap<Uuid, (CompactionStatus, Instant)>,
     /// Sessions whose provider-retry card the user expanded to read the full
     /// error. Collapsed is the default: the header already carries the attempt
     /// and countdown. Runtime-only.
@@ -4030,8 +4023,7 @@ impl Fintwind {
                 expanded_changed_files: HashSet::new(),
                 expanded_compactions: HashSet::new(),
                 expanded_user_messages: HashSet::new(),
-                auto_compacted_sessions: HashSet::new(),
-                auto_compacted_children: HashSet::new(),
+                auto_compaction_badges: HashMap::new(),
                 expanded_provider_retries: HashSet::new(),
                 provider_retries: HashMap::new(),
                 transcript_control_focuses: RefCell::new(HashMap::new()),

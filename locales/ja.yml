@@ -198,11 +198,13 @@ settings.mermaid_visualization_description: 新しいセッションのみ
 settings.keep_screen_awake: 画面を常時点灯
 settings.keep_screen_awake_description: オンにすると、アプリの実行中は画面とシステムをスリープさせません
 settings.auto_compact: 自動圧縮
-settings.auto_compact_description: コンテキストが下のしきい値に達したら1回圧縮します。セッションとサブエージェントの両方に適用されます
+settings.auto_compact_description: 下のしきい値に達したら OpenCode が自動で圧縮します
 settings.auto_compact_threshold: 圧縮のしきい値
-settings.auto_compact_threshold_description: 使用量がしきい値に届かないウィンドウには影響せず、プロバイダーの既定の圧縮のままです
-settings.auto_compact_threshold_placeholder: 例：500K
-settings.auto_compact_threshold_invalid: しきい値の形式が正しくありません
+settings.auto_compact_threshold_description: モデルの入力ウィンドウの使用率。ワークスペースやカスタムの OpenCode 設定が優先されます。
+settings.auto_compact_threshold_placeholder: 例：85%
+settings.auto_compact_threshold_invalid: 1% から 99% までの整数を入力してください
+settings.background_compact: バックグラウンド圧縮
+settings.background_compact_description: OpenCode 2.3.1 以降が必要です。通常は圧縮しきい値の約 6 万トークン手前から要約を作成できます。
 settings.network_proxy: ネットワークプロキシ
 settings.opencode_check: 更新を確認
 settings.opencode_checking: 確認中…
@@ -977,7 +979,7 @@ session.turn_failed: ターンは応答なしに終了しました
 session.steer_rejected: エージェントに追加の指示を送れませんでした（%{error}）。メッセージはフォローアップとしてキューに追加されました
 session.steer_rejected_plain: エージェントに追加の指示を送れませんでした。メッセージはフォローアップとしてキューに追加されました
 session.compaction_requested: 圧縮を要求しました。プロバイダーは次の安全な区切りで要約を開始します
-session.auto_compaction_started: しきい値に達したため自動圧縮を開始しました
+session.auto_compaction_started: コンテキストを自動圧縮しています
 session.compaction_completed: コンテキストを圧縮しました
 session.compaction_failed: コンテキストの圧縮に失敗しました
 session.compaction_unavailable: 実行中のプロバイダーがないため、このセッションを圧縮できません

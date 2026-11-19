@@ -139,11 +139,9 @@ const IDLE_SESSION_SWEEP_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const BACKGROUND_WORK_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const BACKGROUND_WORK_TICK_INTERVAL: Duration = Duration::from_secs(1);
 const STREAM_SAVE_INTERVAL: Duration = Duration::from_secs(1);
-/// Zed keeps status toasts on screen for ten seconds, pausing the countdown
-/// while the pointer is over the toast so a long message remains readable.
 const DEFAULT_TOAST_DURATION: Duration = Duration::from_secs(5);
 const MINIMUM_TOAST_RESUME_DURATION: Duration = Duration::from_millis(800);
-const TOAST_ANIMATION_DURATION: Duration = Duration::from_millis(150);
+const TOAST_EXIT_DURATION: Duration = Duration::from_millis(220);
 const TASK_NOTIFICATION_TAG_PREFIX: &str = "fintwind-task:";
 
 pub(crate) fn task_notification_tag(session_id: Uuid) -> String {
@@ -319,6 +317,25 @@ struct ToastState {
     duration_remaining: Duration,
     timer_started: Option<Instant>,
     hovered: bool,
+    focused: bool,
+    finished_progress: bool,
+}
+
+impl ToastState {
+    fn paused(&self) -> bool {
+        self.hovered || self.focused
+    }
+
+    fn finish_progress(&mut self, message: String, tone: ToastTone) {
+        self.finished_progress = matches!(self.tone, ToastTone::Progress(_));
+        self.message = message;
+        self.tone = tone;
+        self.duration_remaining = if tone == ToastTone::Success {
+            Duration::from_secs(3)
+        } else {
+            DEFAULT_TOAST_DURATION
+        };
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2264,6 +2281,8 @@ pub struct Fintwind {
     opencode_shell_loaded: bool,
     header_drag_armed: bool,
     toast: Option<ToastState>,
+    exiting_toast: Option<ToastState>,
+    toast_dismiss_focus: FocusHandle,
     toast_generation: u64,
     copied_control_feedback: HashMap<String, u64>,
     copied_control_generation: u64,
@@ -2712,17 +2731,26 @@ impl Fintwind {
     }
 
     fn show_toast_with_tone(&mut self, message: impl Into<String>, tone: ToastTone) {
+        let message = message.into();
+        let duration_remaining = if tone == ToastTone::Success && message.chars().count() <= 28 {
+            Duration::from_secs(3)
+        } else {
+            DEFAULT_TOAST_DURATION
+        };
         self.toast_selection.selection.borrow_mut().clear();
         self.toast_selection.registry.borrow_mut().clear();
         self.toast_generation = self.toast_generation.wrapping_add(1);
+        self.exiting_toast = None;
         self.toast = Some(ToastState {
-            message: message.into(),
+            message,
             tone,
             id: self.toast_generation,
             timer_generation: self.toast_generation,
-            duration_remaining: DEFAULT_TOAST_DURATION,
+            duration_remaining,
             timer_started: None,
             hovered: false,
+            focused: false,
+            finished_progress: false,
         });
     }
 
@@ -2774,6 +2802,7 @@ impl Fintwind {
     }
 
     pub(super) fn hide_toast(&mut self) {
+        self.exiting_toast = None;
         if self.toast.take().is_some() {
             self.toast_selection.selection.borrow_mut().clear();
             self.toast_selection.registry.borrow_mut().clear();
@@ -2783,11 +2812,32 @@ impl Fintwind {
         }
     }
 
+    fn dismiss_toast(&mut self, cx: &mut Context<Self>) {
+        let Some(toast) = self.toast.take() else { return; };
+        self.toast_selection.selection.borrow_mut().clear();
+        self.toast_selection.registry.borrow_mut().clear();
+        if !cx.reduce_motion() {
+            let id = toast.id;
+            self.exiting_toast = Some(toast);
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(TOAST_EXIT_DURATION).await;
+                let _ = this.update(cx, |app, cx| {
+                    if app.exiting_toast.as_ref().is_some_and(|toast| toast.id == id) {
+                        app.exiting_toast = None;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+
     fn start_toast_dismiss_timer(&mut self, cx: &mut Context<Self>) {
         let Some(toast) = self.toast.as_mut() else {
             return;
         };
-        if matches!(toast.tone, ToastTone::Progress(_)) || toast.hovered || toast.timer_started.is_some() {
+        if matches!(toast.tone, ToastTone::Progress(_)) || toast.paused() || toast.timer_started.is_some() {
             return;
         }
 
@@ -2800,10 +2850,9 @@ impl Fintwind {
                 if this
                     .toast
                     .as_ref()
-                    .is_some_and(|toast| toast.timer_generation == generation && !toast.hovered)
+                    .is_some_and(|toast| toast.timer_generation == generation && !toast.paused())
                 {
-                    this.hide_toast();
-                    cx.notify();
+                    this.dismiss_toast(cx);
                 }
             });
         })
@@ -2811,19 +2860,23 @@ impl Fintwind {
     }
 
     fn set_toast_hovered(&mut self, hovered: bool, cx: &mut Context<Self>) {
-        let Some(toast) = self.toast.as_ref() else {
+        self.update_toast_pause(cx, |toast| toast.hovered = hovered);
+    }
+
+    fn update_toast_pause(&mut self, cx: &mut Context<Self>, update: impl FnOnce(&mut ToastState)) {
+        let Some(toast) = self.toast.as_mut() else {
             return;
         };
-        if toast.hovered == hovered {
+        let was_paused = toast.paused();
+        update(toast);
+        let paused = toast.paused();
+        if was_paused == paused {
             return;
         }
 
         self.toast_generation = self.toast_generation.wrapping_add(1);
-        let generation = self.toast_generation;
-        let toast = self.toast.as_mut().expect("toast checked above");
-        toast.timer_generation = generation;
-        toast.hovered = hovered;
-        if hovered {
+        toast.timer_generation = self.toast_generation;
+        if paused {
             if let Some(started) = toast.timer_started.take() {
                 toast.duration_remaining =
                     paused_toast_duration(toast.duration_remaining, started.elapsed());
@@ -3294,6 +3347,13 @@ impl Fintwind {
             )
             .detach();
             let settings_focus = cx.focus_handle();
+            let toast_dismiss_focus = cx.focus_handle();
+            cx.on_focus(&toast_dismiss_focus, window, |app, _, cx| {
+                app.update_toast_pause(cx, |toast| toast.focused = true);
+            }).detach();
+            cx.on_blur(&toast_dismiss_focus, window, |app, _, cx| {
+                app.update_toast_pause(cx, |toast| toast.focused = false);
+            }).detach();
             let onboarding_add_project_focus = cx.focus_handle();
             let onboarding_projectless_focus = cx.focus_handle();
             let sidebar_add_project_focus = cx.focus_handle();
@@ -4356,7 +4416,11 @@ impl Fintwind {
                     duration_remaining: DEFAULT_TOAST_DURATION,
                     timer_started: None,
                     hovered: false,
+                    focused: false,
+                    finished_progress: false,
                 }),
+                exiting_toast: None,
+                toast_dismiss_focus,
                 toast_generation: 0,
                 copied_control_feedback: HashMap::new(),
                 copied_control_generation: 0,

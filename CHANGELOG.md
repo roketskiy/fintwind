@@ -18,6 +18,53 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+```
++--------------- [ UNRELEASED ] ---------------+
+|                                              |
+| opencode 2  支持到 2.3.2                     |
+|                                              |
+| +  added    SSH 远端工作区、重复输出保护     |
+| ~  changed  原生压缩、用量流向、离线模型表等 |
+| *  fixed    配置读取、粘贴与右键等           |
+| -  removed  图像生成启用开关                 |
+|                                              |
++----------------------------------------------+
+```
+
+### 新功能
+
+- SSH 远端工作区：通过 SSH 私钥连接 Linux 服务器（x86_64/ARM64），像本机一样使用服务器上的项目和会话，本机与远端任务并行，断线重连或桌面升级后恢复远端会话。Fintwind 自动在服务器上安装和更新所需后端，所有通信走 SSH 加密连接，服务器无需开放额外端口。「设置 → SSH 连接」新建、编辑、检查与移除连接；首次连接记住主机指纹，指纹变化时阻止连接；移除连接不影响服务器上的项目（[3094bb67](https://github.com/roketskiy/fintwind/commit/3094bb67743747428a9b536180f2bea672ca9d7b)）。
+- 侧边栏底部的主机切换器在本机与各服务器间切换。「添加项目」可先选择服务器，再按现有文件夹、GitHub 克隆或新建文件夹添加；克隆显示实时进度，失败后保留输入可重试，已存在的目录不会被覆盖（[790442b0](https://github.com/roketskiy/fintwind/commit/790442b01732a4f13e288f1459c84e4acc1f6dc5)、[7a4361bb](https://github.com/roketskiy/fintwind/commit/7a4361bb3791109fa835f0597d5fb5d30eb873bb)）。
+- 设置侧栏底部的机器选择器切换设置归属：通用设置、提供商、MCP 与技能作用于所选服务器，可检查、安装、更新服务器上的 OpenCode，远端 MCP 登录在本机浏览器完成；断线时服务器设置只读。外观与 SSH 连接设置始终归本机（[27bdc9b2](https://github.com/roketskiy/fintwind/commit/27bdc9b2ae3710e5d67fc782f9b2ce150b14a0c2)、[8753249f](https://github.com/roketskiy/fintwind/commit/8753249ff6bdbe85a04c98fdbabce45f31b303ae)）。
+- 新增重复输出保护：模型回复或工具调用及结果连续 10 次完全相同时自动停止任务，默认开启，可在通用设置关闭（[260c1246](https://github.com/roketskiy/fintwind/commit/260c1246bb60fdf193469ff7a9a7ecb9ff6e642d)）。
+
+### 改进
+
+- 上下文压缩改由 OpenCode 原生自动与后台压缩执行：阈值按模型输入窗口占用百分比设置，工作区或自定义 OpenCode 配置优先；后台压缩在接近阈值前提前生成摘要，需要 OpenCode 2.3.1 或更新版本；两者默认开启（[7bcac82b](https://github.com/roketskiy/fintwind/commit/7bcac82be739d753e1fcccb009a07f9683e993aa)）。
+- 用量页重新设计：用量流向图将左侧模型份额与右侧全量构成（缓存读取、输入、输出、缓存写入、推理）汇入同一总量，点击可高亮对应流向；订阅额度以轮播卡片同页展示；单日统计提供按小时图表并可逐日切换，时间范围默认 7 天，另有单日、30 天与全部（[7a92f4c4](https://github.com/roketskiy/fintwind/commit/7a92f4c424d5f9b830442677429e67ca4c6e5d6f)）。
+- 内置 models.dev 精简模型表：仅保留知名 AI 实验室官方条目与两年内发布的模型，字段精简为名称、上下文、输入输出模态与思考档位；运行时离线读取模型与供应商名单，不再联网拉取 models.dev，旧磁盘缓存仅供用量页读取历史价格（[57cc5f45](https://github.com/roketskiy/fintwind/commit/57cc5f45a97b1537bdc41e2b2b6951111758a8f2)）。
+- 自定义模型支持思考程度多选（none/low/medium/high/xhigh/max），留空跟随目录档位或标准六档（[d26c2441](https://github.com/roketskiy/fintwind/commit/d26c24411ef5bac464aea9d2d5b2a780eddb6005)）。
+- 移除图像生成工具启用开关，工具可用性随 OpenCode 版本与已连接图像模型；通用设置仅选择默认图像模型，「自动」由 OpenCode 按请求选择可用模型（[0ed05038](https://github.com/roketskiy/fintwind/commit/0ed050383da42cec48cf35571180ffd1a301683e)）。
+- 后台工作面板列出后台进程与子智能体，显示子代理引导消息与运行时长；未运行的子智能体默认折叠；后台任务中间输出不再触发会话未读（[1e8ea49c](https://github.com/roketskiy/fintwind/commit/1e8ea49cc3462da81f68fc0d9ce790d88f5c4e7a)）。
+- 会话错误改为持久化活动卡片；首字延迟改读 OpenCode 存储的轮末计时；活动组显示本组耗时与步数，时间戳不完整时保留计时；Build/Plan 模式固定蓝/橙配色（[c4f8eb0f](https://github.com/roketskiy/fintwind/commit/c4f8eb0fef32037e52c9114076770c8b447a4436)）。
+- 会话与右面板标签栏改为 Chrome 造型；主工作区改为双层面板，卡片底部与右侧内缩并圆角；常规与外观设置改为分组卡片行式排版；统一加载延迟显示与操作旋转动效；选项变更与供应商连接测试改用 toast 提示；应用内更新日志改用时间线展示，更新提示调整样式与显示时机（[6658e538](https://github.com/roketskiy/fintwind/commit/6658e53819252c6d1f09a05c006c6930a286a9d6)、[3234d2e0](https://github.com/roketskiy/fintwind/commit/3234d2e09f396e5e6307f04d911775b05f2f16fd)、[ef8a258b](https://github.com/roketskiy/fintwind/commit/ef8a258b98ada9865f2b1943d5c946288157dfd9)、[6b36e348](https://github.com/roketskiy/fintwind/commit/6b36e3488fb701a461d85940dab12dadab9307c9)、[ebf9e040](https://github.com/roketskiy/fintwind/commit/ebf9e040d751f3736f057882b0f960a6be32d81e)、[0d801ddc](https://github.com/roketskiy/fintwind/commit/0d801ddc5ba3190bda0dced3bd53201069da1349)、[7c12dc03](https://github.com/roketskiy/fintwind/commit/7c12dc03fd7f61dbedc17ff4142e76bb3ade9643)）。
+- 源码管理与分支历史体验改进：分支切换失败保留现场并支持重试，提交对话框与历史加载增加延迟显示，调整会话胶囊 Git 工具布局（[84751b74](https://github.com/roketskiy/fintwind/commit/84751b744233b87dcb1bda432ace1a38a49b66fd)）。
+- 会话输入行布局、提交动作与附件加载改进，文件拖放归属跟随目标会话；粘贴消息保留换行与空白（[a38e72df](https://github.com/roketskiy/fintwind/commit/a38e72df4b7a2ffca7cea067f754797049c4b575)、[b74f3127](https://github.com/roketskiy/fintwind/commit/b74f3127275182b8f6525cb65b8f3472f6ba0cf5)）。
+- 手机远控改善加载与上传反馈（[f3f9b530](https://github.com/roketskiy/fintwind/commit/f3f9b530234789d890aeb366331a34f87d80e216)）。
+- 定时任务创建时记录 IANA 时区并按该时区执行；未带时区的旧任务继续按本地时间计算（[d008436f](https://github.com/roketskiy/fintwind/commit/d008436fa797150ecd5b9b583fbe6149315256e5)）。
+- 提供商与用量设置改经 daemon 读写，连接测试、MCP 登录与列表、配额刷新等补齐加载状态与键盘操作支持（[5dc66c62](https://github.com/roketskiy/fintwind/commit/5dc66c620f3014472633bdec84d1f9055a742f79)）。
+
+### 修复
+
+- 修复 OpenCode 配置读取问题（[ea9dc658](https://github.com/roketskiy/fintwind/commit/ea9dc6585cec20b9d8a7fc747a5c51be8d6fa862)）。
+- 修复终端粘贴焦点与末行显示，以及右键误触发文本链接（[efb18d2a](https://github.com/roketskiy/fintwind/commit/efb18d2a6ba0a6e52008eb8617fdacd61edb2bf4)、[4ed4d88a](https://github.com/roketskiy/fintwind/commit/4ed4d88ab89933dd647e7c548b9147fd03ea4a31)）。
+- 修复订阅卡片边框裁切（[bbe1b677](https://github.com/roketskiy/fintwind/commit/bbe1b67765182e079a0eb87f84ad1e8a9a85f50b)）。
+- 修复加载按钮文字对齐（[86ed08de](https://github.com/roketskiy/fintwind/commit/86ed08def73377ed49dc3b9c98dab238c3f4ad59)）。
+
+### 兼容性
+
+继续使用 OpenCode 2（`@opencode/cli`）作为后端，不适用于 OpenCode 1.x，本版支持到 OpenCode 2.3.2。
+
 ## [0.3.1]
 
 ### 新功能

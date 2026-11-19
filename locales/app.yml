@@ -613,7 +613,7 @@ settings.image_generation:
 settings.image_generation_description:
   en: Off by default. When on, the model can create and edit images with the image_generate tool
 settings.image_generation_model:
-  en: Default model
+  en: Default image generation model
 settings.image_generation_model_description:
   en: Used when a request does not name a model
 settings.image_generation_model_auto:
@@ -2829,6 +2829,10 @@ source_control.action_failed:
   en: The Git action failed
 source_control.commit:
   en: Commit
+source_control.resolve_conflicts:
+  en: Resolve conflicts first
+source_control.branch_diverged:
+  en: Branch has diverged
 source_control.commit_to:
   en: Commit to %{branch}
 source_control.commit_message_on_branch:

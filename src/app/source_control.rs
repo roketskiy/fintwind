@@ -19,6 +19,17 @@ pub(super) struct PendingGitQuery {
     client: fintwind_client::WorkspaceClient,
 }
 
+#[derive(Clone, Copy)]
+enum SourceControlPrimary {
+    Commit,
+    StageAllCommit,
+    Pull,
+    Push,
+    Conflicts,
+    Diverged,
+    Idle,
+}
+
 /// Line totals for every file one review source covers. The toolbar capsule
 /// shows this; the diff snapshot beside it covers only the selected file.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -2116,16 +2127,15 @@ impl Fintwind {
             .child(self.render_source_control_file_list(cx))
     }
 
-    /// The VSCode-style commit box above the file groups: the message input
-    /// with `Ctrl+Enter` to accept, then the primary action button with its
-    /// dropdown. The primary follows the repository state like VSCode's
-    /// action button: commit while dirty, pull/push while clean and
-    /// diverged, disabled otherwise. The file groups below stay untouched.
     fn render_source_control_commit_box(&mut self, cx: &mut Context<Self>) -> Div {
         let theme = Theme::current(cx);
         let writable = !self.review_is_history_snapshot();
         let busy = self.source_control_busy.is_some();
-        let enabled = writable && !busy;
+        let enabled = writable
+            && !busy
+            && !self.source_control_status_loading
+            && self.source_control_status_error.is_none()
+            && self.source_control_status.is_some();
         // Booleans only: the path lists are cloned from the cached status
         // on demand by the actions, never once per frame for the layout.
         let (staged, unstaged) = self
@@ -2139,11 +2149,6 @@ impl Fintwind {
             })
             .unwrap_or((false, false));
         let dirty = staged || unstaged;
-        let (ahead, behind) = self
-            .source_control_status
-            .as_ref()
-            .map(|status| (status.ahead, status.behind))
-            .unwrap_or((0, 0));
         let branch = self
             .source_control_status
             .as_ref()
@@ -2169,58 +2174,68 @@ impl Fintwind {
             .trim()
             .is_empty();
         let untracked_ready = self.source_control_untracked_fully_loaded();
-        let can_commit = enabled && staged && has_message;
-        let can_stage_commit = enabled && has_message && untracked_ready && dirty;
-
-        enum Primary {
-            Commit,
-            Pull,
-            Push,
-            Idle,
-        }
-        let primary = if !enabled {
-            Primary::Idle
-        } else if dirty {
-            Primary::Commit
-        } else if behind > 0 {
-            Primary::Pull
-        } else if ahead > 0 {
-            Primary::Push
-        } else {
-            Primary::Idle
-        };
+        let (primary, primary_ready) = self.source_control_primary_action(has_message);
+        let conflicts = matches!(primary, SourceControlPrimary::Conflicts);
+        let can_commit = enabled && !conflicts && staged && has_message;
+        let can_stage_commit = enabled && !conflicts && has_message && untracked_ready && dirty;
         let (primary_label, primary_icon, primary_ready, primary_action): (
             String,
             &'static str,
             bool,
             fn(&mut Self, &mut Context<Self>),
         ) = match primary {
-            Primary::Commit => (
+            SourceControlPrimary::Commit => (
                 tr!("source_control.commit"),
                 "icons/check.svg",
-                can_commit,
+                primary_ready,
                 Self::commit_source_control_staged,
             ),
-            Primary::Pull => (
+            SourceControlPrimary::StageAllCommit => (
+                tr!("source_control.stage_all_commit"),
+                "icons/plus.svg",
+                primary_ready,
+                Self::commit_source_control_all,
+            ),
+            SourceControlPrimary::Pull => (
                 tr!("source_control.pull"),
                 "icons/arrow-down.svg",
-                enabled,
+                primary_ready,
                 Self::pull_source_control,
             ),
-            Primary::Push => (
+            SourceControlPrimary::Push => (
                 tr!("source_control.push"),
                 "icons/arrow-up.svg",
-                enabled,
+                primary_ready,
                 Self::push_source_control,
             ),
-            Primary::Idle => (
-                tr!("source_control.commit"),
+            SourceControlPrimary::Conflicts => (
+                tr!("source_control.resolve_conflicts"),
+                "icons/check.svg",
+                false,
+                Self::commit_source_control_staged,
+            ),
+            SourceControlPrimary::Diverged => (
+                tr!("source_control.branch_diverged"),
+                "icons/arrow-down.svg",
+                false,
+                Self::pull_source_control,
+            ),
+            SourceControlPrimary::Idle => (
+                if enabled && untracked_ready {
+                    tr!("source_control.clean")
+                } else {
+                    tr!("source_control.commit")
+                },
                 "icons/check.svg",
                 false,
                 Self::commit_source_control_staged,
             ),
         };
 
+        let primary_label = self
+            .source_control_busy
+            .as_ref()
+            .map_or(primary_label, |label| label.to_string());
         let weak = cx.entity().downgrade();
         let primary_icon_color = if primary_ready {
             theme.on_accent
@@ -2254,6 +2269,21 @@ impl Fintwind {
             .when(!primary_ready, |button| {
                 button.bg(theme.overlay_strong).text_color(theme.text_ghost)
             })
+            .when(
+                enabled
+                    && matches!(primary, SourceControlPrimary::StageAllCommit)
+                    && !untracked_ready
+                    && !self.source_control_untracked_loading
+                    && self.source_control_untracked_error.is_none(),
+                |button| button.tooltip(Tooltip::text(tr!("source_control.load_untracked_first"))),
+            )
+            .when(
+                enabled
+                    && matches!(primary, SourceControlPrimary::Commit | SourceControlPrimary::StageAllCommit)
+                    && !has_message
+                    && (untracked_ready || staged),
+                |button| button.tooltip(Tooltip::text(tr!("source_control.commit_empty_message"))),
+            )
             .child(icon(primary_icon, 13.0, primary_icon_color))
             .child(primary_label.clone());
 
@@ -2425,32 +2455,81 @@ impl Fintwind {
             )
     }
 
-    /// Plain staged commit used by the primary button and `Ctrl+Enter`.
     fn commit_source_control_staged(&mut self, cx: &mut Context<Self>) {
         self.commit_source_control(false, false, cx);
     }
 
-    /// Runs the primary commit-box action for `Ctrl+Enter`: commit while
-    /// dirty, otherwise pull-then-push order like the button labels.
+    fn commit_source_control_all(&mut self, cx: &mut Context<Self>) {
+        self.commit_source_control(true, false, cx);
+    }
+
+    fn source_control_primary_action(&self, has_message: bool) -> (SourceControlPrimary, bool) {
+        let Some(status) = self.source_control_status.as_ref() else {
+            return (SourceControlPrimary::Idle, false);
+        };
+        let enabled = self.source_control_allows_writes()
+            && !self.source_control_status_loading
+            && self.source_control_status_error.is_none();
+        let conflicts = status.entries.iter().any(|entry| {
+            entry.index_status == 'U'
+                || entry.worktree_status == 'U'
+                || matches!(
+                    (entry.index_status, entry.worktree_status),
+                    ('A', 'A') | ('D', 'D')
+                )
+        });
+        if conflicts {
+            (SourceControlPrimary::Conflicts, false)
+        } else if status.entries.iter().any(source_control_entry_is_staged) {
+            (SourceControlPrimary::Commit, enabled && has_message)
+        } else if status
+            .entries
+            .iter()
+            .any(|entry| {
+                source_control_entry_is_unstaged(entry)
+                    || (entry.worktree_status == '?'
+                        && entry.path.ends_with('/')
+                        && !self.source_control_nested.iter().any(|node| {
+                            node.repository.relative_path == entry.path.trim_end_matches('/')
+                        }))
+            })
+        {
+            (
+                SourceControlPrimary::StageAllCommit,
+                enabled && has_message && self.source_control_untracked_fully_loaded(),
+            )
+        } else if !self.source_control_untracked_fully_loaded() {
+            (SourceControlPrimary::Idle, false)
+        } else if status.upstream.is_some() && status.ahead > 0 && status.behind > 0 {
+            (SourceControlPrimary::Diverged, false)
+        } else if status.upstream.is_some() && status.behind > 0 {
+            (SourceControlPrimary::Pull, enabled)
+        } else if status.upstream.is_some() && status.ahead > 0 {
+            (SourceControlPrimary::Push, enabled)
+        } else {
+            (SourceControlPrimary::Idle, false)
+        }
+    }
+
     pub(super) fn accept_source_control_input(&mut self, cx: &mut Context<Self>) {
-        if !self.source_control_allows_writes() || self.source_control_busy.is_some() {
+        let has_message = !self
+            .source_control_commit_input
+            .read(cx)
+            .content()
+            .trim()
+            .is_empty();
+        let (primary, ready) = self.source_control_primary_action(has_message);
+        if !ready {
             return;
         }
-        let dirty = !self.source_control_staged_paths().is_empty()
-            || !self.source_control_unstaged_paths().is_empty();
-        if dirty {
-            self.commit_source_control(false, false, cx);
-            return;
-        }
-        let (ahead, behind) = self
-            .source_control_status
-            .as_ref()
-            .map(|status| (status.ahead, status.behind))
-            .unwrap_or((0, 0));
-        if behind > 0 {
-            self.pull_source_control(cx);
-        } else if ahead > 0 {
-            self.push_source_control(cx);
+        match primary {
+            SourceControlPrimary::Commit => self.commit_source_control_staged(cx),
+            SourceControlPrimary::StageAllCommit => self.commit_source_control_all(cx),
+            SourceControlPrimary::Pull => self.pull_source_control(cx),
+            SourceControlPrimary::Push => self.push_source_control(cx),
+            SourceControlPrimary::Conflicts
+            | SourceControlPrimary::Diverged
+            | SourceControlPrimary::Idle => {}
         }
     }
 

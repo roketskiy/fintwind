@@ -355,7 +355,8 @@ fn submissions_keep_typed_text_and_allow_attachment_only() {
     // Chips travel on the files channel. An attachment-only send stays empty
     // text rather than inventing an `@` path.
     assert_eq!(submission_text("  ", 2).as_deref(), Some(""));
-    assert_eq!(submission_text(" plain ", 0).as_deref(), Some("plain"));
+    // Whitespace is part of the message; only all-whitespace prompts collapse.
+    assert_eq!(submission_text(" plain ", 0).as_deref(), Some(" plain "));
     assert_eq!(submission_text("   ", 0), None);
 }
 
@@ -2455,6 +2456,7 @@ fn settings_search_filters_pages_for_arrow_cycling() {
         SettingsPage::Skills,
         SettingsPage::McpServers,
         SettingsPage::McpMarket,
+        SettingsPage::Ssh,
     ];
     assert_eq!(pages(""), all_pages);
 

@@ -1056,8 +1056,29 @@ impl Fintwind {
             else { views.daily.get(i).map_or(0, |day| day.total) }
         }).collect();
         let max = values.iter().copied().max().unwrap_or(0).max(1);
-        let mut chart = div().flex().items_end().gap(px(3.0)).w_full().h(px(160.0));
+        let mut chart = div().flex().items_end().gap(px(3.0)).w_full().h(px(128.0));
+        let mut axis = div().flex().gap(px(3.0)).w_full().h(ui_px(18.0));
+        let colors = plot_colors(theme);
         for (i, (point, value)) in points.iter().zip(values.iter()).enumerate() {
+            let mut tick = div().relative().flex_1().min_w_0();
+            if single_day {
+                if i % 6 == 0 {
+                    tick = tick.child(
+                        div().absolute().left_0().top_0().w(ui_px(44.0)).truncate()
+                            .text_size(ui_px(10.0)).text_color(theme.text_tertiary)
+                            .child(point.label.clone()),
+                    );
+                }
+            } else if points.len() <= 12 || i % 5 == 0 {
+                tick = tick.child(
+                    div().absolute().left_0().top_0()
+                        .when(points.len() <= 12, |label| label.w_full().text_center())
+                        .when(points.len() > 12, |label| label.w(ui_px(36.0)))
+                        .truncate().text_size(ui_px(10.0)).text_color(theme.text_tertiary)
+                        .child(point.label.clone()),
+                );
+            }
+            axis = axis.child(tick);
             if matches!(self.usage_range, UsageRange::Day(0)) && i > Local::now().hour() as usize {
                 chart = chart.child(div().flex_1().min_w_0().h_full().bg(theme.overlay));
                 continue;
@@ -1067,8 +1088,6 @@ impl Fintwind {
             let click_selection = selection.clone();
             let key_selection = selection;
             let value_height = ((*value as f64 / max as f64) * 112.0) as f32;
-            let label = if points.len() > 12 && i % 5 != 0 { String::new() } else { point.label.clone() };
-            let colors = plot_colors(theme);
             let mut bar = div().w_full().h(px(value_height)).flex().flex_col().justify_end();
             if use_io && *value > 0 {
                 bar = bar.child(div().w_full().h(gpui::relative(point.output as f32 / *value as f32)).bg(colors[1].opacity(0.7)))
@@ -1081,10 +1100,9 @@ impl Fintwind {
                 .border_color(if selected { theme.accent_focus } else { gpui::transparent_black() })
                 .focus_visible(|style| style.border_color(theme.accent_focus))
                 .hover(|style| style.bg(theme.overlay))
-                .flex().flex_col().justify_end().items_center().gap_1()
-                .when(points.len() <= 12, |element| element.child(div().text_size(ui_px(10.0)).text_color(theme.text_tertiary).child(format_tokens(*value))))
+                .flex().flex_col().justify_end().items_center()
+                .when(points.len() <= 12, |element| element.child(div().w_full().truncate().text_center().text_size(ui_px(10.0)).text_color(theme.text_tertiary).child(format_tokens(*value))))
                 .child(bar)
-                .child(div().h(px(16.0)).text_size(ui_px(10.0)).text_color(theme.text_tertiary).child(label))
                 .on_click(cx.listener(move |this, _, _, cx| {this.usage_flow_selection = Some(click_selection.clone());cx.notify();}))
                 .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
                     if matches!(event.keystroke.key.as_str(), "enter" | "space") {this.usage_flow_selection = Some(key_selection.clone());cx.notify();cx.stop_propagation();}
@@ -1100,8 +1118,9 @@ impl Fintwind {
             .child(div().flex().items_center().justify_between()
                 .child(div().text_size(ui_px(13.0)).font_weight(FontWeight::MEDIUM).child(if single_day {tr!("usage_page.hourly_title")} else {tr!("usage_page.daily_title")}))
                 .when(!single_day, |header| header.child(selector)))
-            .child(div().bg(theme.composer).border_1().border_color(theme.border).rounded(px(6.0)).p_3()
+            .child(div().flex().flex_col().gap_1().bg(theme.composer).border_1().border_color(theme.border).rounded(px(6.0)).p_3()
                 .child(chart)
+                .child(div().border_t_1().border_color(theme.border).pt_1().child(axis))
                 .when(single_day && views.hourly_estimated, |body| body.child(Caption::new(tr!("usage_page.hourly_estimated")))))
     }
 

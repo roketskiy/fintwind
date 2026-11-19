@@ -3,11 +3,16 @@
 //! per-model token-category breakdown that the scan did not provide.
 
 use super::*;
-use gpui::{canvas, point, size, PathBuilder};
+use gpui::{canvas, point, size, PathBuilder, Point};
 
-const FLOW_HEIGHT: f32 = 282.0;
-const FLOW_TOP: f32 = 42.0;
+const FLOW_MIN_HEIGHT: f32 = 282.0;
+const FLOW_TOP: f32 = 44.0;
+const FLOW_BOTTOM: f32 = 20.0;
 const FLOW_GAP: f32 = 8.0;
+const FLOW_LABEL_GAP: f32 = 4.0;
+const FLOW_LABEL_GUTTER: f32 = 20.0;
+const FLOW_LEFT_NODE: f32 = 0.22;
+const FLOW_RIGHT_NODE: f32 = 0.78;
 
 #[derive(Default)]
 struct FlowWidth {
@@ -32,9 +37,9 @@ struct Band {
     center: f32,
 }
 
-fn bands(lanes: &[FlowLane], total: u64, slots: usize) -> (Vec<Band>, f32) {
+fn bands(lanes: &[FlowLane], total: u64, slots: usize, height: f32) -> (Vec<Band>, f32) {
     let gaps = slots.saturating_sub(1) as f32 * FLOW_GAP;
-    let available = (FLOW_HEIGHT - FLOW_TOP - 18.0 - gaps).max(0.0);
+    let available = (height - FLOW_TOP - FLOW_BOTTOM - gaps).max(0.0);
     let mut y = FLOW_TOP;
     let bands = lanes.iter().map(|lane| {
         let height = if total == 0 { 0.0 } else { available * (lane.value as f64 / total as f64) as f32 };
@@ -45,16 +50,22 @@ fn bands(lanes: &[FlowLane], total: u64, slots: usize) -> (Vec<Band>, f32) {
     (bands, available)
 }
 
-fn label_positions(bands: &[Band]) -> Vec<f32> {
+fn label_positions(bands: &[Band], height: f32, label_height: f32) -> Vec<f32> {
+    let first = FLOW_TOP + label_height / 2.0;
+    let last = height - FLOW_BOTTOM - label_height / 2.0;
     let mut ys: Vec<_> = bands.iter().map(|band| band.center).collect();
-    for i in 1..ys.len() {
-        ys[i] = ys[i].max(ys[i - 1] + 28.0);
+    if let Some(top) = ys.first_mut() {
+        *top = top.max(first);
     }
-    if let Some(last) = ys.last_mut() {
-        *last = last.min(FLOW_HEIGHT - 16.0);
+    let spacing = label_height + FLOW_LABEL_GAP;
+    for i in 1..ys.len() {
+        ys[i] = ys[i].max(ys[i - 1] + spacing);
+    }
+    if let Some(bottom) = ys.last_mut() {
+        *bottom = bottom.min(last);
     }
     for i in (0..ys.len().saturating_sub(1)).rev() {
-        ys[i] = ys[i].min(ys[i + 1] - 28.0);
+        ys[i] = ys[i].min(ys[i + 1] - spacing);
     }
     ys
 }
@@ -79,18 +90,36 @@ fn flow_band(
     if let Ok(path) = path.build() { window.paint_path(path, color); }
 }
 
-fn flow_canvas(left: Vec<FlowLane>, right: Vec<FlowLane>, total: u64, selected: Option<UsageFlowSelection>, trunk_color: Hsla) -> impl IntoElement {
+fn label_leader(
+    window: &mut Window,
+    node: Point<Pixels>,
+    label: Point<Pixels>,
+    color: Hsla,
+) {
+    let mut path = PathBuilder::stroke(px(1.0));
+    let midpoint = (node.x + label.x) / 2.0;
+    path.move_to(node);
+    path.cubic_bezier_to(label, point(midpoint, node.y), point(midpoint, label.y));
+    if let Ok(path) = path.build() {
+        window.paint_path(path, color);
+    }
+}
+
+fn flow_canvas(left: Vec<FlowLane>, right: Vec<FlowLane>, total: u64, label_height: f32, selected: Option<UsageFlowSelection>, trunk_color: Hsla) -> impl IntoElement {
     canvas(|_, _, _| (), move |bounds, _, window, _| {
+        let height = f32::from(bounds.size.height);
         let slots = left.len().max(right.len());
-        let (left_bands, left_height) = bands(&left, total, slots);
-        let (right_bands, right_height) = bands(&right, total, slots);
+        let (left_bands, left_height) = bands(&left, total, slots, height);
+        let (right_bands, right_height) = bands(&right, total, slots, height);
+        let left_labels = label_positions(&left_bands, height, label_height);
+        let right_labels = label_positions(&right_bands, height, label_height);
         let center_x = bounds.center().x;
-        let left_x = bounds.left() + bounds.size.width * 0.19;
-        let right_x = bounds.right() - bounds.size.width * 0.18;
-        let left_trunk = FLOW_TOP + (FLOW_HEIGHT - FLOW_TOP - 18.0 - left_height) / 2.0;
-        let right_trunk = FLOW_TOP + (FLOW_HEIGHT - FLOW_TOP - 18.0 - right_height) / 2.0;
+        let left_x = bounds.left() + bounds.size.width * FLOW_LEFT_NODE;
+        let right_x = bounds.left() + bounds.size.width * FLOW_RIGHT_NODE;
+        let left_trunk = FLOW_TOP + (height - FLOW_TOP - FLOW_BOTTOM - left_height) / 2.0;
+        let right_trunk = FLOW_TOP + (height - FLOW_TOP - FLOW_BOTTOM - right_height) / 2.0;
         let mut offset = 0.0;
-        for (lane, band) in left.iter().zip(left_bands) {
+        for ((lane, band), label_y) in left.iter().zip(left_bands).zip(left_labels) {
             let opacity = match (&selected, &lane.selection) {
                 (Some(UsageFlowSelection::Model(i)), Some(UsageFlowSelection::Model(j))) if i == j => 0.50,
                 (Some(UsageFlowSelection::Model(_)), _) => 0.06,
@@ -98,10 +127,13 @@ fn flow_canvas(left: Vec<FlowLane>, right: Vec<FlowLane>, total: u64, selected: 
             };
             flow_band(window, left_x, bounds.top() + px(band.start), center_x - px(4.0), bounds.top() + px(left_trunk + offset), px(band.height), lane.color.opacity(opacity));
             if band.height > 0.0 { window.paint_quad(fill(Bounds::new(point(left_x - px(6.0), bounds.top() + px(band.start)), size(px(6.0), px(band.height))), lane.color)); }
+            if band.height > 0.0 {
+                label_leader(window, point(left_x - px(6.0), bounds.top() + px(band.center)), point(left_x - px(FLOW_LABEL_GUTTER), bounds.top() + px(label_y)), lane.color.opacity(0.55));
+            }
             offset += band.height;
         }
         offset = 0.0;
-        for (lane, band) in right.iter().zip(right_bands) {
+        for ((lane, band), label_y) in right.iter().zip(right_bands).zip(right_labels) {
             let opacity = match (&selected, &lane.selection) {
                 (Some(UsageFlowSelection::Lane(i)), Some(UsageFlowSelection::Lane(j))) if i == j => 0.50,
                 (Some(UsageFlowSelection::Lane(_)), _) => 0.06,
@@ -109,6 +141,9 @@ fn flow_canvas(left: Vec<FlowLane>, right: Vec<FlowLane>, total: u64, selected: 
             };
             flow_band(window, center_x + px(4.0), bounds.top() + px(right_trunk + offset), right_x, bounds.top() + px(band.start), px(band.height), lane.color.opacity(opacity));
             if band.height > 0.0 { window.paint_quad(fill(Bounds::new(point(right_x, bounds.top() + px(band.start)), size(px(6.0), px(band.height))), lane.color)); }
+            if band.height > 0.0 {
+                label_leader(window, point(right_x + px(6.0), bounds.top() + px(band.center)), point(right_x + px(FLOW_LABEL_GUTTER), bounds.top() + px(label_y)), lane.color.opacity(0.55));
+            }
             offset += band.height;
         }
         if total > 0 {
@@ -117,7 +152,7 @@ fn flow_canvas(left: Vec<FlowLane>, right: Vec<FlowLane>, total: u64, selected: 
     }).absolute().inset_0()
 }
 
-fn lane_button(id: String, lane: &FlowLane, x: f32, y: f32, width: f32, right: bool, selected: bool, theme: &Theme, cx: &mut Context<Fintwind>) -> Stateful<Div> {
+fn lane_button(id: String, lane: &FlowLane, bounds: Bounds<Pixels>, right: bool, selected: bool, theme: &Theme, cx: &mut Context<Fintwind>) -> Stateful<Div> {
     let selection = lane.selection.clone();
     let key_selection = selection.clone();
     let title = lane.title.clone();
@@ -126,8 +161,9 @@ fn lane_button(id: String, lane: &FlowLane, x: f32, y: f32, width: f32, right: b
     if right { text = text.items_start(); } else { text = text.items_end().text_right(); }
     text = text.child(div().w_full().truncate().text_color(theme.text).child(SharedString::from(title)))
         .child(div().w_full().truncate().text_color(theme.text_tertiary).child(SharedString::from(detail)));
-    div().id(SharedString::from(id)).absolute().left(px(x)).top(px(y - 14.0))
-        .w(px(width.max(1.0))).h(px(28.0)).rounded(px(5.0)).px_1()
+    div().id(SharedString::from(id)).absolute().left(bounds.left()).top(bounds.top())
+        .w(bounds.size.width).h(bounds.size.height).rounded(px(5.0)).px_2()
+        .flex().items_center()
         .border_1().border_color(if selected { theme.border_strong } else { gpui::transparent_black() })
         .when(selected, |element| element.bg(theme.overlay))
         .hover(|style| style.bg(theme.overlay))
@@ -141,7 +177,7 @@ fn lane_button(id: String, lane: &FlowLane, x: f32, y: f32, width: f32, right: b
                         this.usage_flow_selection = key_selection.clone(); cx.notify(); cx.stop_propagation();
                     }
                 }))
-        }).child(text)
+        }).child(text.flex_1())
 }
 
 impl Fintwind {
@@ -150,7 +186,8 @@ impl Fintwind {
         let total = totals.total();
         let colors = plot_colors(theme);
         let mut left: Vec<FlowLane> = views.models.iter().take(MAX_MODEL_ROWS).enumerate().map(|(i, row)| {
-            let title = row.model.as_deref().and_then(|s| s.rsplit('/').next()).unwrap_or_else(|| "—");
+            let unknown = tr!("usage_page.unknown_model");
+            let title = row.model.as_deref().and_then(|s| s.rsplit('/').next()).unwrap_or(&unknown);
             FlowLane { title: title.to_owned(), detail: flow_detail(row.total, total), value: row.total, color: colors[i % colors.len()], selection: Some(UsageFlowSelection::Model(i)), known: true }
         }).collect();
         let represented = left.iter().fold(0u64, |sum, row| sum.saturating_add(row.value));
@@ -167,31 +204,36 @@ impl Fintwind {
         }).collect();
         let width = window.use_keyed_state("usage-flow-width", cx, |_, _| FlowWidth::default());
         let w = width.read(cx).width;
-        let lx = w * 0.19;
-        let rx = w * 0.82;
+        let lx = w * FLOW_LEFT_NODE;
+        let rx = w * FLOW_RIGHT_NODE;
         let slots = left.len().max(right.len());
-        let (lb, _) = bands(&left, total, slots);
-        let (rb, _) = bands(&right, total, slots);
-        let left_positions = label_positions(&lb);
-        let right_positions = label_positions(&rb);
+        let label_height = f32::from(ui_px(32.0)).max(32.0);
+        let height = FLOW_MIN_HEIGHT.max(
+            FLOW_TOP + FLOW_BOTTOM + slots as f32 * label_height
+                + slots.saturating_sub(1) as f32 * FLOW_LABEL_GAP,
+        );
+        let (lb, _) = bands(&left, total, slots, height);
+        let (rb, _) = bands(&right, total, slots, height);
+        let left_positions = label_positions(&lb, height, label_height);
+        let right_positions = label_positions(&rb, height, label_height);
         let selected = self.usage_flow_selection.clone();
         let hit_width = width.clone();
         let hit_left = left.clone();
         let hit_right = right.clone();
-        let mut field = div().id("usage-flow-field").tab_group().relative().w_full().h(px(FLOW_HEIGHT))
+        let mut field = div().id("usage-flow-field").tab_group().relative().w_full().h(px(height))
             .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                 let Some(bounds) = hit_width.read(cx).bounds else { return; };
                 let width = f32::from(bounds.size.width);
                 let x = f32::from(event.position.x - bounds.left());
                 let y = f32::from(event.position.y - bounds.top());
                 let center = width * 0.5;
-                let (lanes, is_left, start, end) = if x >= width * 0.19 && x < center - 4.0 {
-                    (&hit_left, true, width * 0.19, center - 4.0)
-                } else if x > center + 4.0 && x <= width * 0.82 {
-                    (&hit_right, false, center + 4.0, width * 0.82)
+                let (lanes, is_left, start, end) = if x >= width * FLOW_LEFT_NODE && x < center - 4.0 {
+                    (&hit_left, true, width * FLOW_LEFT_NODE, center - 4.0)
+                } else if x > center + 4.0 && x <= width * FLOW_RIGHT_NODE {
+                    (&hit_right, false, center + 4.0, width * FLOW_RIGHT_NODE)
                 } else { return; };
-                let (pieces, height) = bands(lanes, total, hit_left.len().max(hit_right.len()));
-                let trunk = FLOW_TOP + (FLOW_HEIGHT - FLOW_TOP - 18.0 - height) / 2.0;
+                let (pieces, band_height) = bands(lanes, total, hit_left.len().max(hit_right.len()), height);
+                let trunk = FLOW_TOP + (height - FLOW_TOP - FLOW_BOTTOM - band_height) / 2.0;
                 let t = ((x - start) / (end - start)).clamp(0.0, 1.0);
                 let blend = t * t * (3.0 - 2.0 * t);
                 let mut offset = 0.0;
@@ -206,13 +248,13 @@ impl Fintwind {
                     offset += band.height;
                 }
             }));
-        field = field.child(flow_canvas(left.clone(), right.clone(), total, selected.clone(), theme.border_strong));
-        field = field.child(div().absolute().left_0().top(px(8.0)).text_size(ui_px(11.0)).text_color(theme.text_ghost).child(format!("{} · {}", tr!("usage_page.models_title"), views.model_count)))
+        field = field.child(flow_canvas(left.clone(), right.clone(), total, label_height, selected.clone(), theme.border_strong));
+        field = field.child(div().absolute().left(px(8.0)).top(px(12.0)).text_size(ui_px(11.0)).text_color(theme.text_tertiary).child(tr!("usage_page.models_title")))
             .child(div().absolute().left(gpui::relative(0.4)).w(gpui::relative(0.2)).top(px(8.0)).text_center().text_size(ui_px(11.0)).text_color(theme.text_ghost).child(tr!("usage_page.flow_total")))
-            .child(div().absolute().left(gpui::relative(0.82)).top(px(8.0)).text_size(ui_px(11.0)).text_color(theme.text_ghost).child(tr!("usage_page.flow_composition")));
+            .child(div().absolute().left(gpui::relative(FLOW_RIGHT_NODE)).right(px(8.0)).top(px(12.0)).truncate().text_size(ui_px(11.0)).text_color(theme.text_tertiary).child(tr!("usage_page.flow_composition")));
         if w > 0.0 {
             field = field.child(div().id("usage-flow-total").absolute().left(px(w * 0.5 - 12.0))
-                .top(px(FLOW_TOP)).w(px(24.0)).h(px(FLOW_HEIGHT - FLOW_TOP - 18.0))
+                .top(px(FLOW_TOP)).w(px(24.0)).h(px(height - FLOW_TOP - FLOW_BOTTOM))
                 .tab_index(0).rounded(px(5.0))
                 .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
                 .on_click(cx.listener(|this, _, _, cx| { this.usage_flow_selection = None; cx.notify(); }))
@@ -222,10 +264,12 @@ impl Fintwind {
                     }
                 })));
             for (i, lane) in left.iter().enumerate() {
-                field = field.child(lane_button(format!("usage-flow-model-{i}"), lane, 0.0, left_positions[i], lx - 4.0, false, lane.selection == selected && selected.is_some(), theme, cx));
+                let bounds = Bounds::new(point(px(0.0), px(left_positions[i] - label_height / 2.0)), size(px((lx - FLOW_LABEL_GUTTER).max(1.0)), px(label_height)));
+                field = field.child(lane_button(format!("usage-flow-model-{i}"), lane, bounds, false, lane.selection == selected && selected.is_some(), theme, cx));
             }
             for (i, lane) in right.iter().enumerate() {
-                field = field.child(lane_button(format!("usage-flow-lane-{i}"), lane, rx + 4.0, right_positions[i], w - rx - 4.0, true, lane.selection == selected && selected.is_some(), theme, cx));
+                let bounds = Bounds::new(point(px(rx + FLOW_LABEL_GUTTER), px(right_positions[i] - label_height / 2.0)), size(px((w - rx - FLOW_LABEL_GUTTER).max(1.0)), px(label_height)));
+                field = field.child(lane_button(format!("usage-flow-lane-{i}"), lane, bounds, true, lane.selection == selected && selected.is_some(), theme, cx));
             }
         }
         field = field.child(canvas(move |bounds, _, cx| {

@@ -3,6 +3,7 @@ use crate::theme::{code_px, ui_px};
 use super::transcript_view::{ActivityClusterContext, ActivityClusterDisclosure, ActivitySurface};
 use super::*;
 use crate::ui::scrollbar::Scrollable;
+use ely_gpui_component::typography::tabular;
 use gpui::FollowMode;
 
 const MAX_BACKGROUND_OUTPUT_BYTES: usize = 512 * 1024;
@@ -130,6 +131,7 @@ struct BackgroundSummaryEntry {
     key: BackgroundWorkKey,
     title: String,
     status: BackgroundWorkStatus,
+    elapsed: Option<String>,
     can_stop: bool,
     row_focus: FocusHandle,
     stop_focus: FocusHandle,
@@ -1091,16 +1093,18 @@ pub(super) fn work_kind_icon(kind: BackgroundWorkKind) -> &'static str {
     }
 }
 
+fn work_elapsed_seconds(item: &BackgroundWorkItem, now_ms: u64) -> u64 {
+    let duration_ms = if item.status.is_live() {
+        now_ms.saturating_sub(item.started_at_ms)
+    } else {
+        item.duration_ms
+            .unwrap_or_else(|| item.updated_at_ms.saturating_sub(item.started_at_ms))
+    };
+    duration_ms / 1_000
+}
+
 fn work_elapsed(item: &BackgroundWorkItem) -> String {
-    let duration_ms = item.duration_ms.unwrap_or_else(|| {
-        let end = if item.status.is_live() {
-            unix_time_millis()
-        } else {
-            item.updated_at_ms
-        };
-        end.saturating_sub(item.started_at_ms)
-    });
-    let seconds = duration_ms / 1_000;
+    let seconds = work_elapsed_seconds(item, unix_time_millis());
     if seconds < 60 {
         format!("{seconds}s")
     } else if seconds < 60 * 60 {
@@ -2614,6 +2618,16 @@ fn render_background_summary_row(
                     },
                 ),
         )
+        .children(entry.elapsed.map(|elapsed| {
+            tabular(
+                div()
+                    .flex_none()
+                    .whitespace_nowrap()
+                    .text_size(ui_px(11.0))
+                    .text_color(theme.text_secondary),
+            )
+            .child(elapsed)
+        }))
         .children(trailing)
         .on_click(move |_, window, cx| {
             click_handle.close(window, cx);

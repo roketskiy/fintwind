@@ -10,6 +10,7 @@ use fintwind_protocol::pull_request::{
 use gpui::Size;
 
 use super::todo::{TodoSnapshot, TodoStatus};
+use crate::app::transcript::format_working_elapsed;
 
 const CAPSULE_TABS_HEIGHT: f32 = 32.0;
 pub(in crate::app) const CAPSULE_ROW_HEIGHT: f32 = CAPSULE_TABS_HEIGHT + 2.0 + 6.0;
@@ -453,6 +454,7 @@ impl Fintwind {
             .unwrap_or_default();
         let mut agents = Vec::new();
         let mut processes = Vec::new();
+        let now_ms = unix_time_millis();
         for item in items {
             let provider_id = &item.key.provider_id;
             let kind = item.key.kind as u8;
@@ -460,6 +462,9 @@ impl Fintwind {
                 key: item.key.clone(),
                 title: item.title.clone(),
                 status: item.status,
+                elapsed: (item.key.kind != BackgroundWorkKind::Subagent
+                    || item.status != BackgroundWorkStatus::Completed)
+                    .then(|| format_working_elapsed(work_elapsed_seconds(item, now_ms))),
                 can_stop: item.can_stop,
                 row_focus: self.transcript_control_focus(
                     format!("background-summary-row-{provider_id}-{kind}"),

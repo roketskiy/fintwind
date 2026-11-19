@@ -1335,7 +1335,7 @@ mod tests {
     use crate::settings::DaemonSettingsStore;
     #[cfg(unix)]
     use base64::Engine as _;
-    use crossbeam_channel::bounded;
+    use crossbeam_channel::{RecvTimeoutError, bounded};
     use fintwind_client::DaemonClient;
     use serde_json::json;
     use std::path::PathBuf;
@@ -1672,9 +1672,14 @@ mod tests {
         assert_eq!(event.event.kind, "connected");
 
         client.shutdown();
-        let exited = events.recv_timeout(Duration::from_secs(1)).unwrap();
-        assert_eq!(exited.runtime_id, runtime_id);
-        assert_eq!(exited.event.kind, "processExited");
+        // A dropped connection closes the subscription instead of synthesizing
+        // processExited: a replaced SSH tunnel must not declare live remote
+        // runtimes dead. Consumers detect the closed transport and recover
+        // through the daemon's replay journal.
+        assert!(matches!(
+            events.recv_timeout(Duration::from_secs(5)),
+            Err(RecvTimeoutError::Disconnected)
+        ));
         server.join().unwrap();
     }
 

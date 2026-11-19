@@ -559,8 +559,7 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
                 fintwind_client::ResponsePayload::Session { session: Some(session) }
                     if session.active_turn_id().is_some()
             ), "remote turn must be active when the desktop quits");
-            let busy = require_idle_daemon(&client).expect_err("active remote turn must block daemon updates");
-            assert_eq!(busy.to_string(), tr!("ssh.update_busy"));
+            assert!(remote_daemon_busy(&client).unwrap(), "active remote turn must block daemon updates");
             test_app.quit();
             let deadline = Instant::now() + Duration::from_secs(90);
             loop {
@@ -573,7 +572,7 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
                 if let fintwind_client::ResponsePayload::Session { session: Some(session) } = response
                     && session.turns.last().is_some_and(|turn| turn.status == TurnStatus::Completed)
                 {
-                    require_idle_daemon(&client).expect("settled remote turn must permit daemon updates");
+                    assert!(!remote_daemon_busy(&client).unwrap(), "settled remote turn must permit daemon updates");
                     let proof = serde_json::json!({
                         "passed": true,
                         "session": id,
@@ -725,7 +724,7 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
                     cx.update(|_, cx| picker.update(cx, |app, cx| {
                         let mut profile = app.ssh.profiles.iter().find(|profile| profile.id == profile_id).unwrap().clone();
                         profile.daemon_port = None;
-                        app.ssh_connect(profile, SshConnectionAction::Deploy, cx);
+                        app.ssh_probe(profile, cx);
                     }));
                     let deadline = Instant::now() + Duration::from_secs(90);
                     loop {

@@ -119,9 +119,10 @@ nohup flock -n -o "$root/lock" sh -c '
 }
 
 pub(super) async fn ensure_current(
-    session: &client::Handle<HostKey>,
+    session: &Arc<client::Handle<HostKey>>,
     target: LinuxTarget,
-    allow_existing_without_asset: bool,
+    detected: &Detection,
+    action: SshConnectionAction,
 ) -> Result<(u16, String)> {
     let executable = std::env::current_exe()?;
     let mut path = executable.with_file_name(target.asset());
@@ -132,11 +133,13 @@ pub(super) async fn ensure_current(
     {
         path = executable.with_file_name("fintwind-daemon");
     }
-    if allow_existing_without_asset && !path.is_file() {
-        match detect(session).await? {
-            Detection::Running { port, token_file } => return Ok((port, token_file)),
+    if !path.is_file() {
+        match detected {
+            Detection::Running { port, token_file } if action == SshConnectionAction::Connect => {
+                return Ok((*port, token_file.clone()));
+            }
             Detection::Stopped => return start(session).await,
-            Detection::Missing => {}
+            Detection::Missing | Detection::Running { .. } => {}
         }
     }
     let binary = read_binary(target, path)?;
@@ -174,6 +177,22 @@ fi
     if installed != Some(digest.as_str())
         || running.is_some_and(|hash| hash != "stopped" && hash != digest)
     {
+        if let Detection::Running { port, token_file } = detected {
+            let connection = tunnel::Connection::open_with_reconnect(
+                session.clone(),
+                *port,
+                token_file,
+                None::<fn() -> std::future::Ready<Result<client::Handle<HostKey>>>>,
+            )
+            .await?;
+            let client = connection.client();
+            if tokio::task::spawn_blocking(move || remote_daemon_busy(&client)).await?? {
+                if action == SshConnectionAction::Connect {
+                    return Ok((*port, token_file.clone()));
+                }
+                anyhow::bail!("{}", tr!("ssh.update_busy"));
+            }
+        }
         let script = format!(
             r#"
 umask 077
@@ -272,7 +291,7 @@ async fn command(
     let script = if isolated_root.is_some() {
         script.replace("nohup flock", "nohup timeout -k 5s 90s flock").replace(
             "exec ./daemon --bind",
-            "exec env HOME=\"$PWD/home\" XDG_CONFIG_HOME=\"$PWD/config\" XDG_DATA_HOME=\"$PWD/opencode-data\" ./daemon --parent-pid \"$(cat fixture-owner)\" --bind",
+            "exec env -i PATH=/usr/bin:/bin SHELL=/bin/sh HOME=\"$PWD/home\" TMPDIR=\"$PWD\" XDG_CONFIG_HOME=\"$PWD/config\" XDG_DATA_HOME=\"$PWD/opencode-data\" XDG_CACHE_HOME=\"$PWD/cache\" XDG_STATE_HOME=\"$PWD/state\" FINTWIND_DAEMON_TOKEN=\"$(cat token)\" ./daemon --parent-pid \"$(cat fixture-owner)\" --bind",
         )
     } else {
         script.to_owned()

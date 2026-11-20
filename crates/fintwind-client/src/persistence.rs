@@ -344,6 +344,21 @@ impl Default for AppSettings {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ComposerRecentEntry {
+    Command(String),
+    Skill(String),
+    File(String),
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ComposerRecent {
+    pub slash: Vec<ComposerRecentEntry>,
+    pub mention: Vec<ComposerRecentEntry>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct AppState {
     app_state_version: u32,
@@ -363,6 +378,8 @@ struct AppState {
     last_context_window: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     remembered_model_traits: Vec<RememberedModelTraits>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    composer_recent: BTreeMap<Uuid, ComposerRecent>,
     #[serde(default = "default_sidebar_visibility")]
     sidebar_visible: bool,
     #[serde(default = "default_right_panel_visibility")]
@@ -399,6 +416,8 @@ pub struct PersistedState {
     pub last_context_window: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub remembered_model_traits: Vec<RememberedModelTraits>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub composer_recent: BTreeMap<Uuid, ComposerRecent>,
     #[serde(default)]
     pub favorite_models: Vec<FavoriteModel>,
     #[serde(default)]
@@ -491,6 +510,7 @@ impl PersistedState {
             last_service_tier: None,
             last_context_window: None,
             remembered_model_traits: Vec::new(),
+            composer_recent: BTreeMap::new(),
             favorite_models: Vec::new(),
             theme: ThemePreference::Auto,
             theme_scheme: ThemeScheme::Default,
@@ -729,6 +749,7 @@ impl PersistedState {
             last_service_tier: self.last_service_tier.clone(),
             last_context_window: self.last_context_window.clone(),
             remembered_model_traits: self.remembered_model_traits.clone(),
+            composer_recent: self.composer_recent.clone(),
             sidebar_visible: self.sidebar_visible,
             right_panel_visible: self.right_panel_visible,
             sidebar_width: self.sidebar_width,
@@ -770,6 +791,7 @@ impl PersistedState {
         self.last_service_tier = app_state.last_service_tier;
         self.last_context_window = app_state.last_context_window;
         self.remembered_model_traits = app_state.remembered_model_traits;
+        self.composer_recent = app_state.composer_recent;
         self.sidebar_visible = app_state.sidebar_visible;
         self.right_panel_visible = app_state.right_panel_visible;
         self.sidebar_width = app_state.sidebar_width;

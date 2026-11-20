@@ -1,4 +1,16 @@
 _version: 1
+composer_completion.recent: 最近使った項目
+composer_completion.commands: コマンド
+composer_completion.skills: スキル
+composer_completion.files: ファイル
+composer_completion.empty_recent: 最近使った項目はありません
+composer_completion.no_matches: 該当する項目はありません
+composer_completion.files_unavailable: ファイルを利用できません
+composer_completion.files_loading: ファイルを読み込み中…
+composer_completion.select: ↑↓ 選択
+composer_completion.switch: ←→ 切り替え
+composer_completion.insert: Enter / Tab 挿入
+composer_completion.dismiss: Esc 閉じる
 common.open_default_app: 既定のアプリで開く
 btw.command_description: 会話に追加せずに補足質問する
 btw.argument_hint: 質問

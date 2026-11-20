@@ -1566,9 +1566,10 @@ pub struct Fintwind {
     slash_command_index: Rc<Vec<SlashCommand>>,
     slash_command_index_key: Option<(String, PathBuf)>,
     /// Workspace file index per project root, for `@` mentions.
-    mention_files: QueryCache<PathBuf, Vec<FileEntry>>,
+    mention_files: QueryCache<PathBuf, Option<Vec<FileEntry>>>,
     mention_file_index: Rc<Vec<FileEntry>>,
     mention_file_index_path: Option<PathBuf>,
+    mention_file_index_unavailable: bool,
     composer_reference_catalog: Rc<crate::mentions::Catalog>,
     /// Set when a driver reports its command registry mid-drain; the drain
     /// has no `Context` to rebuild the drawn index itself.
@@ -4071,6 +4072,7 @@ impl Fintwind {
                 mention_files: QueryCache::new(MAX_CACHED_WORKSPACES),
                 mention_file_index: Rc::new(Vec::new()),
                 mention_file_index_path: None,
+                mention_file_index_unavailable: true,
                 composer_reference_catalog: Rc::new(crate::mentions::Catalog::default()),
                 composer_sources_stale: false,
                 composer_autocomplete: autocomplete::AutocompleteUi::new(),

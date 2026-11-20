@@ -1,4 +1,16 @@
 _version: 1
+composer_completion.recent: 最近
+composer_completion.commands: 命令
+composer_completion.skills: 技能
+composer_completion.files: 文件
+composer_completion.empty_recent: 暂无最近记录
+composer_completion.no_matches: 无匹配结果
+composer_completion.files_unavailable: 文件暂不可用
+composer_completion.files_loading: 正在加载文件…
+composer_completion.select: ↑↓ 选择
+composer_completion.switch: ←→ 切换分区
+composer_completion.insert: Enter / Tab 添加
+composer_completion.dismiss: Esc 关闭
 remote.title: 手机远控
 remote.keywords: 手机 远控 配对 二维码 链接
 remote.status_off: 已关闭

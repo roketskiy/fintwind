@@ -3088,7 +3088,17 @@ impl Fintwind {
                 // from under the focused field. When it closes, the context
                 // disappears with it and `enter` submits again.
                 .when(autocomplete_open, |card| {
-                    card.key_context("ComposerAutocomplete")
+                    card.key_context(if self.composer_autocomplete.browsing() {
+                        "ComposerAutocomplete ComposerAutocompleteBrowse"
+                    } else {
+                        "ComposerAutocomplete"
+                    })
+                        .on_action(cx.listener(|this, _: &super::autocomplete::PreviousCategory, window, cx| {
+                            this.cycle_autocomplete_category(false, window, cx);
+                        }))
+                        .on_action(cx.listener(|this, _: &super::autocomplete::NextCategory, window, cx| {
+                            this.cycle_autocomplete_category(true, window, cx);
+                        }))
                         .on_action(cx.listener(|this, _: &SelectNextEntry, window, cx| {
                             this.move_autocomplete_highlight("down", window, cx);
                         }))

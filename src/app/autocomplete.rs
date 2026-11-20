@@ -19,7 +19,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gpui::{
-    Anchor, App, Bounds, Font, KeyBinding, Pixels, StyledText, TextRun, anchored, deferred,
+    Anchor, App, Bounds, Font, KeyBinding, Pixels, StyledText, TextRun, actions, anchored, deferred,
 };
 use nucleo_matcher::Matcher;
 
@@ -27,6 +27,7 @@ use crate::composer_complete::{
     self, FILE_INDEX_CAP, FileEntry, Scored, SlashCommand, Trigger, TriggerKind,
     highlight_byte_ranges,
 };
+use crate::persistence::ComposerRecentEntry;
 use crate::ui::menu::{ConfirmEntry, DismissMenu, SelectNextEntry, SelectPreviousEntry};
 
 use super::composer::next_picker_highlight;
@@ -34,6 +35,10 @@ use super::*;
 
 /// Key context the composer card declares while the popup is open.
 const AUTOCOMPLETE_CONTEXT: &str = "ComposerAutocomplete > ComposerInput";
+const AUTOCOMPLETE_BROWSE_CONTEXT: &str = "ComposerAutocompleteBrowse > ComposerInput";
+const RECENT_LIMIT: usize = 12;
+
+actions!(fintwind_autocomplete, [PreviousCategory, NextCategory]);
 
 /// Bind the popup's keys. Must run after [`crate::input::init`]: `enter` and
 /// the arrows tie with the field's own bindings at the `ComposerInput` depth,
@@ -45,7 +50,36 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("enter", ConfirmEntry, Some(AUTOCOMPLETE_CONTEXT)),
         KeyBinding::new("tab", ConfirmEntry, Some(AUTOCOMPLETE_CONTEXT)),
         KeyBinding::new("escape", DismissMenu, Some(AUTOCOMPLETE_CONTEXT)),
+        KeyBinding::new("left", PreviousCategory, Some(AUTOCOMPLETE_BROWSE_CONTEXT)),
+        KeyBinding::new("right", NextCategory, Some(AUTOCOMPLETE_BROWSE_CONTEXT)),
     ]);
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Category {
+    #[default]
+    Recent,
+    Commands,
+    Skills,
+    Files,
+}
+
+impl Category {
+    fn for_trigger(kind: TriggerKind) -> [Self; 3] {
+        match kind {
+            TriggerKind::Command => [Self::Recent, Self::Commands, Self::Skills],
+            TriggerKind::File => [Self::Recent, Self::Skills, Self::Files],
+        }
+    }
+
+    fn label(self) -> String {
+        match self {
+            Self::Recent => tr!("composer_completion.recent"),
+            Self::Commands => tr!("composer_completion.commands"),
+            Self::Skills => tr!("composer_completion.skills"),
+            Self::Files => tr!("composer_completion.files"),
+        }
+    }
 }
 
 pub(super) enum AutocompleteRow {
@@ -61,6 +95,8 @@ struct ResultsMemo {
     query: String,
     /// `Rc::as_ptr` identity of the source index the rows were filtered from.
     source: (usize, usize),
+    category: Category,
+    project: Option<Uuid>,
     rows: Rc<Vec<AutocompleteRow>>,
 }
 
@@ -73,6 +109,7 @@ pub(super) struct AutocompleteUi {
     /// row selected, and every token change snaps back to it so the best
     /// match is always the one `enter` takes. Clamped to the list at use.
     highlight: Cell<usize>,
+    category: Cell<Category>,
     /// Escape pressed on the current token; cleared the moment it changes.
     dismissed: Cell<bool>,
     scroll: ScrollHandle,
@@ -88,6 +125,7 @@ impl AutocompleteUi {
         Self {
             token: RefCell::new(None),
             highlight: Cell::new(0),
+            category: Cell::new(Category::Recent),
             dismissed: Cell::new(false),
             scroll: ScrollHandle::new(),
             card_bounds: Rc::new(Cell::new(None)),
@@ -99,6 +137,18 @@ impl AutocompleteUi {
     /// The cell the composer card's bounds probe writes into.
     pub(super) fn card_bounds_cell(&self) -> Rc<Cell<Option<Bounds<Pixels>>>> {
         self.card_bounds.clone()
+    }
+
+    pub(super) fn browsing(&self) -> bool {
+        self.token
+            .borrow()
+            .as_ref()
+            .is_some_and(|token| token.query.is_empty())
+    }
+
+    fn reset_selection(&self) {
+        self.highlight.set(0);
+        self.scroll.scroll_to_item(0);
     }
 }
 
@@ -117,6 +167,7 @@ impl Fintwind {
             self.slash_command_index_key = None;
             self.mention_file_index = Rc::new(Vec::new());
             self.mention_file_index_path = None;
+            self.mention_file_index_unavailable = true;
             self.sync_composer_reference_catalog(cx);
             return;
         };
@@ -184,19 +235,22 @@ impl Fintwind {
 
         match self.mention_files.read(&project_path) {
             Query::Ready(files) => {
-                self.mention_file_index = files.as_ref().clone().into();
+                self.mention_file_index_unavailable = files.is_none();
+                self.mention_file_index = files.as_ref().clone().unwrap_or_default().into();
                 self.mention_file_index_path = Some(project_path);
             }
             Query::Pending => {
                 if self.mention_file_index_path.as_ref() != Some(&project_path) {
                     self.mention_file_index = Rc::new(Vec::new());
                     self.mention_file_index_path = None;
+                    self.mention_file_index_unavailable = false;
                 }
             }
             Query::Missing(token) => {
                 if self.mention_file_index_path.as_ref() != Some(&project_path) {
                     self.mention_file_index = Rc::new(Vec::new());
                     self.mention_file_index_path = None;
+                    self.mention_file_index_unavailable = false;
                 }
                 let path = project_path.clone();
                 let workspace = fintwind_client::WorkspaceClient::new(self.daemon.client());
@@ -211,9 +265,9 @@ impl Fintwind {
                                 },
                             ) {
                                 Ok(fintwind_client::WorkspaceResult::ProjectFiles { entries }) => {
-                                    entries
+                                    Some(entries)
                                 }
-                                Ok(_) | Err(_) => Vec::new(),
+                                Ok(_) | Err(_) => None,
                             }
                         })
                         .await;
@@ -282,12 +336,14 @@ impl Fintwind {
         };
         let ui = &self.composer_autocomplete;
         if *ui.token.borrow() != trigger {
+            if trigger.as_ref().is_some_and(|token| token.query.is_empty()) {
+                ui.category.set(Category::Recent);
+            }
             *ui.token.borrow_mut() = trigger.clone();
             // A different token renumbers the rows: the keyboard cursor and a
             // standing dismissal both describe the previous list.
-            ui.highlight.set(0);
+            ui.reset_selection();
             ui.dismissed.set(false);
-            ui.scroll.scroll_to_item(0);
         }
         if ui.dismissed.get() {
             return None;
@@ -295,9 +351,68 @@ impl Fintwind {
         trigger
     }
 
+    fn autocomplete_project(&self) -> Option<Uuid> {
+        self.selected_session()
+            .map(|session| session.project_id)
+            .or(self.state.selected_project)
+    }
+
+    fn autocomplete_recent_rows(
+        &self,
+        project: Option<Uuid>,
+        kind: TriggerKind,
+    ) -> Vec<AutocompleteRow> {
+        let Some(recent) = project.and_then(|id| self.state.composer_recent.get(&id)) else {
+            return Vec::new();
+        };
+        let entries = match kind {
+            TriggerKind::Command => &recent.slash,
+            TriggerKind::File => &recent.mention,
+        };
+        entries
+            .iter()
+            .filter_map(|entry| match entry {
+                ComposerRecentEntry::Command(name) | ComposerRecentEntry::Skill(name) => {
+                    let is_skill = matches!(entry, ComposerRecentEntry::Skill(_));
+                    self.slash_command_index
+                        .iter()
+                        .find(|command| {
+                            command.name == *name
+                                && is_skill
+                                    == (command.scope == composer_complete::CommandScope::Skill)
+                        })
+                        .map(|item| {
+                            let scored = Scored {
+                                item: item.clone(),
+                                positions: Vec::new(),
+                            };
+                            if is_skill {
+                                AutocompleteRow::Skill(scored)
+                            } else {
+                                AutocompleteRow::Command(scored)
+                            }
+                        })
+                }
+                ComposerRecentEntry::File(path) => self
+                    .mention_file_index
+                    .iter()
+                    .find(|file| file.path == *path)
+                    .map(|file| {
+                        AutocompleteRow::File(Scored {
+                            item: file.clone(),
+                            positions: Vec::new(),
+                        })
+                    }),
+            })
+            .collect()
+    }
+
     /// The filtered rows for `trigger`, shared by the popup body, the keyboard
     /// cursor and `enter` so an index always means the same row everywhere.
     fn autocomplete_rows(&self, trigger: &Trigger) -> Rc<Vec<AutocompleteRow>> {
+        let browsing = trigger.query.is_empty();
+        let category = self.composer_autocomplete.category.get();
+        let project = self.autocomplete_project();
         let source = match trigger.kind {
             TriggerKind::Command => (Rc::as_ptr(&self.slash_command_index) as usize, 0),
             TriggerKind::File => (
@@ -308,57 +423,121 @@ impl Fintwind {
         {
             let memo = self.composer_autocomplete.results.borrow();
             if let Some(memo) = memo.as_ref().filter(|memo| {
-                memo.kind == trigger.kind && memo.query == trigger.query && memo.source == source
+                memo.kind == trigger.kind
+                    && memo.query == trigger.query
+                    && memo.source == source
+                    && memo.category == category
+                    && memo.project == project
             }) {
                 return memo.rows.clone();
             }
         }
         let mut matcher = self.composer_autocomplete.matcher.borrow_mut();
-        let rows = match trigger.kind {
-            TriggerKind::Command => composer_complete::filter_commands(
+        let is_skill =
+            |command: &SlashCommand| command.scope == composer_complete::CommandScope::Skill;
+        let rows = match (browsing, category, trigger.kind) {
+            (true, Category::Recent, kind) => self.autocomplete_recent_rows(project, kind),
+            (true, Category::Files, _) => {
+                composer_complete::filter_files(&self.mention_file_index, "", &mut matcher)
+                    .into_iter()
+                    .map(AutocompleteRow::File)
+                    .collect()
+            }
+            (false, _, TriggerKind::File) => {
+                let skills = self
+                    .slash_command_index
+                    .iter()
+                    .filter(|command| is_skill(command))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let files = composer_complete::filter_files(
+                    &self.mention_file_index,
+                    &trigger.query,
+                    &mut matcher,
+                );
+                // Reserve room for both kinds even when the skill catalog is large.
+                let skill_limit = composer_complete::FILTER_CAP
+                    - files.len().min(composer_complete::FILTER_CAP / 2);
+                let mut rows =
+                    composer_complete::filter_commands(&skills, &trigger.query, &mut matcher)
+                        .into_iter()
+                        .take(skill_limit)
+                        .map(AutocompleteRow::Skill)
+                        .collect::<Vec<_>>();
+                let remaining = composer_complete::FILTER_CAP - rows.len();
+                rows.extend(files.into_iter().take(remaining).map(AutocompleteRow::File));
+                rows
+            }
+            (true, category, _) => {
+                let entries = self
+                    .slash_command_index
+                    .iter()
+                    .filter(|command| is_skill(command) == (category == Category::Skills))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                composer_complete::filter_commands(&entries, "", &mut matcher)
+                    .into_iter()
+                    .map(|scored| {
+                        if is_skill(&scored.item) {
+                            AutocompleteRow::Skill(scored)
+                        } else {
+                            AutocompleteRow::Command(scored)
+                        }
+                    })
+                    .collect()
+            }
+            (false, _, TriggerKind::Command) => composer_complete::filter_commands(
                 &self.slash_command_index,
                 &trigger.query,
                 &mut matcher,
             )
             .into_iter()
-            .map(AutocompleteRow::Command)
-            .collect::<Vec<_>>(),
-            TriggerKind::File => {
-                let skills = self
-                    .slash_command_index
-                    .iter()
-                    .filter(|command| command.scope == composer_complete::CommandScope::Skill)
-                    .cloned()
-                    .collect::<Vec<_>>();
-                // Reserve room for both kinds even when the skill catalog is large.
-                let mut rows =
-                    composer_complete::filter_commands(&skills, &trigger.query, &mut matcher)
-                        .into_iter()
-                        .take(composer_complete::FILTER_CAP / 2)
-                        .map(AutocompleteRow::Skill)
-                        .collect::<Vec<_>>();
-                let remaining = composer_complete::FILTER_CAP - rows.len();
-                rows.extend(
-                    composer_complete::filter_files(
-                        &self.mention_file_index,
-                        &trigger.query,
-                        &mut matcher,
-                    )
-                    .into_iter()
-                    .take(remaining)
-                    .map(AutocompleteRow::File),
-                );
-                rows
-            }
+            .map(|scored| {
+                if is_skill(&scored.item) {
+                    AutocompleteRow::Skill(scored)
+                } else {
+                    AutocompleteRow::Command(scored)
+                }
+            })
+            .collect(),
         };
         let rows = Rc::new(rows);
         *self.composer_autocomplete.results.borrow_mut() = Some(ResultsMemo {
             kind: trigger.kind,
             query: trigger.query.clone(),
             source,
+            category,
+            project,
             rows: rows.clone(),
         });
         rows
+    }
+
+    fn set_autocomplete_category(&self, category: Category, cx: &mut Context<Self>) {
+        self.composer_autocomplete.category.set(category);
+        self.composer_autocomplete.reset_selection();
+        cx.notify();
+    }
+
+    pub(super) fn cycle_autocomplete_category(
+        &self,
+        forward: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(trigger) = self
+            .composer_trigger(window, cx)
+            .filter(|trigger| trigger.query.is_empty())
+        else {
+            return;
+        };
+        let categories = Category::for_trigger(trigger.kind);
+        let index = categories
+            .iter()
+            .position(|category| *category == self.composer_autocomplete.category.get())
+            .unwrap_or(0);
+        let step = if forward { 1 } else { categories.len() - 1 };
+        self.set_autocomplete_category(categories[(index + step) % categories.len()], cx);
     }
 
     pub(super) fn move_autocomplete_highlight(
@@ -403,14 +582,43 @@ impl Fintwind {
         let Some(row) = rows.get(index) else {
             return;
         };
-        let insert = match row {
-            AutocompleteRow::Command(scored) => format!("/{} ", scored.item.name),
-            AutocompleteRow::Skill(scored) => format!("@{} ", scored.item.name),
-            AutocompleteRow::File(scored) => format!("@{} ", scored.item.path),
+        let (name, entry) = match row {
+            AutocompleteRow::Command(scored) => (
+                &scored.item.name,
+                ComposerRecentEntry::Command(scored.item.name.clone()),
+            ),
+            AutocompleteRow::Skill(scored) => (
+                &scored.item.name,
+                ComposerRecentEntry::Skill(scored.item.name.clone()),
+            ),
+            AutocompleteRow::File(scored) => (
+                &scored.item.path,
+                ComposerRecentEntry::File(scored.item.path.clone()),
+            ),
         };
+        let sigil = if trigger.kind == TriggerKind::Command {
+            '/'
+        } else {
+            '@'
+        };
+        let insert = format!("{sigil}{name} ");
         self.composer.update(cx, |input, cx| {
             input.replace_range(trigger.range.clone(), &insert, cx);
         });
+        if let Some(project) = self.autocomplete_project() {
+            let recent = self.state.composer_recent.entry(project).or_default();
+            let entries = match trigger.kind {
+                TriggerKind::Command => &mut recent.slash,
+                TriggerKind::File => &mut recent.mention,
+            };
+            if entries.first() != Some(&entry) {
+                entries.retain(|previous| *previous != entry);
+                entries.insert(0, entry);
+                entries.truncate(RECENT_LIMIT);
+                self.composer_autocomplete.results.borrow_mut().take();
+                self.save();
+            }
+        }
         cx.notify();
     }
 
@@ -429,30 +637,115 @@ impl Fintwind {
     ) -> Option<AnyElement> {
         let trigger = self.composer_trigger(window, cx)?;
         let rows = self.autocomplete_rows(&trigger);
-        if rows.is_empty() {
-            return None;
-        }
         // The probe records during paint, so the first frame a composer ever
         // draws has no bounds yet; the popup appears one frame later.
         let card_bounds = self.composer_autocomplete.card_bounds.get()?;
         let theme = Theme::current(cx);
+        let browsing = trigger.query.is_empty();
+        let category = self.composer_autocomplete.category.get();
         let highlight = self
             .composer_autocomplete
             .highlight
             .get()
             .min(rows.len().saturating_sub(1));
 
+        let tabs = browsing.then(|| {
+            div().flex().gap(px(4.0)).px(px(4.0)).flex_none().children(
+                Category::for_trigger(trigger.kind)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, tab)| {
+                        let selected = category == tab;
+                        div()
+                            .id(("autocomplete-category", index))
+                            .h(ui_px(26.0))
+                            .px(px(8.0))
+                            .rounded(px(5.0))
+                            .flex()
+                            .items_center()
+                            .text_size(ui_px(11.5))
+                            .text_color(theme.text_secondary)
+                            .hover(|tab| tab.bg(theme.overlay))
+                            .when(selected, |tab| {
+                                tab.bg(theme.overlay_strong)
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.text)
+                            })
+                            .child(tab.label())
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, _, cx| {
+                                    this.set_autocomplete_category(tab, cx);
+                                }),
+                            )
+                    }),
+            )
+        });
         let mut list = div()
             .id("composer-autocomplete-list")
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
             .track_scroll(&self.composer_autocomplete.scroll)
-            .p(px(4.0));
+            .p(px(4.0))
+            .when(rows.is_empty(), |list| {
+                let label = if browsing && category == Category::Recent {
+                    tr!("composer_completion.empty_recent")
+                } else if trigger.kind == TriggerKind::File
+                    && (!browsing || category == Category::Files)
+                    && self.mention_file_index_unavailable
+                {
+                    tr!("composer_completion.files_unavailable")
+                } else if trigger.kind == TriggerKind::File
+                    && (!browsing || category == Category::Files)
+                    && self.mention_file_index_path.is_none()
+                {
+                    tr!("composer_completion.files_loading")
+                } else {
+                    tr!("composer_completion.no_matches")
+                };
+                list.child(
+                    div()
+                        .h(px(116.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_color(theme.text_tertiary)
+                        .text_size(ui_px(12.0))
+                        .child(label),
+                )
+            });
         for (index, row) in rows.iter().enumerate() {
-            list =
-                list.child(self.render_autocomplete_row(index, row, highlight, &theme, window, cx));
+            list = list.child(self.render_autocomplete_row(
+                index,
+                row,
+                highlight,
+                trigger.kind,
+                &theme,
+                window,
+                cx,
+            ));
         }
+        let footer = div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(12.0))
+            .px(px(8.0))
+            .h(ui_px(26.0))
+            .border_t_1()
+            .border_color(theme.border)
+            .text_size(ui_px(10.0))
+            .text_color(theme.text_tertiary)
+            .when(!rows.is_empty(), |bar| {
+                bar.child(tr!("composer_completion.select"))
+            })
+            .when(browsing, |bar| bar.child(tr!("composer_completion.switch")))
+            .when(!rows.is_empty(), |bar| {
+                bar.child(tr!("composer_completion.insert"))
+            })
+            .child(div().flex_1())
+            .child(tr!("composer_completion.dismiss"));
 
         Some(
             deferred(
@@ -463,8 +756,8 @@ impl Fintwind {
                     .child(
                         div()
                             .occlude()
-                            .w(card_bounds.size.width)
-                            .max_h(px(302.0))
+                            .w(card_bounds.size.width.min(px(560.0)))
+                            .max_h((card_bounds.origin.y - px(14.0)).clamp(px(96.0), px(416.0)))
                             .rounded(px(11.0))
                             .border_1()
                             .border_color(theme.border_strong)
@@ -476,7 +769,9 @@ impl Fintwind {
                             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                                 this.dismiss_autocomplete(cx);
                             }))
-                            .child(list),
+                            .children(tabs)
+                            .child(list)
+                            .child(footer),
                     ),
             )
             .with_priority(1)
@@ -489,6 +784,7 @@ impl Fintwind {
         index: usize,
         row: &AutocompleteRow,
         highlight: usize,
+        kind: TriggerKind,
         theme: &Theme,
         window: &Window,
         cx: &mut Context<Self>,
@@ -518,10 +814,10 @@ impl Fintwind {
         match row {
             AutocompleteRow::Command(scored) | AutocompleteRow::Skill(scored) => {
                 let command = &scored.item;
-                let sigil = if matches!(row, AutocompleteRow::Skill(_)) {
-                    '@'
-                } else {
+                let sigil = if kind == TriggerKind::Command {
                     '/'
+                } else {
+                    '@'
                 };
                 let icon_path = if command.scope == composer_complete::CommandScope::Skill {
                     crate::mentions::SKILL_ICON

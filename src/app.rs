@@ -1637,6 +1637,7 @@ pub struct Fintwind {
     /// Per-item disclosure overrides. Reasoning starts open while live; tool
     /// details start closed, so the stored bool must preserve either choice.
     expanded_activity_items: HashMap<Uuid, bool>,
+    activity_disclosure_motion: HashMap<Uuid, Rc<transcript_view::ActivityDisclosureMotion>>,
     /// Settled turns whose folded work the user has reopened.
     expanded_turns: HashSet<Uuid>,
     /// Per-response file cards the user expanded beyond their three-file
@@ -4094,6 +4095,7 @@ impl Fintwind {
                 last_stream_save: Instant::now(),
                 activities_expanded: HashMap::new(),
                 expanded_activity_items: HashMap::new(),
+                activity_disclosure_motion: HashMap::new(),
                 expanded_turns: HashSet::new(),
                 expanded_changed_files: HashSet::new(),
                 expanded_compactions: HashSet::new(),

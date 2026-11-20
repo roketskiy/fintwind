@@ -89,7 +89,27 @@ const ACTIVITY_SECTION_MAX_HEIGHT: f32 = 400.0;
 /// together can never push the rest of the transcript around.
 const ACTIVITY_DETAIL_MAX_HEIGHT: f32 = 800.0;
 const ACTIVITY_OPACITY: f32 = 0.70;
+const ACTIVITY_DISCLOSURE_DURATION: Duration = Duration::from_millis(500);
 const ACTIVITY_CLUSTER_PREVIEW_LIMIT: usize = 8;
+
+pub(super) struct ActivityDisclosureMotion {
+    started: Instant,
+    from: f32,
+    target: f32,
+    body_height: Cell<Option<Pixels>>,
+}
+
+impl ActivityDisclosureMotion {
+    fn progress(&self) -> f32 {
+        (self.started.elapsed().as_secs_f32() / ACTIVITY_DISCLOSURE_DURATION.as_secs_f32())
+            .min(1.0)
+    }
+
+    fn fraction(&self, progress: f32) -> f32 {
+        let eased = 1.0 - (1.0 - progress).powi(3);
+        self.from + (self.target - self.from) * eased
+    }
+}
 
 #[derive(Clone, Debug)]
 struct ConversationNavigationRailSnapshot {
@@ -1206,6 +1226,12 @@ impl Fintwind {
         }
     }
 
+    fn activity_item_block_index(&self, id: Uuid) -> Option<usize> {
+        self.selected_transcript_blocks()
+            .iter()
+            .position(|block| block.activities.iter().any(|activity| activity.id == id))
+    }
+
     pub(super) fn toggle_activity_item(
         &mut self,
         surface: ActivitySurface,
@@ -1213,32 +1239,79 @@ impl Fintwind {
         current: bool,
         cx: &mut Context<Self>,
     ) {
-        match surface {
+        let block_index = match &surface {
             ActivitySurface::Session => {
-                let Some(block_index) = self
-                    .selected_transcript_blocks()
-                    .iter()
-                    .position(|block| block.activities.iter().any(|activity| activity.id == id))
-                else {
+                let Some(block_index) = self.activity_item_block_index(id) else {
                     return;
                 };
-                self.toggle_block_disclosure(block_index, cx, |this| {
-                    this.expanded_activity_items.insert(id, !current);
+                self.pin_transcript_for_disclosure();
+                Some(block_index)
+            }
+            ActivitySurface::Background(_) => None,
+        };
+        let current = self
+            .expanded_activity_items
+            .get(&id)
+            .copied()
+            .unwrap_or(current);
+        self.expanded_activity_items.insert(id, !current);
+        let previous = self.activity_disclosure_motion.remove(&id);
+        if cx.reduce_motion() {
+            if current {
+                self.release_activity_item_caches(id);
+            }
+        } else {
+            let motion = Rc::new(ActivityDisclosureMotion {
+                started: Instant::now(),
+                from: previous
+                    .as_ref()
+                    .map_or(if current { 1.0 } else { 0.0 }, |motion| {
+                        motion.fraction(motion.progress())
+                    }),
+                target: if current { 0.0 } else { 1.0 },
+                body_height: Cell::new(previous.and_then(|motion| motion.body_height.get())),
+            });
+            self.activity_disclosure_motion.insert(id, motion.clone());
+            let session = self.state.selected_session;
+            let surface = surface.clone();
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(ACTIVITY_DISCLOSURE_DURATION).await;
+                let _ = this.update(cx, |this, cx| {
+                    if !this
+                        .activity_disclosure_motion
+                        .get(&id)
+                        .is_some_and(|active| Rc::ptr_eq(active, &motion))
+                    {
+                        return;
+                    }
+                    this.activity_disclosure_motion.remove(&id);
                     if current {
                         this.release_activity_item_caches(id);
                     }
+                    if this.state.selected_session == session {
+                        // Invalidate the final height even if the row scrolled offscreen.
+                        match &surface {
+                            ActivitySurface::Session => {
+                                if let Some(block_index) = this.activity_item_block_index(id) {
+                                    this.remeasure_transcript_block(block_index);
+                                }
+                            }
+                            ActivitySurface::Background(key) => {
+                                this.remeasure_background_activity(key, id);
+                            }
+                        }
+                    }
+                    cx.notify();
                 });
-            }
-            // Background disclosure remeasures the child list, not the parent.
-            ActivitySurface::Background(key) => {
-                self.expanded_activity_items.insert(id, !current);
-                if current {
-                    self.release_activity_item_caches(id);
-                }
-                self.remeasure_background_activity(&key, id);
-                cx.notify();
-            }
+            })
+            .detach();
         }
+        if let Some(block_index) = block_index {
+            self.remeasure_transcript_block(block_index);
+        } else if let ActivitySurface::Background(key) = &surface {
+            self.remeasure_background_activity(key, id);
+        }
+        cx.notify();
     }
 
     /// Drop the per-item render caches a collapsed card would otherwise keep
@@ -2965,6 +3038,12 @@ impl Fintwind {
                 .get(&id)
                 .copied()
                 .unwrap_or(reasoning_live);
+        let disclosure_motion = self.activity_disclosure_motion.get(&id).and_then(|motion| {
+            let progress = motion.progress();
+            (has_detail && !cx.reduce_motion() && progress < 1.0)
+                .then(|| (motion.clone(), motion.fraction(progress)))
+        });
+        let show_body = item_expanded || disclosure_motion.is_some();
         let item_focus = self.transcript_control_focus(format!("activity-item-{id}"), cx);
         let click_surface = context.surface.clone();
         let key_surface = context.surface.clone();
@@ -3135,7 +3214,8 @@ impl Fintwind {
                         }
                     })),
             );
-        if item_expanded && let Some(reasoning) = reasoning {
+        let mut body = div().w_full().min_w_0().flex_none().flex().flex_col();
+        if show_body && let Some(reasoning) = reasoning {
             if reasoning.content.len() > md::virtualized::THRESHOLD
                 || self.reasoning_views.borrow().contains_key(&id)
             {
@@ -3166,7 +3246,7 @@ impl Fintwind {
                         cx,
                     )
                 });
-                item = item.child(
+                body = body.child(
                     div()
                         .w_full()
                         .min_w_0()
@@ -3208,7 +3288,7 @@ impl Fintwind {
                     // answer text keeps the full-rate dissolve.
                     motion::pulse_lease_slow(window.current_view(), cx);
                 }
-                item = item.child(
+                body = body.child(
                     div()
                         .w_full()
                         .min_w_0()
@@ -3255,16 +3335,14 @@ impl Fintwind {
                 );
             }
         }
-        if item_expanded && shows_diff {
+        if show_body && shows_diff {
             let diff = self.activity_diff_rows(activity);
             if !diff.is_empty() {
-                item =
-                    item.child(self.render_activity_diff(id, &diff, activity_surface, theme, cx));
+                body =
+                    body.child(self.render_activity_diff(id, &diff, activity_surface, theme, cx));
             }
         }
-        if item_expanded
-            && reasoning.is_none()
-            && (!sections.is_empty() || !activity.image_urls.is_empty())
+        if show_body && reasoning.is_none() && (!sections.is_empty() || !activity.image_urls.is_empty())
         {
             let palette = MarkdownPalette::from_theme(theme);
             let ctx = self.markdown_ctx(
@@ -3529,7 +3607,7 @@ impl Fintwind {
             }
             let wheel_scroll = detail_viewport.scroll_handle.clone();
             let wheel_follow_tail = detail_viewport.follow_tail.clone();
-            item = item.child(
+            body = body.child(
                 div()
                     .w_full()
                     .min_w_0()
@@ -3572,6 +3650,36 @@ impl Fintwind {
                     ))
                     .child(activity_scroll_guard(detail_viewport, !activity.complete)),
             );
+        }
+        if let Some((motion, fraction)) = disclosure_motion {
+            // Lay out the details at their natural height so nested scroll
+            // viewports don't resize as the outer clip reveals them.
+            let height = motion
+                .body_height
+                .get()
+                .map(|height| height * fraction)
+                .or_else(|| item_expanded.then_some(Pixels::ZERO));
+            body = body.relative().child(
+                canvas(
+                    move |bounds, _, _| motion.body_height.set(Some(bounds.size.height)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            );
+            motion::pulse_lease(window.current_view(), cx);
+            item = item.child(
+                div()
+                    .w_full()
+                    .flex_none()
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .when_some(height, |clip, height| clip.h(height))
+                    .child(body),
+            );
+        } else if item_expanded {
+            item = item.child(body);
         }
         item.opacity(ACTIVITY_OPACITY).into_any_element()
     }

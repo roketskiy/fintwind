@@ -89,7 +89,7 @@ const ACTIVITY_SECTION_MAX_HEIGHT: f32 = 400.0;
 /// together can never push the rest of the transcript around.
 const ACTIVITY_DETAIL_MAX_HEIGHT: f32 = 800.0;
 const ACTIVITY_OPACITY: f32 = 0.70;
-const ACTIVITY_DISCLOSURE_DURATION: Duration = Duration::from_millis(500);
+const ACTIVITY_DISCLOSURE_DURATION: Duration = Duration::from_millis(200);
 const ACTIVITY_CLUSTER_PREVIEW_LIMIT: usize = 8;
 
 pub(super) struct ActivityDisclosureMotion {

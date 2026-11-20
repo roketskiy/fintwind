@@ -20,6 +20,7 @@ actions!(
 
 const DIALOG_CONTEXT: &str = "CommitDialog";
 const DIALOG_INPUT_CONTEXT: &str = "CommitDialog > ComposerInput";
+const COMMIT_DIALOG_LAYER_PRIORITY: usize = 4;
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
@@ -167,6 +168,7 @@ impl Fintwind {
         let message = cx.new(|cx| {
             ComposerInput::new(window, cx)
                 .code_editor(None)
+                .context_menu_priority(COMMIT_DIALOG_LAYER_PRIORITY + 1)
                 .placeholder(tr!("commit.message_placeholder"))
         });
         let message_focus = message.read(cx).focus();
@@ -902,7 +904,11 @@ impl Fintwind {
                 cx.listener(|fintwind, _, window, cx| fintwind.close_commit_dialog(window, cx)),
             )
             .child(card);
-        Some(gpui::deferred(layer).with_priority(4).into_any_element())
+        Some(
+            gpui::deferred(layer)
+                .with_priority(COMMIT_DIALOG_LAYER_PRIORITY)
+                .into_any_element(),
+        )
     }
 }
 

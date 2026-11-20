@@ -993,7 +993,7 @@ where
                         items,
                     }),
             )
-            .with_priority(1),
+            .with_priority(handle.priority),
         )
         .into_any_element()
 }

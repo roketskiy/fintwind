@@ -2712,7 +2712,7 @@ impl Fintwind {
                     .map(|(label, icon, action)| {
                         let weak = weak.clone();
                         MenuItem::new(label, move |_, cx| {
-                            let _ = weak.update(cx, |this, cx| action(this, cx));
+                            let _ = weak.update(cx, action);
                         })
                         .icon(icon)
                         .disabled(!enabled)

@@ -1547,15 +1547,14 @@ mod tests {
                 if spec.get("reasoning_options").is_some_and(Value::is_array) {
                     described += 1;
                 }
-                if let Some(tiers) = spec.get("cost").and_then(|cost| cost.get("tiers")) {
-                    if tiers.as_array().is_some_and(|tiers| {
+                if let Some(tiers) = spec.get("cost").and_then(|cost| cost.get("tiers"))
+                    && tiers.as_array().is_some_and(|tiers| {
                         tiers.iter().any(|tier| {
                             tier.get("tier").and_then(|tier| tier.get("size")).is_some()
                         })
                     }) {
                         tiered += 1;
                     }
-                }
             }
         }
         assert!(tiered > 100, "{tiered} models carry tiers");

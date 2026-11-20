@@ -62,7 +62,7 @@ fn fresh_color(next: &mut usize) -> usize {
 
 /// Leftmost empty slot at or after 1; slot 0 belongs to the mainline.
 /// Pushes new slots when every existing one is busy.
-fn free_side_slot<'a>(lanes: &mut Vec<Option<(&'a str, usize)>>) -> usize {
+fn free_side_slot(lanes: &mut Vec<Option<(&str, usize)>>) -> usize {
     if let Some(index) = lanes
         .iter()
         .enumerate()

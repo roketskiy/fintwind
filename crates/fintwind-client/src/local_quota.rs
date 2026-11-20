@@ -415,11 +415,9 @@ impl LocalQuotaCache {
                 } else {
                     entry.next_auto
                 }
-            {
-                if let Some(last) = entry.last.clone() {
+                && let Some(last) = entry.last.clone() {
                     return last;
                 }
-            }
         }
         let (mut reading, retry_after) = query_login(backend, provider, &login, now);
         reading.service = Some(login.service.clone());

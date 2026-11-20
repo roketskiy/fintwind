@@ -4,9 +4,10 @@ use serde::{Deserialize, Serialize};
 
 /// The language preference Fintwind persists. `System` resolves to one of the
 /// locales Fintwind deliberately ships today.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AppLanguage {
+    #[default]
     System,
     English,
     SimplifiedChinese,
@@ -64,11 +65,6 @@ impl AppLanguage {
     }
 }
 
-impl Default for AppLanguage {
-    fn default() -> Self {
-        Self::System
-    }
-}
 
 pub fn set_language(language: AppLanguage) {
     rust_i18n::set_locale(language.locale());

@@ -549,7 +549,7 @@ impl FintwindBackend {
             .ok()
             .flatten()
             .map(|saved| saved.receipt)
-            .or_else(|| match response {
+            .or(match response {
                 Ok(ResponsePayload::SubmissionSaved { receipt }) => Some(receipt),
                 _ => None,
             })
@@ -2566,13 +2566,12 @@ impl Backend for FintwindBackend {
             Command::CloseTerminal => {
                 let removed = {
                     let mut terminals = self.terminals.lock();
-                    if let Some((active_runtime_id, _)) = terminals.get(&session_id) {
-                        if *active_runtime_id != runtime_id {
+                    if let Some((active_runtime_id, _)) = terminals.get(&session_id)
+                        && *active_runtime_id != runtime_id {
                             bail!(
                                 "daemon terminal {session_id} belongs to runtime {active_runtime_id}, not {runtime_id}"
                             );
                         }
-                    }
                     terminals.remove(&session_id)
                 };
                 drop(removed);
@@ -2685,15 +2684,13 @@ impl Backend for FintwindBackend {
                                     .and_then(|session| {
                                         session.turns.iter_mut().find(|turn| turn.id == receipt.id)
                                     })
-                                {
-                                    if turn
+                                    && turn
                                         .submission
                                         .as_ref()
                                         .is_none_or(|previous| receipt.supersedes(previous))
                                     {
                                         turn.submission = Some(receipt.clone());
                                     }
-                                }
                             }
                             if let DriverEvent::TurnFinished { success, .. } = &event {
                                 let mut state = task_state.lock();

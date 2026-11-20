@@ -688,7 +688,7 @@ impl Fintwind {
             models.push(CustomProviderModel {
                 id,
                 api_package: known.and_then(|model| model.api_package.clone()),
-                context_window: custom_providers::parse_context_window(&context),
+                context_window: custom_providers::parse_context_window(context),
                 name: known.and_then(|model| model.name.clone()),
                 output_limit: known.and_then(|model| model.output_limit),
                 input_modalities: draft.input_modalities.clone(),
@@ -810,13 +810,11 @@ impl Fintwind {
             .settings_providers_mut()
             .iter_mut()
             .find(|provider| Some(&provider.id) == selected.as_ref())
-        {
-            if !name.is_empty() && provider.name != name {
+            && !name.is_empty() && provider.name != name {
                 provider.name = name;
                 self.commit_custom_providers(cx);
                 return;
             }
-        }
         cx.notify();
     }
 
@@ -843,7 +841,7 @@ impl Fintwind {
                         model.id.clone(),
                         model
                             .context_window
-                            .map(|window| custom_providers::format_context_window(window))
+                            .map(custom_providers::format_context_window)
                             .unwrap_or_default(),
                         self.effective_input_modalities(model),
                         self.effective_output_modalities(model),
@@ -934,7 +932,7 @@ impl Fintwind {
             return;
         }
         let context_text = self.provider_model_context_input.read(cx).content();
-        let context_window = match custom_providers::parse_context_window(&context_text) {
+        let context_window = match custom_providers::parse_context_window(context_text) {
             Some(window) => Some(window),
             None if context_text.trim().is_empty() => None,
             None => {

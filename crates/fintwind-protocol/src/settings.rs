@@ -4,19 +4,11 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct DaemonSettings {
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
-}
-
-impl Default for DaemonSettings {
-    fn default() -> Self {
-        Self {
-            extra: BTreeMap::new(),
-        }
-    }
 }
 
 impl DaemonSettings {

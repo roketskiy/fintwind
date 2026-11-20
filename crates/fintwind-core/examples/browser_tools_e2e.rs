@@ -863,11 +863,10 @@ fn tool_probe(url: &str, token: &str, messages: &[Value]) -> anyhow::Result<(Vec
             }
         }
     }
-    if !closed {
-        if let Ok(ReadOutcome::Closed) = read_text(&mut socket, Duration::from_millis(500)) {
+    if !closed
+        && let Ok(ReadOutcome::Closed) = read_text(&mut socket, Duration::from_millis(500)) {
             closed = true;
         }
-    }
     Ok((frames, closed))
 }
 
@@ -2044,7 +2043,7 @@ fn run_checks(e2e: &mut E2E) {
         let session = h.session;
         let runtime = h.active_runtime;
         let denied: Vec<Value> = vec![
-            serde_json::to_value(&ClientMessage::Request(Request {
+            serde_json::to_value(ClientMessage::Request(Request {
                 request_id: Uuid::new_v4(),
                 session_id: session,
                 runtime_id: runtime,

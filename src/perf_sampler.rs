@@ -244,11 +244,10 @@ fn sample_impl(sampler: &mut Sampler) -> Result<Sample, String> {
             let Some(create) = metrics.create_time else {
                 continue;
             };
-            if let Some(&(_, Some(prev))) = tracked.get(&pid) {
-                if prev != create {
+            if let Some(&(_, Some(prev))) = tracked.get(&pid)
+                && prev != create {
                     continue;
                 }
-            }
             // A tree edge needs a live, verified parent and a child no
             // older than it; an unknown parent age must not wave the child
             // through.

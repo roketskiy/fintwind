@@ -2063,7 +2063,7 @@ impl BackgroundWorkStatus {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackgroundWorkTranscript {
     #[serde(default)]
@@ -2072,16 +2072,6 @@ pub struct BackgroundWorkTranscript {
     pub transcript_blocks: Vec<TranscriptBlock>,
     #[serde(default)]
     pub turns: Vec<AgentTurn>,
-}
-
-impl Default for BackgroundWorkTranscript {
-    fn default() -> Self {
-        Self {
-            messages: Vec::new(),
-            transcript_blocks: Vec::new(),
-            turns: Vec::new(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

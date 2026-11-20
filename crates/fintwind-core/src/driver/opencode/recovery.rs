@@ -873,11 +873,11 @@ fn fetch_turn(
     let acknowledged_steers = boundary
         .unconfirmed_steers
         .iter()
-        .filter_map(|(id, text)| {
+        .filter(|&(id, _)| {
             rows.iter()
                 .any(|row| row.get("id").and_then(Value::as_str) == Some(id))
-                .then(|| text.clone())
         })
+        .map(|(_, text)| text.clone())
         .collect();
     let transcript = super::super::native::translate_recovered_rows(&rows);
     if transcript
@@ -931,15 +931,14 @@ fn externalize_tool_images(row: &mut Value, blobs: &crate::blob_store::BlobStore
         .into_iter()
         .flatten()
     {
-        if part.get("type").and_then(Value::as_str) == Some("tool") {
-            if let Some(state) = part.get_mut("state") {
+        if part.get("type").and_then(Value::as_str) == Some("tool")
+            && let Some(state) = part.get_mut("state") {
                 for key in ["content", "output", "metadata"] {
                     if let Some(value) = state.get_mut(key) {
                         replace(value, blobs);
                     }
                 }
             }
-        }
     }
 }
 

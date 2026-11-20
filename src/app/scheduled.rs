@@ -410,7 +410,8 @@ fn parse_once_datetime(date: &str, time: &str) -> Option<u64> {
 }
 
 fn format_once_parts(at: u64) -> (String, String) {
-    let text = i64::try_from(at)
+    
+    i64::try_from(at)
         .ok()
         .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0))
         .map(|time| {
@@ -420,8 +421,7 @@ fn format_once_parts(at: u64) -> (String, String) {
                 local.format("%H:%M").to_string(),
             )
         })
-        .unwrap_or_default();
-    text
+        .unwrap_or_default()
 }
 
 fn format_once(at: u64) -> String {

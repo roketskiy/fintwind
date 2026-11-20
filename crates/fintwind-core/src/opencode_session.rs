@@ -398,20 +398,18 @@ fn native_messages(server: &OpenCodeServer, session_id: &str) -> anyhow::Result<
             .ok_or_else(|| anyhow!("OpenCode returned an invalid message list"))?;
         // The wire lists messages newest first, so the first page's first
         // entry is the newest message of the whole conversation.
-        if last_id.is_none() {
-            if let Some(id) = data
+        if last_id.is_none()
+            && let Some(id) = data
                 .first()
                 .and_then(|message| message.get("id").and_then(Value::as_str))
             {
                 last_id = Some(id.to_owned());
             }
-        }
         for message in data {
-            if is_native_user_turn(message) {
-                if let Some(id) = message.get("id").and_then(Value::as_str) {
+            if is_native_user_turn(message)
+                && let Some(id) = message.get("id").and_then(Value::as_str) {
                     user_ids.push(id.to_owned());
                 }
-            }
         }
         // The next cursor repeats the current one when the paged list has
         // already been fully scanned, which would loop forever.
@@ -858,7 +856,7 @@ pub(crate) fn resolve_request_directory(directory: &Path) -> String {
         if let Some(unc) = value.strip_prefix("\\\\?\\UNC\\") {
             return format!("\\\\{unc}");
         }
-        return value.strip_prefix("\\\\?\\").unwrap_or(&value).to_owned();
+        value.strip_prefix("\\\\?\\").unwrap_or(&value).to_owned()
     }
     #[cfg(not(windows))]
     value

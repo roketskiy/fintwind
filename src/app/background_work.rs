@@ -1528,7 +1528,7 @@ impl Fintwind {
                 .unwrap_or_else(|| ListState::new(0, ListAlignment::Top, px(160.0)));
             let scrollbar = viewport
                 .map(|viewport| viewport.scrollbar.clone())
-                .unwrap_or_else(ScrollbarState::new);
+                .unwrap_or_default();
             let row_key = key.clone();
             let weak = cx.entity().downgrade();
             let scroll_id = format!(
@@ -2162,7 +2162,7 @@ fn background_transcript_duration_ms(
     if item.status.is_live() {
         return Some(unix_time_millis().saturating_sub(item.started_at_ms));
     }
-    background_transcript_span_ms(transcript).or_else(|| item.duration_ms)
+    background_transcript_span_ms(transcript).or(item.duration_ms)
 }
 
 /// Earliest turn start to latest turn completion, in milliseconds, across

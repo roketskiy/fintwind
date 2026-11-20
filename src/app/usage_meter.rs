@@ -238,10 +238,8 @@ impl Fintwind {
             _ => theme.text_secondary,
         };
         let breakdown = ContextBreakdown::new(usage.as_ref());
-        let headline = breakdown
-            .occupancy_known
-            .then(|| format_tokens(breakdown.used))
-            .unwrap_or_else(|| "—".to_owned());
+        let headline = if breakdown
+            .occupancy_known { format_tokens(breakdown.used) } else { "—".to_owned() };
         let capacity = breakdown
             .window
             .map(|window| format!("/ {}", format_tokens(window)))
@@ -612,8 +610,8 @@ impl Fintwind {
                 .iter()
                 .position(|message| message.id == message_id)
         });
-        if let Some(index) = index {
-            if let Some(row) = self
+        if let Some(index) = index
+            && let Some(row) = self
                 .transcript_row_kinds
                 .borrow()
                 .iter()
@@ -627,7 +625,6 @@ impl Fintwind {
                 self.transcript_is_scrolled.set(true);
                 cx.notify();
             }
-        }
     }
 
     pub(super) fn refresh_context_summary_id(&mut self, session_id: Uuid) {

@@ -276,7 +276,7 @@ impl SessionFamily {
                         reject_chain(&self.rejected, &self.root, &chain);
                         return false;
                     }
-                    if chain.iter().any(|id| *id == parent) {
+                    if chain.contains(&parent) {
                         return false;
                     }
                     current = parent;
@@ -418,10 +418,7 @@ fn cancel_form_on_server(
         return Ok(());
     }
     if let Some(owner) = owner.filter(|owner| owner != preferred_session) {
-        match attempt(&owner) {
-            Ok(()) => return Ok(()),
-            Err(_) => {}
-        }
+        if let Ok(()) = attempt(&owner) { return Ok(()) }
     }
     Err(first_error)
 }
@@ -994,8 +991,8 @@ impl OpenCodeDriver {
         // prompt. A startup model override switches it once; later switches
         // would ride the same endpoint. The model reference on this wire is
         // `{id, providerID}`, unlike v1's `{providerID, modelID}`.
-        if let Some(model) = model.as_ref() {
-            if let Some(model_ref) = opencode_model_ref(model, reasoning_effort.as_deref()) {
+        if let Some(model) = model.as_ref()
+            && let Some(model_ref) = opencode_model_ref(model, reasoning_effort.as_deref()) {
                 server
                     .request(
                         "POST",
@@ -1004,7 +1001,6 @@ impl OpenCodeDriver {
                     )
                     .context("switch OpenCode model/variant")?;
             }
-        }
 
         let usage_metadata = Arc::new(OpenCodeUsageMetadata::default());
         let previous_usage_path = format!(
@@ -1075,7 +1071,7 @@ impl OpenCodeDriver {
         // `started`.
         if let Some(state) = previous_usage
             .as_ref()
-            .and_then(|messages| latest_opencode_compaction(messages))
+            .and_then(latest_opencode_compaction)
         {
             let _ = events.send(DriverEvent::CompactionUpdated(state));
         }
@@ -1213,7 +1209,7 @@ impl OpenCodeDriver {
                                 "patterns": request.get("resources").cloned().unwrap_or(Value::Null),
                                 "always": request.get("save").cloned().unwrap_or(Value::Null),
                             });
-                            let _ = request_permission(
+                            request_permission(
                                 &adapted,
                                 &permission_events,
                                 &permission_commands,
@@ -1385,8 +1381,7 @@ impl OpenCodeDriver {
                     let active = *stream_turn.lock();
                     if let Some(recovered) =
                         reconciliation.poll(&stream_feed, active, !stream_feed.has_pending_events())
-                    {
-                        if let Some(completed) = apply_recovered_turn(
+                        && let Some(completed) = apply_recovered_turn(
                             recovered,
                             &stream_turn,
                             &reconciliation.submissions,
@@ -1397,7 +1392,6 @@ impl OpenCodeDriver {
                             watchdog.clear(&stream_session);
                             reconciliation.mark_completed(completed);
                         }
-                    }
                 }
                 if !stream_feed.is_cancelled() {
                     let _ = stream_event_sink.send(DriverEvent::ProcessExited);
@@ -1438,8 +1432,8 @@ impl OpenCodeDriver {
                                     worker_server.port,
                                     0,
                                 );
-                                if let Some((record, store)) = &durable {
-                                    if let Ok(Some(saved)) = store.transition_submission(
+                                if let Some((record, store)) = &durable
+                                    && let Ok(Some(saved)) = store.transition_submission(
                                         record.receipt.id,
                                         SubmissionState::Dispatching,
                                         SubmissionState::NotSent,
@@ -1454,7 +1448,6 @@ impl OpenCodeDriver {
                                         let _ = worker_events
                                             .send(DriverEvent::SubmissionUpdated(saved.receipt));
                                     }
-                                }
                                 let _ = worker_events.send(DriverEvent::Error(tr!(
                                     "errors.provider_prompt_unconfirmed_detail",
                                     provider = "OpenCode",
@@ -1838,14 +1831,12 @@ impl OpenCodeDriver {
                             let directory = opencode_location_directory(&worker_cwd.lock());
                             if let Ok(next) =
                                 crate::native_goal::get(&worker_server, &directory, &worker_session)
-                            {
-                                if first_goal_read || next != goal {
+                                && (first_goal_read || next != goal) {
                                     first_goal_read = false;
                                     goal = next;
                                     let _ =
                                         worker_events.send(DriverEvent::GoalUpdated(goal.clone()));
                                 }
-                            }
                         }
                         CommandMessage::Goal(fintwind_protocol::goal::GoalAction::Get) => {
                             let directory = opencode_location_directory(&worker_cwd.lock());
@@ -5075,9 +5066,7 @@ fn request_user_input_from_form(
 ) -> Option<()> {
     let form = payload.get("form").unwrap_or(payload);
     let form_id = form.get("id").and_then(Value::as_str)?;
-    if value_session_id(form).is_none() {
-        return None;
-    }
+    value_session_id(form)?;
     let is_question = form
         .pointer("/metadata/kind")
         .and_then(Value::as_str)

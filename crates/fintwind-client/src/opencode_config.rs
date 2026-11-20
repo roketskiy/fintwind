@@ -1466,7 +1466,7 @@ mod tests {
         // OpenCode instantiates this package with `.responses(...)`, so the
         // roster shows the Responses format without rewriting the entry.
         assert_eq!(relay.api_format, ProviderApiFormat::OpenAiResponses);
-        assert_eq!(relay.npm_touched, false);
+        assert!(!relay.npm_touched);
 
         // Saving without a format change keeps the original package.
         // Path-scoped save: the global `save_providers` would rewrite the
@@ -1539,7 +1539,7 @@ mod tests {
             deepseek.model("deepseek-chat").unwrap().context_window,
             Some(128000)
         );
-        assert_eq!(deepseek.npm_touched, false);
+        assert!(!deepseek.npm_touched);
 
         // An entry without npm loads as OpenAI-compatible without touching
         // the original package choice.

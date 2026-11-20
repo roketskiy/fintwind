@@ -103,11 +103,10 @@ pub(crate) fn attach(
                 })
             })
             .max_by_key(|skill| skill.id.len());
-        if let Some(skill) = matched {
-            if seen.insert(&skill.id) {
+        if let Some(skill) = matched
+            && seen.insert(&skill.id) {
                 attachments.push(json!({"id": skill.id}));
             }
-        }
     }
     if !attachments.is_empty() {
         current["skills"] = json!(attachments);

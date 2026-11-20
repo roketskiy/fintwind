@@ -55,18 +55,13 @@ const MAX_RANK_ROWS: usize = 5;
 /// What the KPI cards, timelines, and model ranking aggregate over. The
 /// heatmap keeps its own fixed week window, like GitHub's, so a short range
 /// does not gut it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum UsageRange {
     All,
     Days30,
+    #[default]
     Days7,
     Day(u8),
-}
-
-impl Default for UsageRange {
-    fn default() -> Self {
-        Self::Days7
-    }
 }
 
 /// Selection is scoped to the currently aggregated snapshot. It is cleared
@@ -242,8 +237,6 @@ pub(super) struct UsageProviderRow {
     pub provider: String,
     pub models: u32,
     pub total: u64,
-    #[cfg(test)]
-    pub cost: f64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1409,7 +1402,7 @@ fn local_date(timestamp: u64) -> Option<NaiveDate> {
 /// Older scans lacking sub-agent day shares receive only their unallocated
 /// remainder here; current scans place child usage on the child's date.
 fn entry_day_lanes(entry: &UsageEntry) -> Vec<UsageDayShare> {
-    let lanes = match &entry.days {
+    match &entry.days {
         Some(shares) => {
             let mut lanes = shares.clone();
             let remainder = entry
@@ -1484,8 +1477,7 @@ fn entry_day_lanes(entry: &UsageEntry) -> Vec<UsageDayShare> {
                 cost: entry.cost.unwrap_or_default(),
             }]
         }
-    };
-    lanes
+    }
 }
 
 /// Select only the spend on a local calendar day. Session-level totals cannot
@@ -2340,12 +2332,10 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
 
     let mut provider_rows: Vec<UsageProviderRow> = providers
         .into_iter()
-        .map(|(provider, (models, total, _cost))| UsageProviderRow {
+        .map(|(provider, (models, total, _))| UsageProviderRow {
             provider,
             models,
             total,
-            #[cfg(test)]
-            cost: _cost,
         })
         .collect();
     provider_rows.sort_by(|a, b| b.total.cmp(&a.total));
@@ -2402,15 +2392,6 @@ struct HeatMonthBand {
     key: (i32, u32),
     start: usize,
     end: usize,
-}
-
-#[cfg(test)]
-impl HeatMonthBand {
-    fn label(&self) -> String {
-        NaiveDate::from_ymd_opt(self.key.0, self.key.1, 1)
-            .map(month_label)
-            .unwrap_or_default()
-    }
 }
 
 /// Group week columns into calendar months. A week belongs to the month of
@@ -2481,15 +2462,6 @@ fn project_display_name(directory: &str) -> String {
         .filter(|name| !name.is_empty())
         .unwrap_or(directory)
         .to_owned()
-}
-
-#[cfg(test)]
-fn month_label(date: NaiveDate) -> String {
-    if crate::i18n::uses_east_asian_date_format() {
-        format!("{}月", date.month())
-    } else {
-        date.format("%b").to_string()
-    }
 }
 
 #[cfg(test)]

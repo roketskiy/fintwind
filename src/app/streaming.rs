@@ -113,8 +113,8 @@ impl Fintwind {
         };
         if opened {
             runtime.stream_phase = Some(StreamPhase::Text);
-        } else if already_open && self.state.selected_session == Some(session_id) {
-            if let Some(message_id) = runtime.open_text.get(&part).copied()
+        } else if already_open && self.state.selected_session == Some(session_id)
+            && let Some(message_id) = runtime.open_text.get(&part).copied()
                 && let Some(index) = self
                     .state
                     .sessions
@@ -129,7 +129,6 @@ impl Fintwind {
             {
                 self.remeasure_transcript_message(index);
             }
-        }
         self.state.mark_session_dirty(session_id);
     }
 

@@ -460,10 +460,15 @@ pub fn execute(operation: WorkspaceOperation) -> anyhow::Result<WorkspaceResult>
             WorkspaceResult::Ack
         }
         WorkspaceOperation::CollectReviewDiff { cwd, source } => {
-            // A completed turn's refs are fixed, so its full diff is worth
-            // keeping; a live source is not cached at all.
-            let key = matches!(source, ReviewDiffSource::LastTurn { .. }).then(|| {
-                crate::git_cache::CacheKey::TurnDiff {
+            // A completed turn's refs and a commit's content are fixed, so
+            // their full diffs are worth keeping; a live source is not cached
+            // at all.
+            let key = matches!(
+                source,
+                ReviewDiffSource::LastTurn { .. } | ReviewDiffSource::Commit { .. }
+            )
+            .then(|| {
+                crate::git_cache::CacheKey::SnapshotDiff {
                     worktree: crate::git_cache::worktree_identity(&cwd),
                     source: serde_json::to_string(&source).unwrap_or_default(),
                 }
@@ -751,7 +756,7 @@ struct DiffRange {
 
 fn collect_review_diff(cwd: &Path, source: ReviewDiffSource) -> anyhow::Result<ReviewDiffData> {
     ensure_repository(cwd)?;
-    let range = resolve_diff_range(cwd, source)?;
+    let range = resolve_diff_range(cwd, &source)?;
     let numstat = diff_output(cwd, &range, &["--numstat"])?;
     let hydrated = diff_output(cwd, &range, &["--unified=2147483647"])?;
     let (patch, complete_context) = if hydrated.len() <= MAX_HYDRATED_PATCH_BYTES {
@@ -817,8 +822,8 @@ fn collect_review_stats(
         ReviewDiffSource::Branch => {
             command.arg(branch_base(cwd)?);
         }
-        ReviewDiffSource::LastTurn { .. } => {
-            let range = resolve_diff_range(cwd, source)?;
+        ReviewDiffSource::LastTurn { .. } | ReviewDiffSource::Commit { .. } => {
+            let range = resolve_diff_range(cwd, &source)?;
             command.arg(range.from).arg(range.to);
         }
     }
@@ -1825,7 +1830,7 @@ fn bounded_git_output_full(
     }
 }
 
-fn resolve_diff_range(cwd: &Path, source: ReviewDiffSource) -> anyhow::Result<DiffRange> {
+fn resolve_diff_range(cwd: &Path, source: &ReviewDiffSource) -> anyhow::Result<DiffRange> {
     let head = resolve(cwd, "HEAD").unwrap_or_else(|| EMPTY_TREE.to_owned());
     Ok(match source {
         ReviewDiffSource::LastTurn {
@@ -1833,13 +1838,13 @@ fn resolve_diff_range(cwd: &Path, source: ReviewDiffSource) -> anyhow::Result<Di
             turn_count,
             ..
         } => {
-            if turn_count == 0 {
+            if *turn_count == 0 {
                 bail!("the first checkpoint is a baseline, not a completed turn");
             }
-            let diff_base_ref = crate::checkpoint::turn_diff_base_ref(session_id, turn_count);
-            let start_ref = crate::checkpoint::turn_start_ref(session_id, turn_count);
-            let legacy_ref = crate::checkpoint::checkpoint_ref(session_id, turn_count - 1);
-            let to_ref = crate::checkpoint::checkpoint_ref(session_id, turn_count);
+            let diff_base_ref = crate::checkpoint::turn_diff_base_ref(*session_id, *turn_count);
+            let start_ref = crate::checkpoint::turn_start_ref(*session_id, *turn_count);
+            let legacy_ref = crate::checkpoint::checkpoint_ref(*session_id, *turn_count - 1);
+            let to_ref = crate::checkpoint::checkpoint_ref(*session_id, *turn_count);
             DiffRange {
                 from: resolve(cwd, &diff_base_ref)
                     .or_else(|| resolve(cwd, &start_ref))
@@ -1847,6 +1852,21 @@ fn resolve_diff_range(cwd: &Path, source: ReviewDiffSource) -> anyhow::Result<Di
                     .ok_or_else(|| anyhow!("the turn's starting checkpoint is unavailable"))?,
                 to: resolve(cwd, &to_ref)
                     .ok_or_else(|| anyhow!("the turn's ending checkpoint is unavailable"))?,
+            }
+        }
+        ReviewDiffSource::Commit { hash } => {
+            anyhow::ensure!(
+                matches!(hash.len(), 40 | 64) && hash.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                "invalid commit hash"
+            );
+            let commit = resolve(cwd, hash)
+                .ok_or_else(|| anyhow!("the commit is unavailable in this workspace"))?;
+            DiffRange {
+                // A root commit has no parent; a merge diff follows the first
+                // parent, matching the commit stats the history panel shows.
+                from: resolve(cwd, &format!("{commit}^"))
+                    .unwrap_or_else(|| EMPTY_TREE.to_owned()),
+                to: commit,
             }
         }
         ReviewDiffSource::Uncommitted => DiffRange {

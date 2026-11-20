@@ -44,8 +44,9 @@ pub(super) struct ReviewAreaStats {
 
 /// The source-control mode: the standalone review page that used to live in
 /// the right panel, plus its second column of workspace context. The mode is
-/// reached from the first column's rail, or from a turn's "review changes"
-/// entry, which loads that turn's historical diff as a read-only snapshot.
+/// reached from the first column's rail, from a turn's "review changes"
+/// entry, or from the commit history's "view changes" entry; the latter two
+/// load a historical diff as a read-only snapshot.
 ///
 /// The diff state itself (`right_panel_diff_*` fields on [`Fintwind`]) is
 /// app-level, not tied to a panel: one source, one snapshot, one selection.
@@ -63,8 +64,8 @@ impl Fintwind {
     }
 
     /// Show `source` in the source-control mode. Every entry point funnels
-    /// here: the toolbar's source menu, the turn review entry, and the
-    /// workspace actions elsewhere in the app.
+    /// here: the toolbar's source menu, the turn and commit review entries,
+    /// and the workspace actions elsewhere in the app.
     pub(super) fn open_review_page(&mut self, source: ReviewDiffSource, cx: &mut Context<Self>) {
         if self.right_panel_diff_source != source {
             self.reset_review_diff_state(source);
@@ -78,19 +79,19 @@ impl Fintwind {
         cx.notify();
     }
 
-    /// Whether the review page is currently showing a checkpoint-based
-    /// historical snapshot. Such a view is read-only: staging, discarding,
-    /// and commit actions must stay disabled against it, and the banner says
-    /// so explicitly.
+    /// Whether the review page is currently showing a historical snapshot: a
+    /// checkpoint-based turn diff, or one commit's own changes. Such a view is
+    /// read-only: staging, discarding, and commit actions must stay disabled
+    /// against it, and the banner says so explicitly.
     pub(super) fn review_is_history_snapshot(&self) -> bool {
         matches!(
             self.right_panel_diff_source,
-            ReviewDiffSource::LastTurn { .. }
+            ReviewDiffSource::LastTurn { .. } | ReviewDiffSource::Commit { .. }
         )
     }
 
     /// Whether the review page tracks the selected session's workspace. A
-    /// pinned turn snapshot belongs to its own session; session switches and
+    /// pinned history snapshot belongs to its own source; session switches and
     /// workspace invalidations must not overwrite it with live data.
     pub(super) fn review_follows_selected_session(&self) -> bool {
         !self.review_is_history_snapshot()
@@ -130,6 +131,13 @@ impl Fintwind {
             },
             cx,
         );
+    }
+
+    /// The history panel's "view this commit's changes" entry. The diff is
+    /// the commit against its first parent — an immutable range — so the
+    /// review page renders it read-only, like a turn snapshot.
+    pub(super) fn open_commit_review(&mut self, hash: String, cx: &mut Context<Self>) {
+        self.open_review_page(ReviewDiffSource::Commit { hash }, cx);
     }
 
     /// The workspace the source-control mode is pointed at: the user's
@@ -275,7 +283,7 @@ impl Fintwind {
             self.source_control_diff_context = 3;
         } else if self
             .source_control_review_files
-            .for_source(self.right_panel_diff_source)
+            .for_source(&self.right_panel_diff_source)
             .is_some()
         {
             if self.review_pending_file_focus.is_none() {
@@ -397,7 +405,7 @@ impl Fintwind {
                     if fintwind.source_control_status_error.is_none()
                         && fintwind
                             .source_control_review_files
-                            .for_source(fintwind.right_panel_diff_source)
+                            .for_source(&fintwind.right_panel_diff_source)
                             .is_some()
                     {
                         fintwind.refresh_review_diff(cx);
@@ -493,7 +501,7 @@ impl Fintwind {
                             || this.right_panel_diff_snapshot.is_none())
                             && this
                                 .source_control_review_files
-                                .for_source(this.right_panel_diff_source)
+                                .for_source(&this.right_panel_diff_source)
                                 .is_some()
                         {
                             this.refresh_review_diff(cx);
@@ -957,9 +965,9 @@ impl Fintwind {
         self.source_control_nested_complete = false;
         self.source_control_nested_refreshed_at = None;
         self.source_control_folded_directories.borrow_mut().clear();
-        // A pinned turn snapshot belongs to its session's repository; once
-        // the user repoints the workspace, the live view is the honest thing
-        // to show.
+        // A pinned history snapshot belongs to the repository it was opened
+        // from; once the user repoints the workspace, the live view is the
+        // honest thing to show.
         if self.review_is_history_snapshot() {
             self.reset_review_diff_state(ReviewDiffSource::Uncommitted);
         }
@@ -2069,7 +2077,7 @@ impl Fintwind {
             let next = (current as isize + delta).clamp(0, files.paths.len() as isize - 1) as usize;
             if next != current {
                 let path = files.paths[next].clone();
-                let source = self.right_panel_diff_source;
+                let source = self.right_panel_diff_source.clone();
                 self.reset_review_diff_state(source);
                 if self.reveal_source_control_file(&path) {
                     self.sync_source_control_rows(cx);
@@ -4121,9 +4129,10 @@ impl Fintwind {
         Some(gpui::deferred(layer).with_priority(4).into_any_element())
     }
 
-    /// The mode's main area: the read-only history banner when a turn diff
-    /// is loaded, then the diff reader. The unified top bar owns the window
-    /// chrome and the drag region, so the page starts directly with content.
+    /// The mode's main area: the read-only history banner when a turn or
+    /// commit diff is loaded, then the diff reader. The unified top bar owns
+    /// the window chrome and the drag region, so the page starts directly
+    /// with content.
     pub(super) fn render_source_control_page(
         &mut self,
         window: &mut Window,
@@ -4160,29 +4169,54 @@ impl Fintwind {
             )
     }
 
-    /// The read-only banner for a checkpoint-based turn diff: where the
-    /// snapshot came from, that it cannot be mutated, and the two ways out —
-    /// the live workspace, or back to the session.
+    /// The read-only banner for a history snapshot — a turn diff or one
+    /// commit's changes: where the snapshot came from, that it cannot be
+    /// mutated, and the two ways out — the live workspace, or back to the
+    /// session.
     fn render_review_history_banner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let ReviewDiffSource::LastTurn {
-            session_id,
-            turn_count,
-            ..
-        } = self.right_panel_diff_source
-        else {
-            return None;
-        };
         let theme = Theme::current(cx);
-        let session_title = self
-            .state
-            .sessions
-            .iter()
-            .find(|session| session.id == session_id)
-            .map(localized_session_title);
-        let turn_label = if turn_count > 0 {
-            tr!("review.turn_label", turn = turn_count)
-        } else {
-            tr!("diff.source_last_turn")
+        let snapshot_label = match &self.right_panel_diff_source {
+            ReviewDiffSource::LastTurn {
+                session_id,
+                turn_count,
+                ..
+            } => {
+                let session_title = self
+                    .state
+                    .sessions
+                    .iter()
+                    .find(|session| session.id == *session_id)
+                    .map(localized_session_title);
+                let turn_label = if *turn_count > 0 {
+                    tr!("review.turn_label", turn = *turn_count)
+                } else {
+                    tr!("diff.source_last_turn")
+                };
+                match session_title {
+                    Some(title) => tr!(
+                        "review.snapshot_from_session",
+                        title = title,
+                        turn = turn_label
+                    ),
+                    None => tr!("review.snapshot", turn = turn_label),
+                }
+            }
+            ReviewDiffSource::Commit { hash } => {
+                let short_hash = self.commit_short_hash(hash);
+                let subject = self
+                    .history_row_cache
+                    .commit(hash)
+                    .map(|commit| commit.subject.clone());
+                match subject {
+                    Some(subject) => tr!(
+                        "review.commit_snapshot_subject",
+                        hash = short_hash,
+                        subject = subject
+                    ),
+                    None => tr!("diff.source_commit", hash = short_hash),
+                }
+            }
+            _ => return None,
         };
 
         let focus = self.transcript_control_focus("review-banner-back", cx);
@@ -4267,14 +4301,7 @@ impl Fintwind {
                         .truncate()
                         .text_size(ui_px(11.5))
                         .text_color(theme.text_secondary)
-                        .child(match session_title {
-                            Some(title) => tr!(
-                                "review.snapshot_from_session",
-                                title = title,
-                                turn = turn_label
-                            ),
-                            None => tr!("review.snapshot", turn = turn_label),
-                        }),
+                        .child(snapshot_label),
                 )
                 .child(
                     div()
@@ -4472,7 +4499,7 @@ impl Fintwind {
             && self.source_control_diff_context < 100_000
             && self
                 .source_control_review_files
-                .for_source(self.right_panel_diff_source)
+                .for_source(&self.right_panel_diff_source)
                 .is_some()
             && file.is_some_and(|file| file.status == crate::review_diff::FileStatus::Modified);
 
@@ -4687,9 +4714,9 @@ impl Fintwind {
 
     fn render_review_diff_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
-        let selected = self.right_panel_diff_source;
+        let selected = self.right_panel_diff_source.clone();
         let latest_turn = self.latest_review_turn_source();
-        let source_label = self.review_diff_source_label(selected);
+        let source_label = self.review_diff_source_label(&selected);
         let stats = self
             .source_control_stats_key
             .as_ref()
@@ -4776,15 +4803,15 @@ impl Fintwind {
             MenuAlign::BelowLeft,
             move |_| {
                 let mut items = Vec::new();
-                let last_turn_source = latest_turn.unwrap_or_default();
+                let last_turn_source = latest_turn.clone().unwrap_or_default();
                 let last_turn_weak = weak.clone();
                 items.push(
                     MenuItem::new(tr!("diff.source_last_turn"), move |_, cx| {
                         let _ = last_turn_weak.update(cx, |this, cx| {
-                            this.set_review_diff_source(last_turn_source, cx)
+                            this.set_review_diff_source(last_turn_source.clone(), cx)
                         });
                     })
-                    .selected(latest_turn == Some(selected))
+                    .selected(latest_turn.as_ref() == Some(&selected))
                     .disabled(latest_turn.is_none()),
                 );
                 items.push(MenuItem::Separator);
@@ -4797,12 +4824,14 @@ impl Fintwind {
                     (ReviewDiffSource::Staged, tr!("diff.source_staged")),
                 ] {
                     let choice_weak = weak.clone();
+                    let is_selected = choice == selected;
                     items.push(
                         MenuItem::new(label, move |_, cx| {
-                            let _ = choice_weak
-                                .update(cx, |this, cx| this.set_review_diff_source(choice, cx));
+                            let _ = choice_weak.update(cx, |this, cx| {
+                                this.set_review_diff_source(choice.clone(), cx)
+                            });
                         })
-                        .selected(choice == selected),
+                        .selected(is_selected),
                     );
                 }
                 items.push(MenuItem::Separator);
@@ -4811,12 +4840,14 @@ impl Fintwind {
                     (ReviewDiffSource::Branch, tr!("diff.source_branch")),
                 ] {
                     let choice_weak = weak.clone();
+                    let is_selected = choice == selected;
                     items.push(
                         MenuItem::new(label, move |_, cx| {
-                            let _ = choice_weak
-                                .update(cx, |this, cx| this.set_review_diff_source(choice, cx));
+                            let _ = choice_weak.update(cx, |this, cx| {
+                                this.set_review_diff_source(choice.clone(), cx)
+                            });
                         })
-                        .selected(choice == selected),
+                        .selected(is_selected),
                     );
                 }
                 items
@@ -5209,7 +5240,7 @@ impl Fintwind {
                     || (gap.count() > 0
                         && self
                             .source_control_review_files
-                            .for_source(self.right_panel_diff_source)
+                            .for_source(&self.right_panel_diff_source)
                             .is_some()
                         && self.source_control_diff_context < 100_000);
                 let chunked = gap.count() > crate::review_diff::DEFAULT_EXPANSION_LINE_COUNT as u32;
@@ -5442,7 +5473,7 @@ impl Fintwind {
         if compact
             && self
                 .source_control_review_files
-                .for_source(self.right_panel_diff_source)
+                .for_source(&self.right_panel_diff_source)
                 .is_some()
         {
             self.source_control_diff_context = match direction {
@@ -5538,15 +5569,18 @@ impl Fintwind {
             })
     }
 
-    fn review_diff_source_label(&self, source: ReviewDiffSource) -> String {
+    fn review_diff_source_label(&self, source: &ReviewDiffSource) -> String {
         match source {
             ReviewDiffSource::LastTurn { .. }
-                if self.latest_review_turn_source() == Some(source) =>
+                if self.latest_review_turn_source().as_ref() == Some(source) =>
             {
                 tr!("diff.source_last_turn")
             }
             ReviewDiffSource::LastTurn { turn_count, .. } => {
-                tr!("diff.source_turn", turn = turn_count)
+                tr!("diff.source_turn", turn = *turn_count)
+            }
+            ReviewDiffSource::Commit { hash } => {
+                tr!("diff.source_commit", hash = self.commit_short_hash(hash))
             }
             ReviewDiffSource::Uncommitted => tr!("diff.source_uncommitted"),
             ReviewDiffSource::Unstaged => tr!("diff.source_unstaged"),
@@ -5556,10 +5590,19 @@ impl Fintwind {
         }
     }
 
+    /// A commit's display hash: the history panel's own abbreviation while
+    /// the commit is still in the loaded rows, else a seven-character prefix.
+    fn commit_short_hash(&self, hash: &str) -> String {
+        self.history_row_cache
+            .commit(hash)
+            .map(|commit| commit.short_hash.clone())
+            .unwrap_or_else(|| hash.get(..7).unwrap_or(hash).to_owned())
+    }
+
     fn source_control_live_selection(&self) -> Option<(&SourceControlFileList, usize)> {
         let files = self
             .source_control_review_files
-            .for_source(self.right_panel_diff_source)?;
+            .for_source(&self.right_panel_diff_source)?;
         let path = self.review_pending_file_focus.as_deref().or_else(|| {
             self.right_panel_diff_selected_file.and_then(|index| {
                 self.right_panel_diff_snapshot
@@ -5606,8 +5649,8 @@ impl Fintwind {
             self.source_control_stats_dirty = false;
             return;
         };
-        let source = self.right_panel_diff_source;
-        let key = (workspace.clone(), source);
+        let source = self.right_panel_diff_source.clone();
+        let key = (workspace.clone(), source.clone());
         let same_key = self.source_control_stats_key.as_ref() == Some(&key);
         if same_key && self.source_control_stats_request.is_some() {
             // The answer in flight predates this state change. Ask again once
@@ -5637,7 +5680,7 @@ impl Fintwind {
                 .spawn(async move {
                     client.request(fintwind_client::WorkspaceOperation::CollectReviewStats {
                         cwd: request_workspace,
-                        source: crate::review_diff::wire_source(source),
+                        source: crate::review_diff::wire_source(&source),
                         query_id: Some(query_id),
                     })
                 })
@@ -5700,7 +5743,7 @@ impl Fintwind {
 
         self.right_panel_diff_generation = self.right_panel_diff_generation.wrapping_add(1);
         let generation = self.right_panel_diff_generation;
-        let source = self.right_panel_diff_source;
+        let source = self.right_panel_diff_source.clone();
         let previous_path = self.right_panel_diff_selected_file.and_then(|index| {
             self.right_panel_diff_snapshot
                 .as_ref()
@@ -5708,7 +5751,7 @@ impl Fintwind {
                 .map(|file| file.path.clone())
         });
         if let Some(pending) = self.review_pending_file_focus.clone()
-            && let Some(files) = self.source_control_review_files.for_source(source)
+            && let Some(files) = self.source_control_review_files.for_source(&source)
             && !files.indices.contains_key(&pending)
         {
             let waiting_for_status = self.source_control_status_loading
@@ -5754,7 +5797,7 @@ impl Fintwind {
             self.review_pending_file_focus = None;
         }
         let mut selected_path = self.review_pending_file_focus.clone().or(previous_path);
-        let file_request = if let Some(files) = self.source_control_review_files.for_source(source)
+        let file_request = if let Some(files) = self.source_control_review_files.for_source(&source)
         {
             if selected_path
                 .as_deref()
@@ -5802,11 +5845,12 @@ impl Fintwind {
                 .background_executor()
                 .spawn({
                     let project_path = project_path.clone();
+                    let source = source.clone();
                     async move {
                         let operation = if let Some((path, origin_path, untracked)) = file_request {
                             fintwind_client::WorkspaceOperation::CollectReviewFileDiff {
                                 cwd: project_path,
-                                source: crate::review_diff::wire_source(source),
+                                source: crate::review_diff::wire_source(&source),
                                 path,
                                 origin_path,
                                 untracked,
@@ -5816,7 +5860,7 @@ impl Fintwind {
                         } else {
                             fintwind_client::WorkspaceOperation::CollectReviewDiff {
                                 cwd: project_path,
-                                source: crate::review_diff::wire_source(source),
+                                source: crate::review_diff::wire_source(&source),
                             }
                         };
                         match workspace.request(operation)? {
@@ -5849,12 +5893,17 @@ impl Fintwind {
                             fintwind.source_control_diff_request = None;
                         }
                     }
-                    let still_current = fintwind.state.selected_session == session_id
-                        && fintwind.right_panel_diff_generation == generation
+                    // A commit snapshot belongs to its commit, not to the
+                    // session or workspace on screen, so only a retarget can
+                    // supersede it. Other sources additionally require the
+                    // session and workspace they were asked for.
+                    let still_current = fintwind.right_panel_diff_generation == generation
                         && fintwind.right_panel_diff_source == source
-                        && fintwind
-                            .review_workspace_path()
-                            .is_some_and(|path| path == project_path);
+                        && (matches!(source, ReviewDiffSource::Commit { .. })
+                            || (fintwind.state.selected_session == session_id
+                                && fintwind
+                                    .review_workspace_path()
+                                    .is_some_and(|path| path == project_path)));
                     if !still_current {
                         return;
                     }
@@ -6203,7 +6252,7 @@ impl SourceControlReviewFiles {
         files
     }
 
-    fn for_source(&self, source: ReviewDiffSource) -> Option<&SourceControlFileList> {
+    fn for_source(&self, source: &ReviewDiffSource) -> Option<&SourceControlFileList> {
         match source {
             ReviewDiffSource::Uncommitted => Some(&self.uncommitted),
             ReviewDiffSource::Unstaged => Some(&self.unstaged),

@@ -1151,6 +1151,7 @@ git_history.empty: コミットはまだありません
 git_history.empty_description: このブランチに表示できるコミットがありません
 git_history.hash_copied: "%{hash} をコピーしました"
 git_history.copy_hash: SHA をコピー
+git_history.view_changes: 変更を表示
 git_history.files_changed: "%{count} ファイル変更"
 git_history.stats_loading: 変更を読み込み中…
 git_history.stats_error: 変更を読み込めません
@@ -1340,6 +1341,7 @@ review.turn_label: 第%{turn}ターン
 review.readonly: 履歴スナップショット · 読み取り専用
 review.snapshot: ターン差分 — %{turn}
 review.snapshot_from_session: "「%{title}」のターン差分 — %{turn}"
+review.commit_snapshot_subject: "コミット %{hash} — %{subject}"
 review.view_workspace: 現在のワークスペースを表示
 review.back_to_session: セッションに戻る
 diff.no_changes: 変更はありません
@@ -1347,6 +1349,7 @@ diff.no_changes_description: このソースにはレビューするファイル
 diff.filter_files: ファイルを絞り込む…
 diff.source_last_turn: 前回のターン
 diff.source_turn: ターン %{turn}
+diff.source_commit: コミット %{hash}
 diff.source_uncommitted: 未コミット
 diff.source_unstaged: 未ステージ
 diff.source_staged: ステージ済み

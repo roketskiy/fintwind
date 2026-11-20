@@ -1226,6 +1226,7 @@ git_history.empty: 暂无提交
 git_history.empty_description: 此分支没有可显示的提交
 git_history.hash_copied: 已复制 %{hash}
 git_history.copy_hash: 复制 SHA
+git_history.view_changes: 查看更改
 git_history.files_changed: "%{count} 个文件"
 git_history.stats_loading: 正在读取变更…
 git_history.stats_error: 无法读取变更
@@ -1417,6 +1418,7 @@ review.turn_label: 第 %{turn} 轮
 review.readonly: 历史快照 · 只读
 review.snapshot: 轮次 Diff — %{turn}
 review.snapshot_from_session: 来自“%{title}”的轮次 Diff — %{turn}
+review.commit_snapshot_subject: 提交 %{hash} — %{subject}
 review.view_workspace: 查看当前工作区
 review.back_to_session: 返回会话
 diff.no_changes: 没有更改
@@ -1424,6 +1426,7 @@ diff.no_changes_description: 此来源没有可审阅的文件更改
 diff.filter_files: 筛选文件…
 diff.source_last_turn: 上一轮
 diff.source_turn: 第 %{turn} 轮
+diff.source_commit: 提交 %{hash}
 diff.source_uncommitted: 未提交
 diff.source_unstaged: 未暂存
 diff.source_staged: 已暂存

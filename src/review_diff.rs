@@ -21,12 +21,17 @@ pub const DEFAULT_EXPANSION_LINE_COUNT: usize = 100;
 /// in the tree when rendered lines are capped.
 const MAX_RENDERED_DIFF_LINES: usize = 50_000;
 
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub enum Source {
     LastTurn {
         session_id: Uuid,
         turn_id: Uuid,
         turn_count: usize,
+    },
+    /// One commit's own changes, against its first parent. Read-only, like a
+    /// turn snapshot.
+    Commit {
+        hash: String,
     },
     #[default]
     Uncommitted,
@@ -329,16 +334,19 @@ pub fn from_file_changes(changes: &[crate::model::ActivityFileChange]) -> Snapsh
     parse(Source::default(), &numstat, &patch, false)
 }
 
-pub fn wire_source(source: Source) -> fintwind_client::workspace::ReviewDiffSource {
+pub fn wire_source(source: &Source) -> fintwind_client::workspace::ReviewDiffSource {
     match source {
         Source::LastTurn {
             session_id,
             turn_id,
             turn_count,
         } => fintwind_client::workspace::ReviewDiffSource::LastTurn {
-            session_id,
-            turn_id,
-            turn_count,
+            session_id: *session_id,
+            turn_id: *turn_id,
+            turn_count: *turn_count,
+        },
+        Source::Commit { hash } => fintwind_client::workspace::ReviewDiffSource::Commit {
+            hash: hash.clone(),
         },
         Source::Uncommitted => fintwind_client::workspace::ReviewDiffSource::Uncommitted,
         Source::Unstaged => fintwind_client::workspace::ReviewDiffSource::Unstaged,

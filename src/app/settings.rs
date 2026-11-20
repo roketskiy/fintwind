@@ -2028,11 +2028,10 @@ impl Fintwind {
             let selected = receiver.await;
             let _ = this.update(cx, |this, cx| {
                 this.opencode_binary_busy = false;
-                if let Ok(Ok(Some(paths))) = selected {
-                    if let Some(path) = paths.into_iter().next() {
+                if let Ok(Ok(Some(paths))) = selected
+                    && let Some(path) = paths.into_iter().next() {
                         this.set_opencode_binary(Some(path.to_string_lossy().into_owned()), cx);
                     }
-                }
                 cx.notify();
             });
         })

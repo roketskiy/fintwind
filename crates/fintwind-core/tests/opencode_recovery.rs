@@ -3071,7 +3071,7 @@ fn opencode_recovery_template_expansion_preserves_typed() {
     let active = session.begin_turn_with_presentation(typed, None, vec![attachment.clone()]);
 
     session.bind_active_prompt_transport(&expanded);
-    let turn_json = serde_json::to_value(&session.turns.last().unwrap()).unwrap();
+    let turn_json = serde_json::to_value(session.turns.last().unwrap()).unwrap();
     *session.turns.last_mut().unwrap() = serde_json::from_value::<AgentTurn>(turn_json).unwrap();
     let run = Run::new();
     let harness = start_harness(&run.root);
@@ -4644,7 +4644,7 @@ fn opencode_recovery_restart_seed() {
     retry_session.turns.last_mut().expect("retry turn").id = retry_record.receipt.id;
     retry_session.turns.last_mut().expect("retry turn").submission =
         Some(retry_record.receipt.clone());
-    match harness.client.request(
+    if let Ok(payload) = harness.client.request(
         session_id,
         Uuid::nil(),
         Command::AcceptSubmission {
@@ -4652,12 +4652,9 @@ fn opencode_recovery_restart_seed() {
             session: Box::new(retry_session),
             submission: Box::new(retry_record),
         },
-    ) {
-        Ok(payload) => report.failures.push(format!(
-            "a retry while Unknown is pending must be refused, got {payload:?}"
-        )),
-        Err(_) => {}
-    }
+    ) { report.failures.push(format!(
+        "a retry while Unknown is pending must be refused, got {payload:?}"
+    )) }
     report.expect(
         fake_prompt_posts(&fixture) == 1,
         "the refused retry must not reach the provider",
@@ -4847,7 +4844,7 @@ fn opencode_recovery_restart_repair() {
     retry_record.receipt.id = retry_turn;
     retry_session.turns.last_mut().expect("retry turn").submission =
         Some(retry_record.receipt.clone());
-    match harness.client.request(
+    if let Ok(payload) = harness.client.request(
         session_id,
         Uuid::nil(),
         Command::AcceptSubmission {
@@ -4855,12 +4852,9 @@ fn opencode_recovery_restart_repair() {
             session: Box::new(retry_session),
             submission: Box::new(retry_record),
         },
-    ) {
-        Ok(payload) => report.failures.push(format!(
-            "a retry after restart while Unknown is pending must still be refused, got {payload:?}"
-        )),
-        Err(_) => {}
-    }
+    ) { report.failures.push(format!(
+        "a retry after restart while Unknown is pending must still be refused, got {payload:?}"
+    )) }
     let repaired = hydrate_full(&harness.client, session_id).expect("session hydrates");
     report.expect(
         repaired.status == SessionStatus::Idle,

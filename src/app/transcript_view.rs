@@ -546,7 +546,7 @@ impl Fintwind {
             .or_else(|| {
                 let card = self
                     .update_card_visible()
-                    .then(|| self.latest_available.as_ref())
+                    .then_some(self.latest_available.as_ref())
                     .flatten();
                 card.and_then(|card| card.selected_text())
             })

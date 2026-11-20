@@ -78,7 +78,6 @@ pub(crate) enum ProjectCreateOutcome {
     Failed(OperationRecord),
     Unknown {
         record: OperationRecord,
-        detail: &'static str,
     },
 }
 
@@ -157,13 +156,7 @@ pub(crate) fn create_empty_project(
         Err(_) => {
             // No filesystem effect happened yet; the row stays non-terminal
             // and reads back as needing reconciliation.
-            return Ok(unconfirmed(
-                store,
-                environment,
-                operation_id,
-                preparing,
-                "running_unconfirmed",
-            ));
+            return Ok(unconfirmed(store, environment, operation_id, preparing));
         }
     };
 
@@ -211,13 +204,7 @@ pub(crate) fn create_empty_project(
                 None,
             ) {
                 Ok(done) => Ok(ProjectCreateOutcome::Created(done)),
-                Err(_) => Ok(unconfirmed(
-                    store,
-                    environment,
-                    operation_id,
-                    running,
-                    "settlement_unconfirmed",
-                )),
+                Err(_) => Ok(unconfirmed(store, environment, operation_id, running)),
             }
         }
         Err(error) => {
@@ -247,13 +234,7 @@ pub(crate) fn create_empty_project(
                 }),
             ) {
                 Ok(done) => Ok(ProjectCreateOutcome::Failed(done)),
-                Err(_) => Ok(unconfirmed(
-                    store,
-                    environment,
-                    operation_id,
-                    running,
-                    "settlement_unconfirmed",
-                )),
+                Err(_) => Ok(unconfirmed(store, environment, operation_id, running)),
             }
         }
     }
@@ -313,7 +294,7 @@ fn fail_before_write(
         }),
     ) {
         Ok(done) => ProjectCreateOutcome::Failed(done),
-        Err(_) => unconfirmed(store, environment, id, running, "settlement_unconfirmed"),
+        Err(_) => unconfirmed(store, environment, id, running),
     }
 }
 
@@ -332,13 +313,12 @@ fn unconfirmed(
     environment: &OperationEnvironment,
     id: Uuid,
     fallback: OperationRecord,
-    detail: &'static str,
 ) -> ProjectCreateOutcome {
     let record = match operation_journal::get(store, environment, id) {
         Ok(Some(current)) => current,
         Ok(None) | Err(_) => fallback,
     };
-    ProjectCreateOutcome::Unknown { record, detail }
+    ProjectCreateOutcome::Unknown { record }
 }
 
 /// Read-only parent problem for the pre-write recheck; carries no caller

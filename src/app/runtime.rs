@@ -951,7 +951,7 @@ impl Fintwind {
             while value.len() > 3 && value.ends_with('\\') {
                 value.pop();
             }
-            return std::path::PathBuf::from(value.to_lowercase());
+            std::path::PathBuf::from(value.to_lowercase())
         }
         #[cfg(not(windows))]
         directory
@@ -1173,7 +1173,6 @@ impl Fintwind {
             .is_err()
         {
             self.provider_detection_remaining = 0;
-            return;
         }
     }
 
@@ -1857,7 +1856,7 @@ impl Fintwind {
             return;
         }
         let Some(project_path) = self
-            .workspace_path_for_session(&source)
+            .workspace_path_for_session(source)
             .map(std::path::Path::to_path_buf)
         else {
             self.record_session_error(session_id, tr!("errors.task_project_not_found"), cx);
@@ -2240,7 +2239,7 @@ impl Fintwind {
             reasoning_effort,
             service_tier,
             context_window,
-        } = self.session_options(&session);
+        } = self.session_options(session);
         Ok(DriverStartRequest {
             session_id: session.id,
             options: DriverStartOptions {
@@ -2306,7 +2305,7 @@ impl Fintwind {
     /// provider to summarize the context, so the text must never reach the
     /// model — not even steered into a running turn.
     pub(super) fn is_compact_submission(prompt: &str) -> bool {
-        prompt.trim().split_whitespace().next() == Some("/compact")
+        prompt.split_whitespace().next() == Some("/compact")
     }
 
     /// Whether the composer text invokes the server hot-reload command rather
@@ -2315,7 +2314,7 @@ impl Fintwind {
     /// the text must never reach the model — not even steered into a running
     /// turn.
     pub(super) fn is_reload_submission(prompt: &str) -> bool {
-        prompt.trim().split_whitespace().next() == Some("/reload-server")
+        prompt.split_whitespace().next() == Some("/reload-server")
     }
 
     /// Hot-reload the native OpenCode server through its `location.reload`

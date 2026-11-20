@@ -2032,7 +2032,7 @@ fn write_bytes_atomically(path: &Path, data: &[u8]) -> io::Result<()> {
     #[cfg(unix)]
     options.mode(0o600);
     let mut file = options.open(&temporary)?;
-    file.write_all(&data)?;
+    file.write_all(data)?;
     file.sync_all()?;
     fs::rename(&temporary, path)?;
     #[cfg(unix)]
@@ -2044,6 +2044,38 @@ fn restore_task_state_skeletons(sessions: &mut [AgentSession]) {
     for session in sessions {
         session.detail_loaded = false;
     }
+}
+
+/// Reads one daemon-owned binary payload. Clients decide how to present the
+/// bytes; this transport layer deliberately creates no client-side files.
+pub fn read_remote_reference(
+    reference: &str,
+    daemon_path: Option<&Path>,
+    daemon: &DaemonSupervisor,
+) -> Option<Vec<u8>> {
+    let command = if fintwind_protocol::blob::is_reference(reference) {
+        Command::ReadBlob {
+            reference: reference.to_owned(),
+        }
+    } else if reference.starts_with(fintwind_protocol::attachments::ATTACHMENT_SCHEME) {
+        let path = daemon_path?;
+        Command::ReadAttachment {
+            reference: reference.to_owned(),
+            path: path.to_owned(),
+        }
+    } else {
+        return None;
+    };
+    let Ok(ResponsePayload::BlobData { bytes }) =
+        daemon.client().request(Uuid::nil(), Uuid::nil(), command)
+    else {
+        return None;
+    };
+    Some(bytes)
+}
+
+fn to_io_error(error: impl std::fmt::Display) -> io::Error {
+    io::Error::other(error.to_string())
 }
 
 #[cfg(test)]
@@ -2129,36 +2161,4 @@ mod tests {
         assert_eq!(normalize_transcript_width(800.0), 800.0);
         assert_eq!(normalize_transcript_width(801.0), 800.0);
     }
-}
-
-/// Reads one daemon-owned binary payload. Clients decide how to present the
-/// bytes; this transport layer deliberately creates no client-side files.
-pub fn read_remote_reference(
-    reference: &str,
-    daemon_path: Option<&Path>,
-    daemon: &DaemonSupervisor,
-) -> Option<Vec<u8>> {
-    let command = if fintwind_protocol::blob::is_reference(reference) {
-        Command::ReadBlob {
-            reference: reference.to_owned(),
-        }
-    } else if reference.starts_with(fintwind_protocol::attachments::ATTACHMENT_SCHEME) {
-        let path = daemon_path?;
-        Command::ReadAttachment {
-            reference: reference.to_owned(),
-            path: path.to_owned(),
-        }
-    } else {
-        return None;
-    };
-    let Ok(ResponsePayload::BlobData { bytes }) =
-        daemon.client().request(Uuid::nil(), Uuid::nil(), command)
-    else {
-        return None;
-    };
-    Some(bytes)
-}
-
-fn to_io_error(error: impl std::fmt::Display) -> io::Error {
-    io::Error::other(error.to_string())
 }

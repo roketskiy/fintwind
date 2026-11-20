@@ -2194,7 +2194,7 @@ mod tests {
         let mut fresh = Project::from_path("C:\\fresh".into());
         fresh.created_at = 100;
 
-        let groups = sidebar_project_groups(&[session.clone()], &[stale.clone(), fresh.clone()]);
+        let groups = sidebar_project_groups(std::slice::from_ref(&session), &[stale.clone(), fresh.clone()]);
         assert_eq!(
             groups,
             vec![

@@ -41,7 +41,7 @@ impl RemoteUploads {
             || name == "."
             || name == ".."
             || data.len() > 64 * 1024
-            || data.len() % 4 != 0
+            || !data.len().is_multiple_of(4)
             || (!complete && data.contains('='))
             || !data
                 .bytes()
@@ -626,7 +626,7 @@ impl Fintwind {
                                     match probe {
                                         Err(error) => Err(error),
                                         Ok(probe) => {
-                                            let result = this.update(cx, |app, _| {
+                                            this.update(cx, |app, _| {
                                                 if app.remote_generation != generation { return Err("远控已关闭。".to_owned()); }
                                                 if app.provider_binary_generation != binary_generation { return Err("模型目录已更新，请重试。".into()); }
                                                 let index = app.remote_session_index(*session_id)?;
@@ -636,8 +636,7 @@ impl Fintwind {
                                                 if app.remote_composer_catalogs.len() >= 8 { app.remote_composer_catalogs.clear(); }
                                                 app.remote_composer_catalogs.insert(*session_id, (directory.clone(), probe.clone(), Instant::now(), app.provider_binary_generation));
                                                 Ok(app.remote_composer_snapshot(index, &probe))
-                                            }).unwrap_or_else(|_| Err("桌面窗口已关闭。".into()));
-                                            result
+                                            }).unwrap_or_else(|_| Err("桌面窗口已关闭。".into()))
                                         }
                                     }
                                 }
@@ -842,7 +841,7 @@ impl Fintwind {
                         json!({
                             "id": session.id,
                             "projectId": session.project_id,
-                            "title": bounded_text(&session.display_title(), 256),
+                            "title": bounded_text(session.display_title(), 256),
                             "status": serde_json::to_value(session.status).unwrap_or(Value::Null),
                             "updatedAt": session_updated_at(session),
                         })
@@ -853,13 +852,12 @@ impl Fintwind {
             fintwind_remote::RemoteCommand::GetSession { session_id } => {
                 let index = self.remote_session_index(session_id)?;
                 self.refresh_remote_workspace_changes(index, cx);
-                if !self.state.sessions[index].detail_loaded {
-                    if !self.runtimes.contains_key(&session_id)
-                        || !self.state.sessions[index].status.is_busy()
+                if !self.state.sessions[index].detail_loaded
+                    && (!self.runtimes.contains_key(&session_id)
+                        || !self.state.sessions[index].status.is_busy())
                     {
                         self.hydrate_remote_session(session_id, cx);
                     }
-                }
                 Ok(self.remote_session_snapshot(index))
             }
             fintwind_remote::RemoteCommand::GetComposer { .. } => {
@@ -1276,7 +1274,7 @@ impl Fintwind {
         let mut snapshot = json!({
             "id": session.id,
             "projectId": session.project_id,
-            "title": bounded_text(&session.display_title(), 1024),
+            "title": bounded_text(session.display_title(), 1024),
             "status": serde_json::to_value(session.status).unwrap_or(Value::Null),
             "messages": messages,
             "truncated": truncated || entries_truncated,

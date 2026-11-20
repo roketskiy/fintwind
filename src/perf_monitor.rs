@@ -163,7 +163,7 @@ fn enable_native_caption(window: &Window) -> anyhow::Result<()> {
     let RawWindowHandle::Win32(win) = handle.as_raw() else {
         anyhow::bail!("the platform window is not a Win32 window");
     };
-    let hwnd = win.hwnd.get() as isize as HWND;
+    let hwnd = win.hwnd.get() as HWND;
     unsafe {
         // Both style calls report failure as 0 with a pending error code;
         // clearing it first keeps a legitimate 0 style readable.
@@ -222,7 +222,7 @@ fn sync_native_caption_theme(window: &Window, is_dark: bool) {
     let RawWindowHandle::Win32(win) = handle.as_raw() else {
         return;
     };
-    let hwnd = win.hwnd.get() as isize as *mut _;
+    let hwnd = win.hwnd.get() as *mut _;
     let dark: i32 = if is_dark { 1 } else { 0 };
     unsafe {
         DwmSetWindowAttribute(

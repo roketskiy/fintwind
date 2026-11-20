@@ -289,11 +289,10 @@ impl ComposerRowCache {
     }
 
     fn width(slot: &mut Option<ChipLabelWidth>, text: &str, window: &Window) -> f32 {
-        if let Some(measured) = slot.as_ref() {
-            if measured.text.as_ref() == text {
+        if let Some(measured) = slot.as_ref()
+            && measured.text.as_ref() == text {
                 return measured.width;
             }
-        }
         let width = measure_chip_label(text, window);
         *slot = Some(ChipLabelWidth {
             text: text.into(),

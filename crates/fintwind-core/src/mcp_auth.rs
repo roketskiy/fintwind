@@ -305,7 +305,7 @@ fn open_browser(url: &str) -> io::Result<()> {
             .stderr(Stdio::null())
             .creation_flags(CREATE_NO_WINDOW)
             .spawn()?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(windows))]
     {

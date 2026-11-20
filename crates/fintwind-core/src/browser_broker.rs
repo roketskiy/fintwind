@@ -331,15 +331,14 @@ impl BrowserBroker {
             .iter()
             .position(|host| host.subscriber_id == subscriber_id)
             .map(|index| state.hosts.swap_remove(index));
-        if let Some(previous) = replaced {
-            if previous.scope.page_id != scope.page_id {
+        if let Some(previous) = replaced
+            && previous.scope.page_id != scope.page_id {
                 Self::cancel_host_pending(
                     &mut state,
                     &previous,
                     "the browser launcher was replaced",
                 );
             }
-        }
         state.hosts.push(HostPublication {
             scope,
             subscriber_id,

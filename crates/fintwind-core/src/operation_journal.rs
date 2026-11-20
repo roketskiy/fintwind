@@ -203,12 +203,17 @@ pub(crate) struct OperationRecord {
     pub id: Uuid,
     pub environment: OperationEnvironment,
     pub owner: Uuid,
+    /// Journal schema fields: persisted and read back for row fidelity, but
+    /// no consumer reads them yet; reconciliation tooling is future work.
+    #[allow(dead_code)]
     pub kind: OperationKind,
     pub target_path: PathBuf,
     pub state: OperationState,
     /// Bumped on every transition; stale results lose the CAS.
     pub revision: u64,
+    #[allow(dead_code)]
     pub created_at: u64,
+    #[allow(dead_code)]
     pub updated_at: u64,
     pub failure: Option<OperationFailure>,
 }

@@ -2473,18 +2473,12 @@ impl Fintwind {
                                     Self::save_ssh_general,
                                 ))
                         }))
-                        .children(self.ssh.general_error.iter().filter_map(
-                            |(host, is_editing, error)| {
-                                (*host == id && *is_editing && editing.is_some()).then(|| {
-                                    div()
+                        .children(self.ssh.general_error.iter().filter(|&(host, is_editing, _error)| *host == id && *is_editing && editing.is_some() ).map(|(_host, _is_editing, error)| div()
                                         .px(px(20.0))
                                         .pb(px(10.0))
                                         .text_size(ui_px(12.0))
                                         .text_color(theme.danger_text)
-                                        .child(error.clone())
-                                })
-                            },
-                        )).into_any_element();
+                                        .child(error.clone()))).into_any_element();
                 match field {
                     GeneralSetting::OpenCodePath => opencode_binary = Some(item),
                     GeneralSetting::NetworkProxy | GeneralSetting::OpenCodeShell => environment.push(item),

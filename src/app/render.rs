@@ -744,23 +744,6 @@ impl Render for Fintwind {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unloaded_history_never_renders_the_new_task_prompt() {
-        let mut stored = AgentSession::new(Uuid::new_v4());
-        stored.detail_loaded = false;
-
-        assert!(!should_render_empty_state(Some(&stored)));
-
-        let draft = AgentSession::new(Uuid::new_v4());
-        assert!(should_render_empty_state(Some(&draft)));
-        assert!(should_render_empty_state(None));
-    }
-}
-
 impl Fintwind {
     /// Arm the dismiss timer and build the floating toast layer, if a toast
     /// is active. Every full-window surface (workspace and settings alike)
@@ -961,5 +944,22 @@ impl Fintwind {
                 },
             ).into_any_element()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unloaded_history_never_renders_the_new_task_prompt() {
+        let mut stored = AgentSession::new(Uuid::new_v4());
+        stored.detail_loaded = false;
+
+        assert!(!should_render_empty_state(Some(&stored)));
+
+        let draft = AgentSession::new(Uuid::new_v4());
+        assert!(should_render_empty_state(Some(&draft)));
+        assert!(should_render_empty_state(None));
     }
 }

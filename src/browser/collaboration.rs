@@ -538,12 +538,10 @@ impl BrowserView {
             .running
             .as_ref()
             .is_some_and(|(running, _)| *running == id)
-        {
-            if let Some((_, cancelled)) = self.collaboration.running.take() {
+            && let Some((_, cancelled)) = self.collaboration.running.take() {
                 cancelled.store(true, Ordering::SeqCst);
                 cx.notify();
             }
-        }
     }
 
     fn finish_browser_request(

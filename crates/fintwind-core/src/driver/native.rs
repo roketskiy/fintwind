@@ -669,12 +669,12 @@ fn assemble_usage_entries(
             continue;
         };
         let split = splits[row_index].as_ref();
-        if facts.kind == SessionKind::SubAgent {
-            if let Some(&parent_index) = facts.parent.as_deref().and_then(|p| entry_index.get(p)) {
+        if facts.kind == SessionKind::SubAgent
+            && let Some(&parent_index) = facts.parent.as_deref().and_then(|p| entry_index.get(p)) {
                 if let Some(split) = split {
                     apply_usage_split(&mut entry, split);
                 }
-                fold_subagent_into(&mut entries[parent_index], &entry, &id);
+                fold_subagent_into(&mut entries[parent_index], &entry, id);
                 entry_index.insert(id.clone(), parent_index);
                 // The parent's entry owns the totals; the child's model is
                 // retained separately for the model and provider rankings.
@@ -682,7 +682,6 @@ fn assemble_usage_entries(
             }
             // An orphaned sub-agent (its parent was deleted or aged out of the
             // listing) is still real spend. Keep it rather than drop it.
-        }
         entry_index.insert(id.clone(), entries.len());
         if let Some(split) = split {
             apply_usage_split(&mut entry, split);
@@ -1881,11 +1880,10 @@ pub(crate) fn start_integration_oauth(
     // forms hide server-side defaults (e.g. the Console URL).
     let mut answer = serde_json::Map::new();
     for field in &method.form {
-        if field.hidden {
-            if let Some(default) = &field.default {
+        if field.hidden
+            && let Some(default) = &field.default {
                 answer.insert(field.key.clone(), Value::String(default.clone()));
             }
-        }
     }
     if let Some(answers) = answers.as_object() {
         for (key, value) in answers {
@@ -2358,7 +2356,7 @@ fn native_image_attachment(
         let data = file.get("data")?.as_str()?;
         // Provider data is untrusted; bound both individual decodes and the
         // whole transcript before allocating or writing image bytes.
-        let max_bytes = fintwind_protocol::attachments::MAX_PROMPT_FILE_BYTES as usize;
+        let max_bytes = fintwind_protocol::attachments::MAX_PROMPT_FILE_BYTES;
         if data.len() > max_bytes.div_ceil(3) * 4
             || data.len().div_ceil(4).saturating_mul(3).saturating_sub(2) > *image_bytes_left
         {

@@ -713,7 +713,7 @@ fn pump(cx: &mut App) {
                         .unwrap_or_else(|_| {
                             Err(anyhow::anyhow!("diagram compilation panicked"))
                         })
-                        .map(|rendered| Arc::new(rendered))
+                        .map(Arc::new)
                         .map_err(|error| failure_message(&error));
                     (key, result)
                 })
@@ -721,7 +721,7 @@ fn pump(cx: &mut App) {
         });
         cx.spawn(async move |cx| {
             let results = task.await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let views = {
                     let mut cache = cx.global::<Store>().0.borrow_mut();
                     cache.active = cache.active.saturating_sub(1);

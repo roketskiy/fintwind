@@ -177,25 +177,25 @@ fn composer_row_demotes_labels_in_priority_order_as_it_narrows() {
     // Exactly wide enough keeps every label — the budget must not demote
     // on a schedule rather than on the width it is actually given.
     let roomy = composer_row_plan(all_labelled, widths);
-    assert_eq!(roomy.model_label, true);
-    assert_eq!(roomy.traits_label, true);
-    assert_eq!(roomy.interaction_label, true);
-    assert_eq!(roomy.access_label, true);
+    assert!(roomy.model_label);
+    assert!(roomy.traits_label);
+    assert!(roomy.interaction_label);
+    assert!(roomy.access_label);
 
     // One chip's label short of fitting demotes exactly that chip, and the
     // cheapest one first.
     let short_by_traits = composer_row_plan(all_labelled - 1.0, widths);
-    assert_eq!(short_by_traits.traits_label, false);
-    assert_eq!(short_by_traits.interaction_label, true);
-    assert_eq!(short_by_traits.access_label, true);
-    assert_eq!(short_by_traits.model_label, true);
+    assert!(!short_by_traits.traits_label);
+    assert!(short_by_traits.interaction_label);
+    assert!(short_by_traits.access_label);
+    assert!(short_by_traits.model_label);
 
     // Short by more than the traits label costs: the next chip follows.
     let short_by_two = composer_row_plan(all_labelled - chip_width(Some(20.0)) - 1.0, widths);
-    assert_eq!(short_by_two.traits_label, false);
-    assert_eq!(short_by_two.interaction_label, false);
-    assert_eq!(short_by_two.access_label, true);
-    assert_eq!(short_by_two.model_label, true);
+    assert!(!short_by_two.traits_label);
+    assert!(!short_by_two.interaction_label);
+    assert!(short_by_two.access_label);
+    assert!(short_by_two.model_label);
 
     // The model name goes only after every other label, and only once they
     // are all spent: it is the longest, but it is also the one that says
@@ -209,17 +209,17 @@ fn composer_row_demotes_labels_in_priority_order_as_it_narrows() {
             - (chip_width(Some(50.0)) - chip_width(None)),
         widths,
     );
-    assert_eq!(only_model_left.traits_label, false);
-    assert_eq!(only_model_left.interaction_label, false);
-    assert_eq!(only_model_left.access_label, false);
-    assert_eq!(only_model_left.model_label, true);
+    assert!(!only_model_left.traits_label);
+    assert!(!only_model_left.interaction_label);
+    assert!(!only_model_left.access_label);
+    assert!(only_model_left.model_label);
 
     // A width nothing fits demotes every label, leaving the logos.
     let narrow = composer_row_plan(0.0, widths);
-    assert_eq!(narrow.model_label, false);
-    assert_eq!(narrow.traits_label, false);
-    assert_eq!(narrow.interaction_label, false);
-    assert_eq!(narrow.access_label, false);
+    assert!(!narrow.model_label);
+    assert!(!narrow.traits_label);
+    assert!(!narrow.interaction_label);
+    assert!(!narrow.access_label);
 }
 
 #[test]
@@ -243,9 +243,9 @@ fn composer_row_skips_a_demotion_for_a_chip_it_does_not_draw() {
     // of the absent chip: nothing may be demoted, because the absent chip
     // was never going to spend it.
     let plan = composer_row_plan(all_labelled + 30.0, widths);
-    assert_eq!(plan.model_label, true);
-    assert_eq!(plan.interaction_label, true);
-    assert_eq!(plan.access_label, true);
+    assert!(plan.model_label);
+    assert!(plan.interaction_label);
+    assert!(plan.access_label);
 }
 
 #[test]

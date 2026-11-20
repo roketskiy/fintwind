@@ -89,7 +89,7 @@ pub const OUTPUT_MODALITIES: [&str; 4] = ["text", "image", "audio", "video"];
 pub const REASONING_EFFORTS: [&str; 6] = ["none", "low", "medium", "high", "xhigh", "max"];
 
 /// One model of a [`CustomProvider`].
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CustomProviderModel {
     pub id: String,
@@ -124,20 +124,6 @@ pub struct CustomProviderModel {
     pub reasoning_efforts: Vec<String>,
 }
 
-impl Default for CustomProviderModel {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            api_package: None,
-            context_window: None,
-            name: None,
-            output_limit: None,
-            input_modalities: Vec::new(),
-            output_modalities: Vec::new(),
-            reasoning_efforts: Vec::new(),
-        }
-    }
-}
 
 impl CustomProviderModel {
     /// The name worth showing: `None` when absent or merely a copy of the id
@@ -342,9 +328,9 @@ pub fn parse_context_window(text: &str) -> Option<u64> {
 /// Compact badge text: whole millions as `N M`, whole thousands as `N K`,
 /// anything else verbatim.
 pub fn format_context_window(tokens: u64) -> String {
-    if tokens >= 1_000_000 && tokens % 1_000_000 == 0 {
+    if tokens >= 1_000_000 && tokens.is_multiple_of(1_000_000) {
         format!("{}M", tokens / 1_000_000)
-    } else if tokens >= 1_000 && tokens % 1_000 == 0 {
+    } else if tokens >= 1_000 && tokens.is_multiple_of(1_000) {
         format!("{}K", tokens / 1_000)
     } else {
         tokens.to_string()

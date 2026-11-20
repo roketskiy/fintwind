@@ -291,11 +291,9 @@ impl QuotaService {
             } else {
                 cache.next_auto
             }
-        {
-            if let Some(last) = &cache.last {
+            && let Some(last) = &cache.last {
                 return last.clone();
             }
-        }
         let response = source.request(&request);
         let mut q = match &response {
             Ok(r) if (200..300).contains(&r.status) => serde_json::from_str::<Value>(&r.body)
@@ -617,11 +615,10 @@ fn money(v: &Value) -> Option<String> {
     Some(s)
 }
 fn timestamp(v: &Value) -> Option<i64> {
-    if let Some(s) = v.as_str() {
-        if let Ok(t) = chrono::DateTime::parse_from_rfc3339(s) {
+    if let Some(s) = v.as_str()
+        && let Ok(t) = chrono::DateTime::parse_from_rfc3339(s) {
             return Some(t.timestamp());
         }
-    }
     let n = v.as_i64().or_else(|| v.as_str()?.parse::<i64>().ok())?;
     (n > 0).then_some(if n >= 1_000_000_000_000 { n / 1000 } else { n })
 }
@@ -645,13 +642,12 @@ fn window(
     }
 }
 fn add_count(w: &mut QuotaWindow, limit: &Value, used: &Value, remaining: &Value) {
-    if let Some(total) = number(limit).filter(|n| *n > 0.0) {
-        if let Some(left) = number(remaining).or_else(|| number(used).map(|n| total - n)) {
+    if let Some(total) = number(limit).filter(|n| *n > 0.0)
+        && let Some(left) = number(remaining).or_else(|| number(used).map(|n| total - n)) {
             w.used_percent = Some(((total - left) / total * 100.0).clamp(0.0, 100.0));
             w.remaining = Some(format!("{}", left.max(0.0)));
             w.limit = money(limit);
         }
-    }
 }
 
 fn parse(provider: &str, body: &Value) -> ProviderQuota {
@@ -755,15 +751,14 @@ fn parse(provider: &str, body: &Value) -> ProviderQuota {
             }
         }
         "stepfun" | "stepfun-ai" | "stepfun-ai-step-plan" | "stepfun-step-plan" => {
-            if body["object"].as_str() == Some("account") {
-                if let Some(remaining) = money(&body["balance"]) {
+            if body["object"].as_str() == Some("account")
+                && let Some(remaining) = money(&body["balance"]) {
                     q.balances.push(QuotaBalance {
                         unit: String::new(),
                         remaining,
                         unlimited: false,
                     });
                 }
-            }
         }
         _ => return ProviderQuota::empty(QuotaStatus::Unsupported),
     }

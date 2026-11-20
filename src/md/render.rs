@@ -748,8 +748,8 @@ impl<'a> Ctx<'a> {
                 }
                 flat.links.sort_by_key(|(range, _)| range.start);
             }
-            if flat.allow_references && flat.math.is_none() {
-                if let Some(catalog) = &self.reference_catalog {
+            if flat.allow_references && flat.math.is_none()
+                && let Some(catalog) = &self.reference_catalog {
                     flat.references = catalog
                         .find(&flat.text)
                         .into_iter()
@@ -769,7 +769,6 @@ impl<'a> Ctx<'a> {
                         self.palette.accent,
                     );
                 }
-            }
             flat
         };
         match self.cache {
@@ -2522,7 +2521,7 @@ mod tests {
             highlighted.iter().map(|run| run.len).sum::<usize>(),
             plain.iter().map(|run| run.len).sum::<usize>()
         );
-        assert!(highlighted.iter().all(|run| &run.font == &code_font));
+        assert!(highlighted.iter().all(|run| run.font == code_font));
     }
 
     #[test]

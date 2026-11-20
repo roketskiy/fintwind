@@ -189,8 +189,8 @@ pub(crate) fn native_provider(value: &Value) -> Value {
             if spec.get("status").and_then(Value::as_str) == Some("deprecated") {
                 spec.insert("disabled".into(), json!(true));
             }
-            if let Some(interleaved) = spec.remove("interleaved") {
-                if let Some(field) = interleaved
+            if let Some(interleaved) = spec.remove("interleaved")
+                && let Some(field) = interleaved
                     .as_str()
                     .or_else(|| interleaved.get("field").and_then(Value::as_str))
                 {
@@ -199,7 +199,6 @@ pub(crate) fn native_provider(value: &Value) -> Value {
                         compatibility.insert("reasoningField".into(), json!(field));
                     }
                 }
-            }
         }
     }
     Value::Object(provider)

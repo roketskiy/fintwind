@@ -14,9 +14,14 @@ pub struct DaemonSettingsStore {
 }
 
 static OPENCODE_CONFIG: RwLock<Option<PathBuf>> = RwLock::new(None);
+static OPENCODE_DAEMON_SETTINGS: RwLock<Option<PathBuf>> = RwLock::new(None);
 
 pub(crate) fn opencode_config_path() -> Option<PathBuf> {
     OPENCODE_CONFIG.read().clone()
+}
+
+pub(crate) fn opencode_daemon_settings_path() -> Option<PathBuf> {
+    OPENCODE_DAEMON_SETTINGS.read().clone()
 }
 
 impl DaemonSettingsStore {
@@ -91,6 +96,7 @@ impl DaemonSettingsStore {
         });
         write_atomic(&path, &config)?;
         *OPENCODE_CONFIG.write() = Some(path);
+        *OPENCODE_DAEMON_SETTINGS.write() = Some(self.path.clone());
         Ok(())
     }
 

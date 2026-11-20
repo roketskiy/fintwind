@@ -580,6 +580,9 @@ impl OpenCodeServer {
             command.env(name, value);
         }
         command.env("OPENCODE_CONFIG_CONTENT", config);
+        if let Some(path) = crate::settings::opencode_daemon_settings_path() {
+            command.env("FINTWIND_PROMPT_PRIVACY_SETTINGS", path);
+        }
         if std::env::var_os("OPENCODE_CONFIG").is_none()
             && let Some(path) = crate::settings::opencode_config_path()
         {

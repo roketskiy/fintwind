@@ -93,6 +93,13 @@ impl DaemonSettings {
             .unwrap_or(true)
     }
 
+    pub fn prompt_privacy_enabled(&self) -> bool {
+        self.extra
+            .get(PROMPT_PRIVACY_ENABLED_KEY)
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+    }
+
     pub fn background_compact_enabled(&self) -> bool {
         self.extra
             .get(BACKGROUND_COMPACT_ENABLED_KEY)
@@ -118,6 +125,7 @@ impl DaemonSettings {
 }
 
 pub const SCHEDULED_TOOLS_ENABLED_KEY: &str = "scheduled_tools_enabled";
+pub const PROMPT_PRIVACY_ENABLED_KEY: &str = "prompt_privacy_enabled";
 pub const GENERAL_SETTINGS_CAPABILITIES_KEY: &str = "general_settings_capabilities";
 pub const OPENCODE_SHELL_KEY: &str = "opencode_shell";
 pub const OPENCODE_SHELL_OPTIONS_KEY: &str = "opencode_shell_options";

@@ -706,6 +706,11 @@ impl ComposerInput {
         self
     }
 
+    pub fn context_menu_priority(mut self, priority: usize) -> Self {
+        self.context_menu = self.context_menu.with_priority(priority);
+        self
+    }
+
     /// Replace the placeholder after construction. Picker fields use this to
     /// name the workspace they are searching without recreating the focused
     /// input entity whenever the selected project changes.

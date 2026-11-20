@@ -650,7 +650,7 @@ impl Fintwind {
             .min(rows.len().saturating_sub(1));
 
         let tabs = browsing.then(|| {
-            div().flex().gap(px(4.0)).px(px(4.0)).flex_none().children(
+            div().flex().gap(px(4.0)).px(px(4.0)).pt(px(6.0)).flex_none().children(
                 Category::for_trigger(trigger.kind)
                     .into_iter()
                     .enumerate()

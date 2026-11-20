@@ -1,4 +1,28 @@
 _version: 2
+composer_completion.recent:
+  en: Recent
+composer_completion.commands:
+  en: Commands
+composer_completion.skills:
+  en: Skills
+composer_completion.files:
+  en: Files
+composer_completion.empty_recent:
+  en: No recent items
+composer_completion.no_matches:
+  en: No results
+composer_completion.files_unavailable:
+  en: Files unavailable
+composer_completion.files_loading:
+  en: Loading files…
+composer_completion.select:
+  en: ↑↓ Select
+composer_completion.switch:
+  en: ←→ Switch category
+composer_completion.insert:
+  en: Enter / Tab Insert
+composer_completion.dismiss:
+  en: Esc Close
 remote.title:
   en: Mobile remote control
 remote.keywords:

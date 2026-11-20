@@ -2723,6 +2723,7 @@ impl Fintwind {
         self.settings_search.update(cx, |input, cx| {
             input.set_placeholder(tr!("settings.search"), cx)
         });
+        self.refresh_ssh_search_localized_text(cx);
         self.skills_search.update(cx, |input, cx| {
             input.set_placeholder(tr!("skills.search"), cx)
         });

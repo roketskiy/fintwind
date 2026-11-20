@@ -1,4 +1,5 @@
 _version: 1
+ssh.search: 接続を検索
 composer_completion.recent: 最近使った項目
 composer_completion.commands: コマンド
 composer_completion.skills: スキル

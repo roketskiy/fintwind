@@ -2256,6 +2256,7 @@ impl Fintwind {
             .h(px(30.0))
             .flex_1()
             .min_w_0()
+            .px(px(8.0))
             .rounded_l(px(7.0))
             .flex()
             .items_center()
@@ -2263,6 +2264,7 @@ impl Fintwind {
             .gap(px(7.0))
             .text_size(ui_px(12.5))
             .font_weight(FontWeight::MEDIUM)
+            .tooltip(Tooltip::text(primary_label.clone()))
             .focus_visible(|button| button.border_1().border_color(theme.accent_focus))
             .when(primary_ready, |button| {
                 button
@@ -2292,8 +2294,8 @@ impl Fintwind {
                     && (untracked_ready || staged),
                 |button| button.tooltip(Tooltip::text(tr!("source_control.commit_empty_message"))),
             )
-            .child(icon(primary_icon, 13.0, primary_icon_color))
-            .child(primary_label.clone());
+            .child(div().flex_none().child(icon(primary_icon, 13.0, primary_icon_color)))
+            .child(div().min_w_0().truncate().child(primary_label));
 
         let handle = self.menu_handle("source-control-commit-more", cx);
         let menu_weak = weak.clone();

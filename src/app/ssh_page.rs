@@ -2527,6 +2527,12 @@ impl Fintwind {
         body.into_any_element()
     }
 
+    pub(super) fn refresh_ssh_search_localized_text(&self, cx: &mut Context<Self>) {
+        if let Some(search) = &self.ssh.search {
+            search.update(cx, |input, cx| input.set_placeholder(tr!("ssh.search"), cx));
+        }
+    }
+
     pub(super) fn render_ssh_page(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         let busy = self.ssh.busy;

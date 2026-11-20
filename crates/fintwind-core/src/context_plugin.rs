@@ -7,15 +7,27 @@ pub(crate) struct ContextPlugin {
     directory: PathBuf,
 }
 
+const PRIVACY_PLUGIN: &str = "prompt-privacy";
+
 impl ContextPlugin {
     pub(crate) fn create(parent: &Path) -> anyhow::Result<Self> {
         let directory = parent.join(format!("context-plugin-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&directory)?;
-        if let Err(error) = std::fs::write(
-            directory.join("index.ts"),
-            include_str!("../../../resources/opencode-context-plugin.ts"),
-        ) {
+        let write = (|| -> std::io::Result<()> {
+            std::fs::write(
+                directory.join("index.ts"),
+                include_str!("../../../resources/opencode-context-plugin.ts"),
+            )?;
+            std::fs::create_dir(directory.join(PRIVACY_PLUGIN))?;
+            std::fs::write(
+                directory.join(PRIVACY_PLUGIN).join("index.ts"),
+                include_str!("../../../resources/opencode-prompt-privacy-plugin.ts"),
+            )
+        })();
+        if let Err(error) = write {
             let _ = std::fs::remove_file(directory.join("index.ts"));
+            let _ = std::fs::remove_file(directory.join(PRIVACY_PLUGIN).join("index.ts"));
+            let _ = std::fs::remove_dir(directory.join(PRIVACY_PLUGIN));
             let _ = std::fs::remove_dir(&directory);
             return Err(error.into());
         }
@@ -33,12 +45,13 @@ impl ContextPlugin {
         let object = config
             .as_object_mut()
             .context("inline OpenCode config must be an object")?;
-        object
+        let plugins = object
             .entry("plugins")
             .or_insert_with(|| json!([]))
             .as_array_mut()
-            .context("inline OpenCode plugins must be an array")?
-            .push(json!(self.directory));
+            .context("inline OpenCode plugins must be an array")?;
+        plugins.push(json!(self.directory));
+        plugins.push(json!(self.directory.join(PRIVACY_PLUGIN)));
         // The check is read-only compilation with no side effects, so sitting
         // behind a per-call approval would only stall diagram turns.
         match object.entry("permission") {
@@ -60,6 +73,8 @@ impl ContextPlugin {
 impl Drop for ContextPlugin {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(self.directory.join("index.ts"));
+        let _ = std::fs::remove_file(self.directory.join(PRIVACY_PLUGIN).join("index.ts"));
+        let _ = std::fs::remove_dir(self.directory.join(PRIVACY_PLUGIN));
         let _ = std::fs::remove_dir(&self.directory);
     }
 }
@@ -106,5 +121,3 @@ pub(crate) fn get_on_port(
         serde_json::from_value(output).context("invalid context composition snapshot")?;
     Ok(Some(composition))
 }
-
-

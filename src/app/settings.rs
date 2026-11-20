@@ -1130,6 +1130,31 @@ impl Fintwind {
                 settings_card(theme)
                     .child(
                         settings_row(
+                            "icons/lock.svg",
+                            tr!("settings.prompt_privacy"),
+                            Some(tr!("settings.prompt_privacy_description")),
+                            theme,
+                        )
+                        .child(toggle_switch(
+                            "prompt-privacy-toggle",
+                            self.state.prompt_privacy_enabled(),
+                            false,
+                            theme,
+                            window,
+                            cx,
+                            move |this: &mut Self, _, cx| {
+                                let previous = this.state.prompt_privacy_enabled();
+                                this.state.set_prompt_privacy_enabled(!previous);
+                                if !this.save() {
+                                    this.state.set_prompt_privacy_enabled(previous);
+                                }
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .child(settings_separator(theme))
+                    .child(
+                        settings_row(
                             "icons/archive.svg",
                             tr!("settings.auto_compact"),
                             Some(tr!("settings.auto_compact_description")),

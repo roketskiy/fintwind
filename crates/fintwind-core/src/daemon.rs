@@ -112,6 +112,7 @@ impl FintwindBackend {
             );
         }
         crate::projectless::set_workspace_root(Some(root));
+        crate::opencode_pool::set_serve_data_root(data_directory);
         migrate_projectless_state(&task_store, &mut task_state)?;
         let composer_drafts = ComposerDraftStore::for_state_path(task_store.path());
         let attachments = AttachmentStore::new(
@@ -1225,6 +1226,9 @@ fn settings_for_client(settings: crate::DaemonSettings) -> crate::DaemonSettings
             }
             if version >= semver::Version::new(2, 1, 4) {
                 capabilities.extend([BROWSER_TOOLS_ENABLED_KEY, SCHEDULED_TOOLS_ENABLED_KEY]);
+            }
+            if version >= semver::Version::new(2, 3, 2) {
+                capabilities.push(PROMPT_PRIVACY_ENABLED_KEY);
             }
             if version >= semver::Version::new(2, 3, 1)
                 && std::env::var_os("OPENCODE_CONFIG").is_none()

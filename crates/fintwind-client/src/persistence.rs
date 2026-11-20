@@ -672,6 +672,20 @@ impl PersistedState {
         );
     }
 
+    pub fn prompt_privacy_enabled(&self) -> bool {
+        self.daemon_settings_extra
+            .get(fintwind_protocol::settings::PROMPT_PRIVACY_ENABLED_KEY)
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true)
+    }
+
+    pub fn set_prompt_privacy_enabled(&mut self, enabled: bool) {
+        self.daemon_settings_extra.insert(
+            fintwind_protocol::settings::PROMPT_PRIVACY_ENABLED_KEY.to_owned(),
+            serde_json::Value::Bool(enabled),
+        );
+    }
+
     pub fn opencode_binary_path(&self) -> Option<&str> {
         self.daemon_settings_extra
             .get(fintwind_protocol::settings::OPENCODE_BINARY_PATH_KEY)
@@ -1053,6 +1067,7 @@ impl StateStore {
         store.legacy_settings_paths = Vec::new();
         store
     }
+
 
     pub fn ssh_workspace(daemon: DaemonSupervisor, directory: &Path) -> Self {
         let mut store = Self::remote_in(daemon, directory);

@@ -248,8 +248,17 @@ pub(crate) fn shutdown_all() {
 /// Debug builds share the checkout's gitignored `temp/` root with
 /// [`crate::persistence::StateStore::default_path`]; release builds use the
 /// per-user local data directory.
+static SERVE_DATA_ROOT: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+pub(crate) fn set_serve_data_root(directory: &Path) {
+    *SERVE_DATA_ROOT.lock().unwrap() = Some(directory.to_path_buf());
+}
+
 fn serve_working_directory() -> anyhow::Result<PathBuf> {
-    let directory = if cfg!(debug_assertions) {
+    let configured = SERVE_DATA_ROOT.lock().unwrap().clone();
+    let directory = if let Some(root) = configured {
+        root.join("opencode-serve")
+    } else if cfg!(debug_assertions) {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .and_then(Path::parent)

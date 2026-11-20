@@ -1956,6 +1956,7 @@ impl Fintwind {
                                 BrowserTools => tr!("settings.browser_tools"),
                                 ScheduledTools => tr!("settings.scheduled_tools"),
                                 Watchdog => tr!("settings.watchdog"),
+                                PromptPrivacy => tr!("settings.prompt_privacy"),
                                 AutoCompact => tr!("settings.auto_compact"),
                                 CompactThreshold => tr!("settings.auto_compact_threshold"),
                                 BackgroundCompact => tr!("settings.background_compact"),
@@ -2218,6 +2219,7 @@ impl Fintwind {
                         ("ssh-watchdog", "icons/alert.svg", tr!("settings.watchdog"), None, GeneralSetting::Watchdog, settings.watchdog_enabled()),
                     ];
                     let context_toggles = [
+                        ("ssh-prompt-privacy", "icons/lock.svg", tr!("settings.prompt_privacy"), Some(tr!("settings.prompt_privacy_description")), GeneralSetting::PromptPrivacy, settings.prompt_privacy_enabled()),
                         ("ssh-auto-compact", "icons/archive.svg", tr!("settings.auto_compact"), Some(tr!("settings.auto_compact_description")), GeneralSetting::AutoCompact, settings.auto_compact_enabled()),
                         ("ssh-background-compact", "icons/archive.svg", tr!("settings.background_compact"), Some(tr!("settings.background_compact_description")), GeneralSetting::BackgroundCompact, settings.background_compact_enabled()),
                     ];

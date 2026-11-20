@@ -108,6 +108,7 @@ pub enum GeneralSetting {
     BrowserTools,
     ScheduledTools,
     Watchdog,
+    PromptPrivacy,
     AutoCompact,
     CompactThreshold,
     BackgroundCompact,
@@ -126,6 +127,7 @@ impl GeneralSetting {
             BrowserTools => BROWSER_TOOLS_ENABLED_KEY,
             ScheduledTools => SCHEDULED_TOOLS_ENABLED_KEY,
             Watchdog => WATCHDOG_ENABLED_KEY,
+            PromptPrivacy => fintwind_protocol::settings::PROMPT_PRIVACY_ENABLED_KEY,
             AutoCompact => AUTO_COMPACT_ENABLED_KEY,
             CompactThreshold => AUTO_COMPACT_THRESHOLD_PERCENT_KEY,
             BackgroundCompact => BACKGROUND_COMPACT_ENABLED_KEY,
@@ -177,7 +179,7 @@ pub fn save_general_setting(
             ensure!(value.split_once('/').is_some_and(|(provider, model)| !provider.is_empty() && !model.is_empty()) && !value.chars().any(char::is_whitespace), "expected provider/model");
             Some(value.into())
         }
-        BrowserTools | ScheduledTools | Watchdog | AutoCompact | BackgroundCompact | Todo => {
+        BrowserTools | ScheduledTools | Watchdog | PromptPrivacy | AutoCompact | BackgroundCompact | Todo => {
             Some(value.parse::<bool>()?.into())
         }
     };

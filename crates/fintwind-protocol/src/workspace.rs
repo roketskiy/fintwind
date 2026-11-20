@@ -117,13 +117,18 @@ pub mod project_operation {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ReviewDiffSource {
     LastTurn {
         session_id: Uuid,
         turn_id: Uuid,
         turn_count: usize,
+    },
+    /// One commit's own changes, against its first parent (the empty tree
+    /// for a root commit). Immutable, so the review renders it read-only.
+    Commit {
+        hash: String,
     },
     Uncommitted,
     Unstaged,

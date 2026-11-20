@@ -26,6 +26,11 @@ pub(super) struct HistoryRows {
 }
 
 impl HistoryRows {
+    /// The loaded entry for one hash, if the current history still shows it.
+    pub(super) fn commit(&self, hash: &str) -> Option<&CommitEntry> {
+        self.commits.iter().find(|commit| commit.hash == hash)
+    }
+
     fn new(commits: Vec<CommitEntry>) -> Self {
         let graph = CommitGraph::new(&commits);
         let positions = commits
@@ -693,6 +698,19 @@ impl Fintwind {
                     this.copy_history_hash(&hash, &short_hash, cx);
                 })
         });
+        let review_button = commit.map(|commit| {
+            let hash = commit.hash.clone();
+            let focus = self.transcript_control_focus("history-review-commit", cx);
+            crate::ui::icon_button("history-review-commit", "icons/file-diff.svg", theme)
+                .flex_none()
+                .track_focus(&focus)
+                .tab_index(0)
+                .focus_visible(|style| style.border_1().border_color(theme.accent))
+                .tooltip(Tooltip::text(tr!("git_history.view_changes")))
+                .on_activation(cx, move |this, _, cx| {
+                    this.open_commit_review(hash.clone(), cx);
+                })
+        });
         div()
             .id("history-selected-details")
             .track_focus(&focus)
@@ -738,7 +756,8 @@ impl Fintwind {
                                     .font_family(crate::theme::code_font_family())
                                     .child(commit.hash.clone()),
                             )
-                            .children(copy_button),
+                            .children(copy_button)
+                            .children(review_button),
                     )
                     .child(match stats {
                         Some(Ok(stats)) => div()

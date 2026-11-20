@@ -2497,6 +2497,8 @@ git_history.hash_copied:
   en: "Copied %{hash}"
 git_history.copy_hash:
   en: Copy SHA
+git_history.view_changes:
+  en: View changes
 git_history.files_changed:
   en: "%{count} files changed"
 git_history.stats_loading:
@@ -2881,6 +2883,8 @@ review.snapshot:
   en: Turn diff — %{turn}
 review.snapshot_from_session:
   en: Turn diff from “%{title}” — %{turn}
+review.commit_snapshot_subject:
+  en: "Commit %{hash} — %{subject}"
 review.view_workspace:
   en: View current workspace
 review.back_to_session:
@@ -2895,6 +2899,8 @@ diff.source_last_turn:
   en: Last Turn
 diff.source_turn:
   en: Turn %{turn}
+diff.source_commit:
+  en: "Commit %{hash}"
 diff.source_uncommitted:
   en: Uncommitted
 diff.source_unstaged:

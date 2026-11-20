@@ -4,7 +4,8 @@
 //! cached here. Its only reliable invalidation signal is a file event, and the
 //! daemon does not watch the worktree yet, so a cached answer could show a tree
 //! the user already changed. What is cached is immutable by construction: a
-//! commit's numstat, and one completed turn's diff between two fixed refs.
+//! commit's numstat, one completed turn's diff between two fixed refs, and one
+//! commit's diff against its parent.
 //!
 //! Keys carry the canonical worktree path, which is the identity that separates
 //! two worktrees sharing one Git common directory. Entries are evicted oldest
@@ -26,7 +27,7 @@ const MAX_AGE: Duration = Duration::from_secs(600);
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum CacheKey {
     CommitStats { worktree: PathBuf, hash: String },
-    TurnDiff { worktree: PathBuf, source: String },
+    SnapshotDiff { worktree: PathBuf, source: String },
 }
 
 pub(crate) enum Cached {
@@ -135,7 +136,7 @@ pub(crate) fn insert(key: CacheKey, value: Cached) {
 }
 
 /// Drops every entry belonging to one worktree. Called when the refs a cached
-/// turn diff names can move or disappear.
+/// snapshot diff names can move or disappear.
 pub(crate) fn invalidate_worktree(cwd: &Path) {
     let identity = worktree_identity(cwd);
     let Ok(mut cache) = cache().lock() else {
@@ -144,7 +145,7 @@ pub(crate) fn invalidate_worktree(cwd: &Path) {
     let mut freed = 0;
     cache.entries.retain(|key, entry| {
         let belongs = match key {
-            CacheKey::CommitStats { worktree, .. } | CacheKey::TurnDiff { worktree, .. } => {
+            CacheKey::CommitStats { worktree, .. } | CacheKey::SnapshotDiff { worktree, .. } => {
                 worktree == &identity
             }
         };

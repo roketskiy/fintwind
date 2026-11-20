@@ -581,11 +581,6 @@ impl Fintwind {
                     _ => self.render_providers_page(cx),
                 }));
         }
-        // Once content scrolls under the unified top bar, a hairline marks
-        // the boundary so the clip edge reads as a header rather than a
-        // glitch.
-        let content_scrolled = self.settings_scroll.offset().y < px(-1.0);
-
         let inner = div()
             .w_full()
             .when(page != SettingsPage::Ssh, |inner| inner.max_w(px(SETTINGS_CONTENT_MAX_WIDTH)))
@@ -624,23 +619,11 @@ impl Fintwind {
             .flex_1()
             .h_full()
             .min_w_0()
-            .relative()
             .flex()
             .flex_col()
             .border_l_1()
             .border_color(theme.sidebar_border)
             .bg(theme.surface)
-            .when(content_scrolled, |element| {
-                element.child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .right_0()
-                        .h(px(1.0))
-                        .bg(theme.border),
-                )
-            })
             .child(
                 div()
                     .flex_1()

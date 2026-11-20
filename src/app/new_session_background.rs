@@ -197,6 +197,9 @@ struct Light {
     color: [f32; 3],
 }
 
+// The smoothstep thresholds here are tuned visual parameters, not
+// approximations of mathematical constants: 0.318 sits near 1/π by chance.
+#[allow(clippy::approx_constant)]
 fn rise_light(x: f32, y: f32, size: FieldSize, seconds: f32, palette: &Palette) -> Light {
     let height = size.height as f32 / FIELD_HEIGHT;
     let mut px = (x - size.width as f32 * 0.5) / height;

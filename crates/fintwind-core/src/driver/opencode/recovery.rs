@@ -879,6 +879,7 @@ fn fetch_turn(
         })
         .map(|(_, text)| text.clone())
         .collect();
+    super::super::native::restore_history_output(port, session, &mut rows);
     let transcript = super::super::native::translate_recovered_rows(&rows);
     if transcript
         .messages

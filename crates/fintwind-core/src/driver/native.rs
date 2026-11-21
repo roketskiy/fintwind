@@ -379,10 +379,39 @@ fn fetch_transcript_from_port(
     }
     let mut rows = pages.into_iter().flatten().collect::<Vec<_>>();
     rows.reverse();
+    restore_history_output(port, session_id, &mut rows);
     Ok(match retained_inputs {
         Some(inputs) => translate_native_rows(&rows, blobs, false, Some(inputs)),
         None => translate_rows_with_blobs(&rows, blobs),
     })
+}
+
+pub(super) fn restore_history_output(port: u16, session_id: &str, rows: &mut [Value]) {
+    let mut fields = Vec::new();
+    for row in rows {
+        if row.get("type").and_then(Value::as_str) != Some("assistant") {
+            continue;
+        }
+        for part in row.get_mut("content").and_then(Value::as_array_mut).into_iter().flatten() {
+            match part.get("type").and_then(Value::as_str) {
+                Some("text" | "reasoning") => fields.extend(part.get_mut("text")),
+                Some("tool") => {
+                    let state = if part.get("state").is_some() {
+                        part.get_mut("state").expect("checked tool state")
+                    } else {
+                        part
+                    };
+                    if let Some(object) = state.as_object_mut() {
+                        fields.extend(object.iter_mut().filter_map(|(key, value)| {
+                            matches!(key.as_str(), "output" | "content" | "error").then_some(value)
+                        }));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    crate::context_plugin::restore_output(port, None, session_id, fields);
 }
 
 /// Read only the durable assistant steps of a settled turn. Never substitute

@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, unlink, rmdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import plugin from "../resources/opencode-prompt-privacy-plugin.ts";
 
 // Isolated fixture: no OpenCode process, real provider, or user settings.
@@ -8,7 +11,14 @@ function register(name: string, callback: (event: never) => unknown) {
   hooks.set(name, callback as (event: unknown) => unknown);
   return Promise.resolve({ async dispose() { hooks.delete(name); } });
 }
-const context = { session: { hook: register }, shell: { hook: register } };
+const context = {
+  session: { hook: register }, shell: { hook: register }, tool: { hook: register },
+  rpc: {
+    register(_definition: unknown, handlers: { resolve(input: unknown): Promise<unknown> }) {
+      return register("output.resolve", handlers.resolve as (event: never) => unknown);
+    },
+  },
+};
 let dispose = await plugin.setup(context);
 const provider = Bun.serve({
   hostname: "127.0.0.1",
@@ -73,6 +83,45 @@ async function checkReferenceReuse() {
   await dispose();
   dispose = await plugin.setup(context);
 
+  const execute = hooks.get("execute.before")!;
+  const originalInput = { path: ".env", content: `PASSWORD=${ref}`, options: [{ authorization: ref }] };
+  const write = { sessionID, tool: "write", input: originalInput };
+  await execute(write);
+  assert.ok(write.input.content === `PASSWORD=${original}` && write.input.options[0].authorization === original,
+    "file tool did not receive the original values");
+  assert.equal(originalInput.content, `PASSWORD=${ref}`);
+  const directory = await mkdtemp(join(tmpdir(), "fintwind-privacy-"));
+  const outputPath = join(directory, write.input.path);
+  try {
+    await writeFile(outputPath, write.input.content);
+    assert.ok((await readFile(outputPath, "utf8")) === `PASSWORD=${original}`, "file bytes did not match");
+  } finally {
+    try { await unlink(outputPath); } finally { await rmdir(directory); }
+  }
+
+  const external = { sessionID, tool: "fixture_external", input: { authorization: ref } };
+  await execute(external);
+  const outbound = await fetch(provider.url, {
+    method: "POST", body: JSON.stringify(external.input), signal: AbortSignal.timeout(3000),
+  });
+  assert.ok((await outbound.json()).authorization === original, "external receiver did not receive the original value");
+
+  for (const tool of ["shell", "execute", "subagent"]) {
+    const event = { sessionID, tool, input: { content: ref } };
+    await execute(event);
+    assert.equal(event.input.content, ref);
+  }
+  const missing = "FINTWIND_SECRET_" + "0".repeat(24);
+  const resolveDisplay = hooks.get("output.resolve")!;
+  const display = await resolveDisplay({ sessionID, references: [ref, missing] });
+  assert.ok((display as Record<string, string>)[ref] === original, "display did not receive the original value");
+  assert.ok(!Object.hasOwn(display as object, missing));
+  assert.deepEqual(await resolveDisplay({ sessionID: "other-conversation", references: [ref] }), {});
+  await assert.rejects(async () => execute({ sessionID, tool: "write", input: { content: missing } }),
+    /Private-value reference is unavailable/);
+  await assert.rejects(async () => execute({ sessionID: "other-conversation", tool: "write", input: { content: ref } }),
+    /Private-value reference is unavailable/);
+
   for (const transport of ["http", "ws"] as const) {
     // The earlier user turn is no longer in context; only the old reference survives.
     const next = await send(transport, { input: [
@@ -93,6 +142,7 @@ async function checkReferenceReuse() {
   await hooks.get("create.before")!(unrelated);
   assert.deepEqual(unrelated.env, {});
   console.log("reuse: stable reference across turns and plugin reload; three children received exact bytes");
+  console.log("tool delivery: file and external inputs restored; executable source and model requests retained references");
 }
 
 try {

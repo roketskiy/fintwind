@@ -502,6 +502,10 @@ const COMPOSER_MAX_HEIGHT: Pixels = px(300.);
 pub struct ComposerInput {
     reference_catalog: Rc<crate::mentions::Catalog>,
     references: Vec<crate::mentions::Span>,
+    privacy_enabled: bool,
+    privacy_ranges: Vec<Range<usize>>,
+    privacy_revision: u64,
+    privacy_task: Option<Task<()>>,
     focus_handle: FocusHandle,
     mode: FieldMode,
     read_only: bool,
@@ -608,6 +612,10 @@ impl ComposerInput {
         Self {
             reference_catalog: Rc::new(crate::mentions::Catalog::default()),
             references: Vec::new(),
+            privacy_enabled: false,
+            privacy_ranges: Vec::new(),
+            privacy_revision: 0,
+            privacy_task: None,
             focus_handle,
             mode: FieldMode::Composer,
             read_only: false,
@@ -809,8 +817,11 @@ impl ComposerInput {
 
     /// Re-tokenize after a content change. Cheap for a composer (no language),
     /// one linear pass for a code editor.
-    fn refresh_highlight(&mut self) {
+    fn refresh_highlight(&mut self, cx: &mut Context<Self>) {
         self.references = self.reference_catalog.find(&self.content);
+        if self.privacy_enabled {
+            self.refresh_privacy(cx);
+        }
         let Some(language) = self.language else {
             return;
         };
@@ -833,6 +844,42 @@ impl ComposerInput {
 
     pub fn content(&self) -> &str {
         &self.content
+    }
+
+    pub(crate) fn prompt_privacy_enabled(&self) -> bool {
+        self.privacy_enabled
+    }
+
+    pub(crate) fn set_prompt_privacy(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.privacy_enabled != enabled {
+            self.privacy_enabled = enabled;
+            self.refresh_privacy(cx);
+            cx.notify();
+        }
+    }
+
+    fn refresh_privacy(&mut self, cx: &mut Context<Self>) {
+        self.privacy_task.take();
+        self.privacy_ranges.clear();
+        self.privacy_revision += 1;
+        if !self.privacy_enabled || self.content.is_empty() {
+            return;
+        }
+        let text = self.content.clone();
+        let revision = self.privacy_revision;
+        self.privacy_task = Some(cx.spawn(async move |this, cx| {
+            let executor = cx.background_executor().clone();
+            executor.timer(Duration::from_millis(60)).await;
+            let ranges = executor
+                .spawn(async move { crate::prompt_privacy::ranges(&text) })
+                .await;
+            let _ = this.update(cx, |input, cx| {
+                if input.privacy_revision == revision && !ranges.is_empty() {
+                    input.privacy_ranges = ranges;
+                    cx.notify();
+                }
+            });
+        }));
     }
 
     pub(crate) fn set_reference_catalog(
@@ -879,7 +926,7 @@ impl ComposerInput {
         self.marked_range = None;
         self.vertical_navigation = None;
         self.history.seal();
-        self.refresh_highlight();
+        self.refresh_highlight(cx);
         self.pause_blink_cursor(cx);
         cx.emit(ComposerEvent::Edited);
         cx.notify();
@@ -969,6 +1016,7 @@ impl ComposerInput {
         self.vertical_navigation = None;
         self.highlight.clear();
         self.references.clear();
+        self.refresh_privacy(cx);
         // A programmatic clear is a new baseline, not an edit to step back
         // over — a submitted prompt should not resurface via the undo shortcut.
         if changed {
@@ -996,7 +1044,7 @@ impl ComposerInput {
         if changed {
             self.history = EditHistory::default();
         }
-        self.refresh_highlight();
+        self.refresh_highlight(cx);
         self.pause_blink_cursor(cx);
         if changed {
             cx.emit(ComposerEvent::Edited);
@@ -1428,7 +1476,7 @@ impl ComposerInput {
         self.selection_reversed = selection_reversed;
         self.marked_range = None;
         self.vertical_navigation = None;
-        self.refresh_highlight();
+        self.refresh_highlight(cx);
         self.pause_blink_cursor(cx);
         cx.emit(ComposerEvent::Edited);
         cx.notify();
@@ -1713,7 +1761,7 @@ impl EntityInputHandler for ComposerInput {
         if composing {
             self.history.finalize_composition();
         }
-        self.refresh_highlight();
+        self.refresh_highlight(cx);
         self.pause_blink_cursor(cx);
         if previous != self.content {
             cx.emit(ComposerEvent::Edited);
@@ -1766,6 +1814,9 @@ impl EntityInputHandler for ComposerInput {
                 offset..offset
             });
         self.vertical_navigation = None;
+        if self.privacy_enabled {
+            self.refresh_privacy(cx);
+        }
         self.pause_blink_cursor(cx);
         if previous != self.content {
             cx.emit(ComposerEvent::Edited);
@@ -2233,6 +2284,11 @@ impl Element for InputElement {
             &input.references
         };
         let runs = crate::mentions::style_runs(runs, references, theme.accent);
+        let runs = if input.obscured || content_is_empty || input.marked_range.is_some() {
+            runs
+        } else {
+            crate::prompt_privacy::style_runs(runs, &input.privacy_ranges, theme.warning_text)
+        };
         let display_text = crate::mentions::display_text(&display_text, references);
         let mut text = StyledText::new(display_text).with_runs(runs);
         let (layout_id, text_layout_state) = text.request_layout(id, inspector_id, window, cx);

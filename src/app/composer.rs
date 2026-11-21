@@ -3017,6 +3017,12 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) -> Div {
         let theme = Theme::current(cx);
+        let privacy_enabled = self.state.prompt_privacy_enabled();
+        if self.composer.read(cx).prompt_privacy_enabled() != privacy_enabled {
+            self.composer.update(cx, |input, cx| {
+                input.set_prompt_privacy(privacy_enabled, cx)
+            });
+        }
         let session = self.selected_session();
         let preparing = session.is_some_and(|session| {
             self.submission_preparations.contains(&session.id)

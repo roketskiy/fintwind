@@ -2533,6 +2533,7 @@ name = "fintwind"
 version = "0.3.2"
 dependencies = [
  "ab_glyph",
+ "aho-corasick",
  "alacritty_terminal",
  "anyhow",
  "base64",
@@ -2541,6 +2542,7 @@ dependencies = [
  "dirs 6.0.0",
  "ely-gpui-component",
  "embed-resource",
+ "fancy-regex",
  "fintwind-client",
  "fintwind-diagram",
  "fintwind-protocol",

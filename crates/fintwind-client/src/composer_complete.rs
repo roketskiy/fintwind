@@ -28,11 +28,18 @@ pub fn detect_trigger(text: &str, cursor: usize) -> Option<Trigger> {
     if !text.is_char_boundary(cursor) {
         return None;
     }
-    // Mentions can start directly after prose (including non-ASCII text),
-    // inside a slash command's arguments, or after another mention.
+    // Mentions can start directly after CJK prose, but not in the middle
+    // of an ASCII word such as an email address being typed or pasted.
     if let Some(start) = text[..cursor].rfind('@') {
         let query = &text[start + 1..cursor];
-        if !query.chars().any(char::is_whitespace) {
+        let in_ascii_word = text.as_bytes()[..start].last().is_some_and(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'%' | b'+' | b'-')
+        });
+        if !in_ascii_word
+            && !query.chars().any(|ch| {
+                ch.is_whitespace() || matches!(ch, '，' | '。' | '；' | '、' | '！' | '？' | '：')
+            })
+        {
             return Some(Trigger {
                 kind: TriggerKind::File,
                 query: query.to_owned(),

@@ -56,6 +56,13 @@ jobs:
           build-hit: ${{ steps.rust.outputs.build-hit }}
           build-path: ${{ steps.rust.outputs.build-path }}
 
+      # Keep Clippy check artifacts out of the test compiler cache.
+      - name: Install Clippy
+        run: rustup component add clippy
+
+      - name: Run Clippy
+        run: cargo clippy --locked --workspace --all-targets
+
       - name: Upload Cargo cache diagnostics
         if: always()
         uses: actions/upload-artifact@v7

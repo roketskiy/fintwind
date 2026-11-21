@@ -48,6 +48,7 @@ mod mentions;
 mod perf_monitor;
 mod perf_sampler;
 mod platform;
+mod prompt_privacy;
 mod query;
 mod review_diff;
 mod terminal;

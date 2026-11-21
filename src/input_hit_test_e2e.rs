@@ -16,6 +16,83 @@ use crate::md::render::{
 };
 use crate::theme::Theme;
 
+struct PrivacyComposer {
+    input: Entity<ComposerInput>,
+    submitted: Vec<String>,
+    _submit: gpui::Subscription,
+}
+
+impl Render for PrivacyComposer {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().w(px(400.0)).child(self.input.clone())
+    }
+}
+
+#[gpui::test]
+fn privacy_composer_send_repaints_empty_input_e2e(cx: &mut TestAppContext) {
+    // Send with a completed scan, then with a pending scan. Neither result
+    // may end up decorating the shorter, multibyte placeholder after send.
+    cx.set_assets(ely_gpui_component::Assets::before(crate::assets::Assets));
+    cx.update(|cx| {
+        crate::assets::register_fonts(cx).expect("register bundled fonts");
+        gpui_kit::init(cx);
+        ely_gpui_component::init(cx).expect("initialize Ely");
+        crate::ely::init(cx);
+        crate::input::init(cx);
+        crate::ui::menu::init(cx);
+        crate::theme::init(cx);
+    });
+    let clock = cx.executor();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        let input = cx.new(|cx| ComposerInput::new(window, cx).placeholder("发送消息"));
+        input.update(cx, |input, cx| input.set_prompt_privacy(true, cx));
+        window.focus(&input.read(cx).focus(), cx);
+        let submit = cx.subscribe(&input, |this: &mut PrivacyComposer, _, event, _| {
+            if let crate::input::ComposerEvent::Submit(text) = event {
+                this.submitted.push(text.clone());
+            }
+        });
+        PrivacyComposer {
+            input,
+            submitted: Vec::new(),
+            _submit: submit,
+        }
+    });
+    let prompt = "这是我的邮箱 privacy-example@example.invalid，这是测试";
+    // Match the reported Chinese prose without a space after the comma, and
+    // check the caret immediately after @ as well as at the end of the draft.
+    let at = prompt.find('@').unwrap();
+    for cursor in [at + 1, prompt.len()] {
+        assert!(fintwind_client::composer_complete::detect_trigger(prompt, cursor).is_none());
+    }
+    let mention = "请看@src/main.rs";
+    let trigger =
+        fintwind_client::composer_complete::detect_trigger(mention, mention.len()).unwrap();
+    assert_eq!(trigger.query, "src/main.rs");
+    for scan_before_send in [true, false] {
+        cx.update(|_, cx| {
+            let input = view.read(cx).input.clone();
+            input.update(cx, |input, cx| input.set_content(prompt, cx));
+        });
+        if scan_before_send {
+            cx.run_until_parked();
+            clock.advance_clock(std::time::Duration::from_millis(80));
+            cx.run_until_parked();
+        }
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.simulate_keystrokes("enter");
+        clock.advance_clock(std::time::Duration::from_millis(80));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.read_entity(&view, |view, cx| {
+            assert_eq!(view.input.read(cx).content(), "")
+        });
+    }
+    cx.read_entity(&view, |view, _| {
+        assert_eq!(view.submitted, [prompt, prompt])
+    });
+}
+
 struct Harness {
     root_focus: FocusHandle,
     transcript_focus: FocusHandle,

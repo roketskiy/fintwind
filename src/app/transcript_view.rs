@@ -1718,6 +1718,14 @@ impl Fintwind {
                             })
                             .map(|edit| edit.input.clone())
                     });
+                    let privacy_enabled = self.state.prompt_privacy_enabled();
+                    if let Some(input) = &message_edit_input
+                        && input.read(cx).prompt_privacy_enabled() != privacy_enabled
+                    {
+                        input.update(cx, |input, cx| {
+                            input.set_prompt_privacy(privacy_enabled, cx)
+                        });
+                    }
                     let attachment_menus = (0..message.attachments.len())
                         .map(|index| {
                             self.menu_handle(
@@ -1781,6 +1789,13 @@ impl Fintwind {
                         view.set_text(message.visible_content(), message.streaming);
                         &*view
                     });
+                    let ctx = ctx.with_privacy(view.and_then(|view| {
+                        view.privacy(
+                            privacy_enabled && message.role == MessageRole::User,
+                            window.current_view(),
+                            cx,
+                        )
+                    }));
                     let is_compaction = message.role == MessageRole::Compaction;
                     let compaction_expanded =
                         is_compaction && self.expanded_compactions.contains(&message.id);

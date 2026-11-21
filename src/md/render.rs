@@ -1,15 +1,15 @@
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, BorderStyle, Bounds, ClipboardItem, CursorStyle, DispatchPhase, Font, FontStyle,
-    FontWeight, Hitbox, HitboxBehavior, Hsla, InteractiveText, IntoElement, KeyDownEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point,
-    SharedString, StrikethroughStyle, StyledText, TextLayout, TextRun, UnderlineStyle, Window,
-    canvas, div, font, img, point, prelude::*, px, quad, relative, size,
+    AnyElement, BorderStyle, Bounds, ClipboardItem, Context, CursorStyle, DispatchPhase, Font,
+    FontStyle, FontWeight, Hitbox, HitboxBehavior, Hsla, InteractiveText, IntoElement,
+    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels,
+    Point, SharedString, StrikethroughStyle, StyledText, Task, TextLayout, TextRun, UnderlineStyle,
+    Window, canvas, div, font, img, point, prelude::*, px, quad, relative, size,
 };
 
 use super::highlight::{self, Lang, TokenClass};
@@ -19,6 +19,7 @@ use super::selection::{
     RegisteredText, SelectionRegistry, SelectionState, TextKey, line_range, word_range,
 };
 use super::veil::{RowVeil, apply_veil};
+use crate::prompt_privacy::{self, History};
 use crate::theme::Theme;
 use crate::ui::menu::ContextMenuHandle;
 #[cfg(test)]
@@ -222,6 +223,7 @@ pub struct Palette {
     pub code_wash: Hsla,
     pub selection: Hsla,
     pub accent: Hsla,
+    pub privacy: Hsla,
     /// Link text (and its underline), resolved for the active appearance.
     pub link: Hsla,
     pub added: Hsla,
@@ -250,6 +252,7 @@ impl Palette {
             code_wash: theme.code_wash,
             selection: theme.selection,
             accent: theme.accent,
+            privacy: theme.warning_text,
             link: theme.link,
             added: theme.success_text,
             removed: theme.danger_text,
@@ -432,6 +435,8 @@ pub fn flatten_plain(
 /// elements and reuses every settled one.
 pub struct MarkdownView {
     reference_catalog: RefCell<Option<Rc<crate::mentions::Catalog>>>,
+    privacy_scan: RefCell<Option<PrivacyScan>>,
+    privacy_painted: RefCell<Option<Rc<OnceCell<History>>>>,
     parser: IncrementalParser,
     /// Mended replacement for the final block while streaming.
     tail: Vec<TopBlock>,
@@ -458,6 +463,11 @@ pub struct MarkdownView {
     streaming: Cell<bool>,
 }
 
+struct PrivacyScan {
+    result: Rc<OnceCell<History>>,
+    _task: Task<()>,
+}
+
 impl Default for MarkdownView {
     fn default() -> Self {
         Self::new()
@@ -468,6 +478,8 @@ impl MarkdownView {
     pub fn new() -> Self {
         Self {
             reference_catalog: RefCell::new(None),
+            privacy_scan: RefCell::new(None),
+            privacy_painted: RefCell::new(None),
             parser: IncrementalParser::new(),
             tail: Vec::new(),
             flats: RefCell::new(HashMap::new()),
@@ -525,6 +537,7 @@ impl MarkdownView {
         }
         let changed = self.parser.text() != text;
         if changed {
+            self.privacy_scan.get_mut().take();
             if !text.starts_with(self.parser.text()) {
                 // A replacement can reuse ordinals for entirely different code.
                 self.flats.borrow_mut().clear();
@@ -595,6 +608,55 @@ impl MarkdownView {
         }
     }
 
+    pub(crate) fn privacy<T: 'static>(
+        &self,
+        enabled: bool,
+        pane: gpui::EntityId,
+        cx: &mut Context<T>,
+    ) -> Option<Rc<OnceCell<History>>> {
+        if !enabled || self.parser.text().is_empty() {
+            return None;
+        }
+        let mut scan = self.privacy_scan.borrow_mut();
+        let scan = scan.get_or_insert_with(|| {
+            let source = self.parser.text().to_owned();
+            let result = Rc::new(OnceCell::new());
+            let pending = result.clone();
+            let work = cx
+                .background_executor()
+                .spawn(async move { History::scan(&source) });
+            let task = cx.spawn(async move |_, cx| {
+                let history = work.await;
+                let changed = !history.is_empty();
+                let _ = pending.set(history);
+                if changed {
+                    let _ = cx.update(|cx| cx.notify(pane));
+                }
+            });
+            PrivacyScan {
+                result,
+                _task: task,
+            }
+        });
+        scan.result
+            .get()
+            .filter(|history| !history.is_empty())
+            .map(|_| scan.result.clone())
+    }
+
+    fn sync_privacy(&self, result: Option<&Rc<OnceCell<History>>>) {
+        let mut previous = self.privacy_painted.borrow_mut();
+        let unchanged = match (previous.as_ref(), result) {
+            (Some(previous), Some(result)) => Rc::ptr_eq(previous, result),
+            (None, None) => true,
+            _ => false,
+        };
+        if !unchanged {
+            *previous = result.cloned();
+            self.flats.borrow_mut().clear();
+        }
+    }
+
     /// Flattened inline content for the element at `ordinal`, built on miss.
     fn flat(&self, ordinal: usize, build: impl FnOnce() -> FlatText) -> Rc<FlatText> {
         self.flats
@@ -625,6 +687,7 @@ impl MarkdownView {
 #[derive(Clone)]
 pub struct Ctx<'a> {
     reference_catalog: Option<Rc<crate::mentions::Catalog>>,
+    privacy: Option<Rc<OnceCell<History>>>,
     row: Rc<str>,
     palette: &'a Palette,
     metrics: Metrics,
@@ -651,6 +714,7 @@ impl<'a> Ctx<'a> {
     ) -> Self {
         Self {
             reference_catalog: None,
+            privacy: None,
             row: row.into(),
             palette,
             metrics,
@@ -673,6 +737,11 @@ impl<'a> Ctx<'a> {
 
     pub(crate) fn with_references(mut self, catalog: Rc<crate::mentions::Catalog>) -> Self {
         self.reference_catalog = Some(catalog);
+        self
+    }
+
+    pub(crate) fn with_privacy(mut self, result: Option<Rc<OnceCell<History>>>) -> Self {
+        self.privacy = result;
         self
     }
 
@@ -701,6 +770,7 @@ impl<'a> Ctx<'a> {
     fn with_cache(&self, view: &'a MarkdownView) -> Self {
         Self {
             reference_catalog: self.reference_catalog.clone(),
+            privacy: self.privacy.clone(),
             row: self.row.clone(),
             palette: self.palette,
             metrics: self.metrics,
@@ -748,27 +818,33 @@ impl<'a> Ctx<'a> {
                 }
                 flat.links.sort_by_key(|(range, _)| range.start);
             }
-            if flat.allow_references && flat.math.is_none()
-                && let Some(catalog) = &self.reference_catalog {
-                    flat.references = catalog
-                        .find(&flat.text)
-                        .into_iter()
-                        .filter(|span| {
-                            !flat
-                                .code_ranges
-                                .iter()
-                                .chain(flat.links.iter().map(|(range, _)| range))
-                                .any(|range| {
-                                    range.start < span.range.end && range.end > span.range.start
-                                })
-                        })
-                        .collect();
-                    flat.runs = crate::mentions::style_runs(
-                        flat.runs,
-                        &flat.references,
-                        self.palette.accent,
-                    );
-                }
+            if flat.allow_references
+                && flat.math.is_none()
+                && let Some(catalog) = &self.reference_catalog
+            {
+                flat.references = catalog
+                    .find(&flat.text)
+                    .into_iter()
+                    .filter(|span| {
+                        !flat
+                            .code_ranges
+                            .iter()
+                            .chain(flat.links.iter().map(|(range, _)| range))
+                            .any(|range| {
+                                range.start < span.range.end && range.end > span.range.start
+                            })
+                    })
+                    .collect();
+                flat.runs =
+                    crate::mentions::style_runs(flat.runs, &flat.references, self.palette.accent);
+            }
+            if let Some(history) = self.privacy.as_ref().and_then(|result| result.get()) {
+                flat.runs = prompt_privacy::style_runs(
+                    flat.runs,
+                    history.ranges(&flat.text),
+                    self.palette.privacy,
+                );
+            }
             flat
         };
         match self.cache {
@@ -1429,6 +1505,7 @@ pub fn markdown<'a>(view: &'a MarkdownView, ctx: &Ctx<'a>) -> Option<AnyElement>
 
     view.sync_style(ctx.palette, &ctx.metrics);
     view.sync_references(ctx.reference_catalog.as_ref());
+    view.sync_privacy(ctx.privacy.as_ref());
     let ctx = ctx.with_cache(view);
     if ctx.animate_streaming && view.streaming.get() {
         view.veil.borrow_mut().begin_frame();

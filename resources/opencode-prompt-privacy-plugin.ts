@@ -8,14 +8,14 @@ type FrameEvent = { sessionID: string; frame: string };
 type ContextEvent = { system: { type: string; text: string }[] };
 type ShellEvent = { command: string; env: Record<string, string | undefined> };
 type Context = {
+  rpc: { register(definition: unknown, handlers: { resolve(input: unknown): Promise<unknown> }): Promise<Registration> };
+  tool: { hook(name: "execute.before", callback: (event: ToolEvent) => Promise<void>): Promise<Registration> };
   session: { hook<T>(name: string, callback: (event: T) => void | Promise<void>): Promise<Registration> };
   shell: { hook(name: "create.before", callback: (event: ShellEvent) => Promise<void>): Promise<Registration> };
 };
 
 const referenceSource = "FINTWIND_SECRET_[A-F0-9]{24}";
 const reference = new RegExp(`\\b${referenceSource}\\b`, "g");
-const instruction = "FINTWIND_SECRET_ followed by 24 hexadecimal characters is a local private-value reference. To use it in a shell command, read the environment variable whose name is the complete reference. A program that reads its own environment takes the bare name as its key. For shell expansion use $env:NAME in PowerShell or \"$NAME\" in Bash. Never guess the original value.";
-const reuseInstruction = "Reuse the exact reference from an earlier turn directly in each shell command that needs it. Do not run separate lookup or test commands, and do not print the value. If a reference is unavailable, report that instead of using an empty value or searching for the original.";
 const compactionInstruction = "Preserve any FINTWIND_SECRET_ references needed for unfinished work exactly as written, along with what they are for. Do not resolve them or copy the original private values into the summary.";
 const tokens = new RegExp(rules.tokens, "g");
 // Selected provider formats and context-plus-entropy are adapted from
@@ -214,6 +214,36 @@ function processPrivacy(): ProcessPrivacy {
   return processGlobals[privacyKey]!;
 }
 
+type ToolEvent = { sessionID: string; tool: string; input: unknown };
+
+function restoreToolInput(input: unknown, resolve: (ref: string) => string): unknown {
+  if (typeof input === "string") return input.replace(reference, resolve);
+  if (Array.isArray(input)) return input.map(item => restoreToolInput(item, resolve));
+  if (input && typeof input === "object") {
+    return Object.fromEntries(Object.entries(input).map(([key, item]) => [key, restoreToolInput(item, resolve)]));
+  }
+  return input;
+}
+
+const outputRpc = {
+  id: "fintwind.privacy",
+  methods: {
+    resolve: {
+      input: {
+        type: "object", required: ["sessionID", "references"], additionalProperties: false,
+        properties: {
+          sessionID: { type: "string" },
+          references: { type: "array", items: { type: "string", pattern: `^${referenceSource}$` } },
+        },
+      },
+      output: { type: "object", additionalProperties: { type: "string" } },
+    },
+  },
+  events: {},
+};
+
+const outputInstruction = "Respond and use tools normally. Use private-value references as written wherever the task needs them; Fintwind restores them for display and tool delivery automatically. For Shell, read the environment variable named by the full reference: $env:NAME in PowerShell or \"$NAME\" in Bash.";
+
 export default {
   id: "fintwind.prompt-privacy",
   async setup(ctx: Context) {
@@ -273,9 +303,24 @@ export default {
       return next === input ? body : JSON.stringify(next);
     }
 
+    function resolve(sessionID: string, ref: string): string | undefined {
+      const original = originalByRef.get(ref);
+      return original !== undefined && sessions.get(sessionID)?.refs.get(original) === ref ? original : undefined;
+    }
+
     try {
+      registrations.push(await ctx.rpc.register(outputRpc, {
+        async resolve(input) {
+          if (!await enabled()) return {};
+          const { sessionID, references } = input as { sessionID: string; references: string[] };
+          return Object.fromEntries(references.flatMap(ref => {
+            const original = resolve(sessionID, ref);
+            return original === undefined ? [] : [[ref, original]];
+          }));
+        },
+      }));
       registrations.push(await ctx.session.hook<ContextEvent>("context", async event => {
-        if (await enabled()) event.system.push({ type: "text", text: `${instruction} ${reuseInstruction}` });
+        if (await enabled()) event.system.push({ type: "text", text: outputInstruction });
       }));
       registrations.push(await ctx.session.hook<ContextEvent>("compaction", async event => {
         if (await enabled()) event.system.push({ type: "text", text: compactionInstruction });
@@ -291,6 +336,21 @@ export default {
       }));
       registrations.push(await ctx.session.hook<FrameEvent>("experimental.ws.send", async event => {
         if (await enabled()) event.frame = redact(event.frame, event.sessionID);
+      }));
+      registrations.push(await ctx.tool.hook("execute.before", async event => {
+        // Code Mode invokes this hook again for the individual tools. Do not
+        // interpolate private values into code or a subagent's model prompt.
+        if (event.tool === "shell" || event.tool === "execute" || event.tool === "subagent" || !await enabled()) return;
+        let changed = false;
+        const input = restoreToolInput(event.input, ref => {
+          const original = resolve(event.sessionID, ref);
+          if (original === undefined) {
+            throw new Error(`Private-value reference is unavailable: ${ref}`);
+          }
+          changed = true;
+          return original;
+        });
+        if (changed) event.input = input;
       }));
       registrations.push(await ctx.shell.hook("create.before", async event => {
         if (!event.command.includes("FINTWIND_SECRET_") || !await enabled()) return;

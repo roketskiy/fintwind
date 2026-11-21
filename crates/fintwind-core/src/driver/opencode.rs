@@ -3312,7 +3312,15 @@ fn fetch_latest_opencode_compaction(port: u16, session_id: &str) -> Option<Compa
         Duration::from_secs(10),
     )
     .ok()?;
-    latest_opencode_compaction(&messages)
+    let mut state = latest_opencode_compaction(&messages)?;
+    if let Some(summary) = state.summary.take() {
+        let mut value = Value::String(summary);
+        crate::context_plugin::restore_output(port, None, session_id, [&mut value]);
+        if let Value::String(summary) = value {
+            state.summary = Some(summary);
+        }
+    }
+    Some(state)
 }
 
 fn latest_opencode_compaction(messages: &Value) -> Option<CompactionState> {
@@ -3694,8 +3702,17 @@ fn dispatch_server_event(
     if !lifecycle && session.is_none() {
         return;
     }
+    let restored = match kind {
+        "session.text.ended" | "session.reasoning.ended" | "session.compaction.ended" => {
+            restore_event_output(value, port, &state.directory, root, &["text", "summary"])
+        }
+        "session.tool.success" | "session.tool.error" | "session.tool.failed" => {
+            restore_event_output(value, port, &state.directory, root, &["content", "output", "error"])
+        }
+        _ => None,
+    };
     handle_event(
-        value,
+        restored.as_ref().unwrap_or(value),
         events,
         commands,
         turn_active,
@@ -3704,6 +3721,25 @@ fn dispatch_server_event(
         auto_approve,
         state,
     );
+}
+
+fn restore_event_output(
+    event: &Value,
+    port: u16,
+    directory: &str,
+    session: &str,
+    keys: &[&str],
+) -> Option<Value> {
+    let property = if event.get("data").is_some() { "data" } else { "properties" };
+    let mut restored = event.clone();
+    let fields = restored.get_mut(property)?.as_object_mut()?;
+    crate::context_plugin::restore_output(
+        port,
+        Some(directory),
+        session,
+        fields.iter_mut().filter_map(|(key, value)| keys.contains(&key.as_str()).then_some(value)),
+    );
+    Some(restored)
 }
 
 fn handle_child_event(

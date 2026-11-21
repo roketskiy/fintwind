@@ -92,9 +92,14 @@ before opening a pull request:
 
 ```sh
 cargo fmt --package fintwind --package fintwind-protocol --package fintwind-client --package fintwind-core --package fintwind-daemon -- --check
-cargo check
+cargo clippy --locked --workspace --all-targets
 cargo test
 ```
+
+If Clippy is missing, run `rustup component add clippy`. Use the same Clippy
+command after changing Rust code or Cargo configuration. It checks the whole
+workspace, including test targets, without running them. Fix diagnostics
+introduced by your change; existing warnings are reported without failing CI.
 
 GitHub runs Tests on pushes to `main` and on pull requests, not on every
 feature-branch push. Use **Actions → Tests → Run workflow** to check a branch
@@ -111,6 +116,28 @@ python scripts/ci-workflows-blackbox.py --output temp/workflow-tools/result.json
 For user-visible changes, wait for the watcher to report a successful rebuild
 and validate the freshly relaunched app. Include screenshots or a short
 recording in the pull request when they make the result easier to review.
+
+## Commit messages
+
+Use `type(scope): description` for the title. The scope is optional and uses
+lowercase letters or digits, with `.`, `/`, `_`, or `-` as separators. The
+description can be in Chinese or English. Use `!` before the colon for a breaking
+change. For example: `fix(chat): 修复消息分组` or `docs: update setup instructions`.
+
+Allowed types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`,
+`build`, `ci`, `chore`, and `revert`.
+
+To enable the hook, copy it from the repository root using Git Bash. Repeat
+after updating the hook. If you already have a `commit-msg` hook, integrate the
+new check rather than overwriting it.
+
+```sh
+hook=$(git rev-parse --git-path hooks/commit-msg)
+mkdir -p "$(dirname "$hook")" && cp -i .githooks/commit-msg "$hook" && chmod +x "$hook"
+```
+
+The hook rejects an invalid title without rewriting the message. Git-generated
+merge, revert, and autosquash messages remain supported.
 
 ## Pull requests
 

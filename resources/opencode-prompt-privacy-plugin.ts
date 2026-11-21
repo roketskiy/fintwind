@@ -1,6 +1,6 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import rules from "./prompt-privacy-rules.json";
+import { discover, fieldName, isFieldValue } from "./prompt-privacy-detect.ts";
 
 type Registration = { dispose(): Promise<void> };
 type HttpEvent = { sessionID: string; request: Request };
@@ -17,105 +17,6 @@ type Context = {
 const referenceSource = "FINTWIND_SECRET_[A-F0-9]{24}";
 const reference = new RegExp(`\\b${referenceSource}\\b`, "g");
 const compactionInstruction = "Preserve any FINTWIND_SECRET_ references needed for unfinished work exactly as written, along with what they are for. Do not resolve them or copy the original private values into the summary.";
-const tokens = new RegExp(rules.tokens, "g");
-// Selected provider formats and context-plus-entropy are adapted from
-// Gitleaks v8.30.1 and CredSweeper v1.19.6 (see docs/licenses).
-const providerTokens = new RegExp(rules.providerTokens, "g");
-const webhook = new RegExp(rules.webhook, "g");
-const genericKey = new RegExp(rules.genericKey, "gi");
-const genericKeyExcludedName = new RegExp(rules.genericKeyExcludedName, "i");
-const genericKeyPlainValue = new RegExp(rules.genericKeyPlainValue);
-const email = new RegExp(rules.email, "g");
-const keyMarker = new RegExp(rules.keyMarker, "g");
-const keyBody = new RegExp(rules.keyBody);
-const field = new RegExp(rules.field, "gi");
-const fieldName = new RegExp(rules.fieldName, "i");
-const passwordName = new RegExp(rules.passwordName, "i");
-const uriCredential = new RegExp(rules.uriCredential, "gi");
-const authToken = new RegExp(rules.authToken, "gi");
-const weakName = new RegExp(rules.weakName, "i");
-const weakValue = new RegExp(rules.weakValue);
-const fieldValue = new RegExp(rules.fieldValue);
-const placeholder = new RegExp(rules.placeholder, "i");
-
-function isFieldValue(text: string, name: string): boolean {
-  const value = text.trim();
-  return value.length >= (passwordName.test(name) ? 1 : 8) && !placeholder.test(value)
-    && (!weakName.test(name) || weakValue.test(value));
-}
-
-function keyEntropy(value: string): number {
-  const counts = new Uint16Array(128);
-  for (let i = 0; i < value.length; i++) counts[value.charCodeAt(i)]++;
-  let entropy = 0;
-  for (const count of counts) {
-    if (!count) continue;
-    const p = count / value.length;
-    entropy -= p * Math.log2(p);
-  }
-  return entropy;
-}
-
-function* discover(text: string): Iterable<{ spelling: string; original?: string }> {
-  for (const match of text.matchAll(tokens)) yield { spelling: match[0] };
-  for (const match of text.matchAll(providerTokens)) yield { spelling: match[0] };
-  for (const match of text.matchAll(webhook)) yield { spelling: match[1] };
-  for (const match of text.matchAll(genericKey)) {
-    const [, name, spelling] = match;
-    if (!genericKeyExcludedName.test(name) && !placeholder.test(spelling)
-      && !genericKeyPlainValue.test(spelling) && keyEntropy(spelling) >= 3.1) yield { spelling };
-  }
-  for (const match of text.matchAll(authToken)) {
-    const spelling = match[1] ?? match[2];
-    if (isFieldValue(spelling, "")) yield { spelling };
-  }
-  if (text.includes("@")) {
-    const credentials: [number, number][] = [];
-    for (const match of text.matchAll(uriCredential)) {
-      const end = match.index! + match[0].length - 1;
-      credentials.push([end - match[1].length, end]);
-      if (isFieldValue(match[2], "password")) yield { spelling: match[1] };
-    }
-    let index = 0;
-    for (const match of text.matchAll(email)) {
-      const start = match.index!;
-      while (credentials[index]?.[1] <= start) index++;
-      const credential = credentials[index];
-      if (!credential || credential[0] > start) yield { spelling: match[0] };
-    }
-  }
-  if (text.includes("PRIVATE KEY")) {
-    let opened: RegExpMatchArray | undefined;
-    for (const match of text.matchAll(keyMarker)) {
-      if (match[1] === "BEGIN") opened = match;
-      else if (opened) {
-        const body = text.slice(opened.index! + opened[0].length, match.index!);
-        if (opened[2] === match[2] && body.length >= 32 && (keyBody.test(body) || match[2] === "PGP PRIVATE KEY BLOCK")) {
-          yield { spelling: text.slice(opened.index!, match.index! + match[0].length) };
-        }
-        opened = undefined;
-      }
-    }
-  }
-  for (const match of text.matchAll(field)) {
-    const matchValue = fieldValue.exec(text.slice(match.index! + match[0].length));
-    const spelling = matchValue?.slice(1).find(candidate => candidate !== undefined);
-    if (spelling === undefined) continue;
-    const name = match.groups?.name ?? match.groups?.flag ?? "";
-    // JSON can appear inside prompt text. Decode only a double-quoted JSON
-    // member, not shell arguments or environment-file values.
-    if (name && matchValue?.[1]?.includes("\\") && text[match.index! - 1] === '"'
-      && match[0].slice(name.length).trim() === '":') {
-      let original: string | undefined;
-      try { original = JSON.parse(matchValue[0]); } catch { /* Keep the literal spelling. */ }
-      if (original !== undefined) {
-        if (isFieldValue(original, name)) yield { spelling, original };
-        continue;
-      }
-    }
-    if (isFieldValue(spelling, name)) yield { spelling };
-  }
-}
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 type FieldScope = "request" | "content" | "text" | "chat-tool-call" | "function" |

@@ -145,8 +145,58 @@ async function checkReferenceReuse() {
   console.log("tool delivery: file and external inputs restored; executable source and model requests retained references");
 }
 
+async function checkDetection() {
+  const sessionID = "detection";
+  const resolve = hooks.get("output.resolve")!;
+  const b64url = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  const signature = "Zm9vYmFyU2lnbmF0dXJlRml4dHVyZTAxMjM0NTY3ODk";
+  const payload = b64url({ sub: "fixture" });
+  const jwt = [b64url({ alg: "HS256", typ: "JWT" }), payload, signature].join(".");
+  const fakeJwt = [b64url({ typ: "JWT" }), payload, signature].join(".");
+  const refPattern = /FINTWIND_SECRET_[A-F0-9]{24}/;
+
+  const tokenized = await send("http", { input: [{ role: "user", content: `The session token is ${jwt}` }] }, sessionID);
+  const jwtRef = refPattern.exec(tokenized.input[0].content)?.[0];
+  assert.ok(jwtRef, "valid JWT was not replaced");
+  assert.deepEqual(await resolve({ sessionID, references: [jwtRef] }), { [jwtRef]: jwt });
+
+  const untouched = await send("http", { input: [{ role: "user", content: `The session token is ${fakeJwt}` }] }, sessionID);
+  assert.equal(untouched.input[0].content, `The session token is ${fakeJwt}`);
+
+  // providerTokens caps sk- values at 64 characters; the plus sign sits outside
+  // its lookahead, so only boundary normalization recovers the full value.
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz0123456789";
+  const random = (length: number) =>
+    Array.from(crypto.getRandomValues(new Uint8Array(length)), byte => alphabet[byte % alphabet.length]).join("");
+  const longKey = ["sk-", random(64), "+", random(2)].join("");
+  assert.equal(longKey.length, 70);
+  const longOut = await send("http", { input: [{ role: "user", content: `Deploy with ${longKey} now.` }] }, sessionID);
+  const longRef = refPattern.exec(longOut.input[0].content)?.[0];
+  assert.ok(longRef, "70-character sk- value was not replaced");
+  const longResolved = (await resolve({ sessionID, references: [longRef] })) as Record<string, string>;
+  assert.equal(longResolved[longRef]?.length, 70);
+  assert.equal(longResolved[longRef], longKey);
+
+  const uuid = ["123e4567", "e89b", "12d3", "a456", "426614174000"].join("-");
+  const identifier = await send("http", { input: [{ role: "user", content: `api_key: ${uuid}` }] }, sessionID);
+  assert.equal(identifier.input[0].content, `api_key: ${uuid}`);
+  const secret = await send("http", { input: [{ role: "user", content: `password=${uuid}` }] }, sessionID);
+  assert.match(secret.input[0].content, /^password=FINTWIND_SECRET_[A-F0-9]{24}$/);
+
+  let mixed = random(24);
+  while (!/[A-Z]/.test(mixed) || !/[a-z]/.test(mixed)) mixed = random(24);
+  const mixedOut = await send("http", { input: [{ role: "user", content: `api_key: ${mixed}` }] }, sessionID);
+  const mixedRef = refPattern.exec(mixedOut.input[0].content)?.[0];
+  assert.ok(mixedRef, "mixed-case api_key value was not replaced");
+  assert.deepEqual(await resolve({ sessionID, references: [mixedRef] }), { [mixedRef]: mixed });
+
+  console.log("detection: JWT structure, 70-character boundary normalization, UUID exemption and mixed-case scoring checked");
+  console.log("reproduce: bun scripts/prompt-privacy-e2e.ts");
+}
+
 try {
   await checkReferenceReuse();
+  await checkDetection();
   const failures: unknown[] = [];
   for (const transport of ["http", "ws"] as const) {
     try {

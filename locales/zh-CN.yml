@@ -301,7 +301,7 @@ settings.image_generation_load_failed: "读取图像生成设置失败：%{error
 settings.image_generation_save_failed: "保存图像生成设置失败：%{error}"
 settings.browser_tools: 浏览器工具
 settings.prompt_privacy: 提示词脱敏
-settings.prompt_privacy_description: 在文本发给模型前替换检测到的凭据和邮箱
+settings.prompt_privacy_description: 输入框和会话历史中的用户消息会高亮检测到的凭据和邮箱。发送前可查看标记，再决定是否发送。检测到的内容会在发给模型前替换。
 settings.image_generation_model_unavailable: "%{model}（不可用）"
 providers.protocol_inherit: 继承提供商
 settings.browser_tools_description: 默认关闭。开启后向模型提供内置浏览器操作工具与使用说明，会占用少量上下文。需 OpenCode 2.1.4+

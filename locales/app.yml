@@ -655,7 +655,7 @@ settings.browser_tools:
 settings.prompt_privacy:
   en: Prompt privacy
 settings.prompt_privacy_description:
-  en: Mask detected credentials and email addresses before sending text to the model
+  en: Detected credentials and email addresses are highlighted in the input and in your messages in chat history. Check the highlights before deciding whether to send. Detected values are replaced before the text reaches the model.
 settings.browser_tools_description:
   en: Off by default. When on, the model gets the built-in browser tools and instructions, which use some context. Requires OpenCode 2.1.4+
 settings.todo_list:

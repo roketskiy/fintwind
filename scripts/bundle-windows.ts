@@ -235,7 +235,11 @@ try {
       throw new Error(`Missing Linux SSH daemon: ${source}`);
     }
   }
-  await copyFile(join(projectRoot, "LICENSE"), join(packageDirectory, "LICENSE"));
+  const license = await Bun.file(join(projectRoot, "LICENSE")).text();
+  const privacyNotices = await Promise.all(["gitleaks.txt", "credsweeper.txt"].map((name) =>
+    Bun.file(join(projectRoot, "docs", "licenses", name)).text(),
+  ));
+  await Bun.write(join(packageDirectory, "LICENSE"), [license, ...privacyNotices].map((text) => text.trimEnd()).join("\n\n") + "\n");
 
   // Authenticode has to be applied before anything is packaged, so the
   // executables inside the zip and the installer are all signed. Unsigned

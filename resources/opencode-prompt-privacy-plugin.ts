@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import rules from "./prompt-privacy-rules.json";
 
 type Registration = { dispose(): Promise<void> };
 type HttpEvent = { sessionID: string; request: Request };
@@ -14,25 +15,72 @@ type Context = {
 const referenceSource = "FINTWIND_SECRET_[A-F0-9]{24}";
 const reference = new RegExp(`\\b${referenceSource}\\b`, "g");
 const instruction = "FINTWIND_SECRET_ followed by 24 hexadecimal characters is a local private-value reference. To use it in a shell command, read the environment variable whose name is the complete reference. A program that reads its own environment takes the bare name as its key. For shell expansion use $env:NAME in PowerShell or \"$NAME\" in Bash. Never guess the original value.";
-const tokens = /(?<![A-Za-z0-9_-])(?:gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82}|glpat-[A-Za-z0-9_-]{20}|sk-ant-(?:api\d{2}|admin\d{2})-[A-Za-z0-9_-]{40,255}|sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{40,255}|sk-[A-Za-z0-9]{20}T3BlbkFJ[A-Za-z0-9]{20}|xox[baprs]-\d{10,13}-\d{10,13}(?:-[A-Za-z0-9]{8,64}){1,3}|hf_[A-Za-z]{34}|(?:sk|rk)_(?:test|live|prod)_[A-Za-z0-9]{10,99}|AIza[A-Za-z0-9_-]{35}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})(?![A-Za-z0-9_-])/g;
-const email = /(?<![A-Za-z0-9.!#$%&'*+/=?^_`{}~@-])[A-Za-z0-9!#$%&'*+/=?^_`{}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{}~-]+)*@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}(?![A-Za-z0-9@-]|\.[A-Za-z0-9])/g;
-const keyMarker = /-----(BEGIN|END) ((?:[A-Z0-9_-]+ ){0,4}PRIVATE KEY(?: BLOCK)?)-----/g;
-const keyBody = /^(?:[A-Za-z0-9+/= \t\r\n]|\\[rn])+$/;
-const field = /(?<![A-Za-z0-9])(?<name>password|passwd|passphrase|pgpassword|(?:db|database|user|admin|redis|mysql|postgres|smtp)password|api[_-]?key|(?:access|refresh|auth|api|id|session|bot)[_-]?token|token|密码|访问令牌|API密钥)['"]?[ \t]*[:=：][ \t]*|--(?<flag>password|passwd|passphrase|api[-_]?key|token)[ \t]+|\bauthorization['"]?[ \t]*:[ \t]*["']?bearer[ \t]+/gi;
-const fieldName = /(?:^|[_-])(?:password|passwd|passphrase|pgpassword|(?:db|database|user|admin|redis|mysql|postgres|smtp)password|api[_-]?key|(?:access|refresh|auth|api|id|session|bot)[_-]?token|token|密码|访问令牌|API密钥)$/i;
-const passwordName = /(?:password|passwd|passphrase|密码)$/i;
-const fieldValue = /^(?:"((?:[^"\\\r\n]|\\[^\r\n])*)"|'((?:[^'\\\r\n]|\\[^\r\n])*)'|`([^`\r\n]*)`|([^\s,;#&<>{}\[\]()'"`，。；、：]+))/;
-const placeholder = /^(?:your[-_ ].+|example(?:[-_ ].+)?|secret_\d+|fintwind_secret_[a-f0-9]{24}|\$.*|%[a-z_][a-z0-9_]*%|(?:process\.env|os\.environ|os\.getenv)[.\[(].*|[*.•]+|<[^<>]*>|\[[A-Z_ ]+\]|changeme|placeholder|redacted|null|none|true|false|disabled|enabled|token|password|secret|undefined|dummy)$/i;
+const tokens = new RegExp(rules.tokens, "g");
+// Selected provider formats and context-plus-entropy are adapted from
+// Gitleaks v8.30.1 and CredSweeper v1.19.6 (see docs/licenses).
+const providerTokens = new RegExp(rules.providerTokens, "g");
+const webhook = new RegExp(rules.webhook, "g");
+const genericKey = new RegExp(rules.genericKey, "gi");
+const genericKeyExcludedName = new RegExp(rules.genericKeyExcludedName, "i");
+const genericKeyPlainValue = new RegExp(rules.genericKeyPlainValue);
+const email = new RegExp(rules.email, "g");
+const keyMarker = new RegExp(rules.keyMarker, "g");
+const keyBody = new RegExp(rules.keyBody);
+const field = new RegExp(rules.field, "gi");
+const fieldName = new RegExp(rules.fieldName, "i");
+const passwordName = new RegExp(rules.passwordName, "i");
+const uriCredential = new RegExp(rules.uriCredential, "gi");
+const authToken = new RegExp(rules.authToken, "gi");
+const weakName = new RegExp(rules.weakName, "i");
+const weakValue = new RegExp(rules.weakValue);
+const fieldValue = new RegExp(rules.fieldValue);
+const placeholder = new RegExp(rules.placeholder, "i");
 
 function isFieldValue(text: string, name: string): boolean {
   const value = text.trim();
-  return value.length >= (passwordName.test(name) ? 1 : 8) && !placeholder.test(value);
+  return value.length >= (passwordName.test(name) ? 1 : 8) && !placeholder.test(value)
+    && (!weakName.test(name) || weakValue.test(value));
+}
+
+function keyEntropy(value: string): number {
+  const counts = new Uint16Array(128);
+  for (let i = 0; i < value.length; i++) counts[value.charCodeAt(i)]++;
+  let entropy = 0;
+  for (const count of counts) {
+    if (!count) continue;
+    const p = count / value.length;
+    entropy -= p * Math.log2(p);
+  }
+  return entropy;
 }
 
 function* discover(text: string): Iterable<{ spelling: string; original?: string }> {
   for (const match of text.matchAll(tokens)) yield { spelling: match[0] };
+  for (const match of text.matchAll(providerTokens)) yield { spelling: match[0] };
+  for (const match of text.matchAll(webhook)) yield { spelling: match[1] };
+  for (const match of text.matchAll(genericKey)) {
+    const [, name, spelling] = match;
+    if (!genericKeyExcludedName.test(name) && !placeholder.test(spelling)
+      && !genericKeyPlainValue.test(spelling) && keyEntropy(spelling) >= 3.1) yield { spelling };
+  }
+  for (const match of text.matchAll(authToken)) {
+    const spelling = match[1] ?? match[2];
+    if (isFieldValue(spelling, "")) yield { spelling };
+  }
   if (text.includes("@")) {
-    for (const match of text.matchAll(email)) yield { spelling: match[0] };
+    const credentials: [number, number][] = [];
+    for (const match of text.matchAll(uriCredential)) {
+      const end = match.index! + match[0].length - 1;
+      credentials.push([end - match[1].length, end]);
+      if (isFieldValue(match[2], "password")) yield { spelling: match[1] };
+    }
+    let index = 0;
+    for (const match of text.matchAll(email)) {
+      const start = match.index!;
+      while (credentials[index]?.[1] <= start) index++;
+      const credential = credentials[index];
+      if (!credential || credential[0] > start) yield { spelling: match[0] };
+    }
   }
   if (text.includes("PRIVATE KEY")) {
     let opened: RegExpMatchArray | undefined;
@@ -68,44 +116,62 @@ function* discover(text: string): Iterable<{ spelling: string; original?: string
 }
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
-const wireFields = new Set([
-  "model", "role", "type", "id", "name", "tool_call_id", "call_id", "item_id", "response_id", "previous_response_id",
-  "media_type", "mime_type", "signature", "thoughtSignature", "encrypted_content",
-]);
+type FieldScope = "request" | "content" | "text" | "chat-tool-call" | "function" |
+  "function-response" | "tool-data" | "encoded-tool-data";
 
-type FieldScope = "protocol" | "tool-data" | "encoded-tool-data" | "media";
-
-function childScope(parent: { [key: string]: Json }, parentKey: string, key: string): FieldScope {
-  // Preserve binary media, not arbitrary text that happens to start with `data:`.
-  if ((key === "url" && parentKey === "image_url" && typeof parent[key] === "string" && parent[key].startsWith("data:"))
-    || (key === "image_url" && parent.type === "input_image" && typeof parent[key] === "string" && parent[key].startsWith("data:"))
-    || (key === "file_data" && (parent.type === "input_file" || parentKey === "file"))
-    || (key === "data" && (parentKey === "input_audio" || parentKey === "inlineData" || parentKey === "inline_data"
-      || (parentKey === "source" && parent.type === "base64")))) {
-    return "media";
+function childScope(parent: { [key: string]: Json }, key: string, scope: FieldScope): FieldScope | undefined {
+  switch (scope) {
+    case "request":
+      if (key === "instructions") return "text";
+      if (key === "input" || key === "messages" || key === "system" || key === "contents"
+        || key === "systemInstruction" || key === "system_instruction") return "content";
+      break;
+    case "content":
+      if (key === "parts") return "content";
+      if (key === "content" && (typeof parent.role === "string" || parent.type === "tool_result"
+        || parent.type === "mcp_tool_result" || parent.type === "reasoning")) return "content";
+      if (key === "summary" && parent.type === "reasoning") return "content";
+      if (key === "text" && (parent.type === undefined || parent.type === "text" || parent.type === "input_text"
+        || parent.type === "output_text" || parent.type === "summary_text" || parent.type === "reasoning_text")) return "text";
+      if (key === "refusal" && (parent.type === "refusal" || parent.role === "assistant")) return "text";
+      if (key === "reasoning_content" && parent.role === "assistant") return "text";
+      if (key === "tool_calls" && parent.role === "assistant") return "chat-tool-call";
+      if ((key === "function_call" && parent.role === "assistant") || key === "functionCall") return "function";
+      if (key === "functionResponse") return "function-response";
+      if (key === "arguments" && (parent.type === "function_call" || parent.type === "mcp_call")) return "encoded-tool-data";
+      if (key === "input" && (parent.type === "tool_use" || parent.type === "server_tool_use"
+        || parent.type === "custom_tool_call" || parent.type === "mcp_tool_use")) return "tool-data";
+      if (key === "output" && (parent.type === "function_call_output" || parent.type === "custom_tool_call_output"
+        || parent.type === "mcp_call")) return typeof parent.output === "string" ? "encoded-tool-data" : "content";
+      break;
+    case "chat-tool-call":
+      if (key === "function") return "function";
+      if (key === "custom") return "function";
+      break;
+    case "function":
+      if (key === "arguments") return "encoded-tool-data";
+      if (key === "args" || key === "input") return "tool-data";
+      break;
+    case "function-response":
+      if (key === "response") return "tool-data";
+      if (key === "parts") return "content";
+      break;
+    case "tool-data":
+      return "tool-data";
+    case "text":
+    case "encoded-tool-data":
+      break;
   }
-  // OpenAI Chat Completions and Responses carry function arguments as JSON text.
-  if (key === "arguments" && (parentKey === "function" || parent.type === "function_call")) {
-    return "encoded-tool-data";
-  }
-  // Anthropic and Gemini expose tool payloads as structured JSON instead.
-  if ((key === "input" && (parent.type === "tool_use" || parent.type === "server_tool_use"
-      || parent.type === "custom_tool_call"))
-    || (key === "args" && parentKey === "functionCall")
-    || (key === "response" && parentKey === "functionResponse")) {
-    return "tool-data";
-  }
-  return "protocol";
 }
 
 function walk(
   value: Json,
   visit: (text: string, key: string) => string,
   key = "",
-  scope: FieldScope = "protocol",
+  scope: FieldScope = "request",
 ): Json {
   if (typeof value === "string") {
-    if (scope === "media" || (scope === "protocol" && wireFields.has(key))) return value;
+    if (scope !== "text" && scope !== "content" && scope !== "tool-data" && scope !== "encoded-tool-data") return value;
     if (scope === "encoded-tool-data" && /^\s*[\[{]/.test(value)) {
       let nested: Json;
       try { nested = JSON.parse(value); } catch { return visit(value, key); }
@@ -120,8 +186,10 @@ function walk(
     return next.every((item, index) => item === value[index]) ? value : next;
   }
   const entries = Object.entries(value);
-  const next = entries.map(([name, child]) => [name, walk(child, visit, name,
-    scope === "protocol" ? childScope(value, key, name) : "tool-data")] as const);
+  const next = entries.map(([name, child]) => {
+    const nextScope = childScope(value, name, scope);
+    return [name, nextScope ? walk(child, visit, name, nextScope) : child] as const;
+  });
   return next.every((entry, index) => entry[1] === entries[index][1]) ? value : Object.fromEntries(next);
 }
 
@@ -178,10 +246,12 @@ export default {
         return text;
       });
       if (oldSize !== refs.size) {
-        const keys = [...refs.keys()].sort((a, b) => b.length - a.length);
-        // Discovery decides what is private. Once known, even a short value
-        // can be embedded in other text. Keep existing references intact.
-        state.matcher = new RegExp(`${referenceSource}|${keys.map(escapeRegex).join("|")}`, "gu");
+        const wordCharacter = "[\\p{L}\\p{M}\\p{N}_]";
+        const patterns = [...refs.keys()].sort((first, second) => second.length - first.length).map(value => {
+          const pattern = escapeRegex(value);
+          return value.length < 8 ? `(?<!${wordCharacter})${pattern}(?!${wordCharacter})` : pattern;
+        });
+        state.matcher = new RegExp(`${referenceSource}|${patterns.join("|")}`, "gu");
       }
       if (!state.matcher) return body;
       const next = walk(input, text => text.replace(state.matcher!, value => refs.get(value) ?? value));

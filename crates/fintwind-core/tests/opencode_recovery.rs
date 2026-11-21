@@ -2651,6 +2651,11 @@ fn scenario_server_initiated_continuation(harness: &Harness, run: &Run) -> Fact 
     let start_event_id = sortable_id("evt", base + 3000);
     let assistant_id = sortable_id("msg", base + 4000);
     let idle_id = sortable_id("msg", base + 5000);
+    let compaction = json!({"id": "msg_compact", "type": "compaction",
+        "time": {"created": base + 500}, "summary": "Earlier context"});
+    let mut first_history =
+        settled_history("msg_user_1", "msg_asst_1", base, "first answer", "succeeded");
+    first_history.insert(2, compaction.clone());
     let behavior = json!({
         "scenario": "server_continuation",
         "turns": [
@@ -2665,7 +2670,7 @@ fn scenario_server_initiated_continuation(harness: &Harness, run: &Run) -> Fact 
                     // continues on its own, so the continuation does not preempt it.
                     {"hold_ms": 2500},
                 ],
-                "durable_messages": settled_history("msg_user_1", "msg_asst_1", base, "first answer", "succeeded"),
+                "durable_messages": first_history,
                 "session_status": "idle", "session_outcome": "succeeded",
                 "session_time_idle": base + 2000, "active": false,
             },
@@ -2699,6 +2704,7 @@ fn scenario_server_initiated_continuation(harness: &Harness, run: &Run) -> Fact 
                      "content": [{"type": "text", "text": "continued answer"}]},
                     idle_msg(&prev_idle_id, base + 2000, "succeeded"),
                     assistant_msg("msg_asst_1", base + 1000, "first answer"),
+                    compaction,
                     user_msg("msg_user_1", base, "first prompt"),
                 ],
                 "session_status": "idle",
@@ -2806,14 +2812,32 @@ fn scenario_server_initiated_continuation(harness: &Harness, run: &Run) -> Fact 
             "the daemon publishes authoritative continuation statistics once without asynchronous recount IDs",
         );
         let mut session = AgentSession::new(Uuid::new_v4());
-        session.begin_turn("first prompt");
+        let first_turn = session.begin_turn("first prompt");
         report.expect(
             session.reconcile_active_transcript(first.clone()),
             "the actual first native window applies",
         );
-        session.turns.last_mut().unwrap().status = TurnStatus::Completed;
+        report.expect(
+            first
+                .messages
+                .iter()
+                .find(|message| message.role == MessageRole::Compaction)
+                .is_some_and(|message| {
+                    message.turn_id.is_some()
+                        && message.turn_id == first.turns.first().map(|turn| turn.id)
+                }),
+            "the in-turn compaction is owned by the originating native execution",
+        );
+        session.finish_active_turn(TurnStatus::Completed);
         let (messages, blocks) = (session.messages.len(), session.transcript_blocks.len());
         session.resume_provider_turn();
+        let continuation_turn = session.active_turn_id();
+        report.expect(
+            continuation_turn.is_some_and(|id| id != first_turn)
+                && session.turns[0].status == TurnStatus::Completed
+                && session.turns[0].completed_at.is_some(),
+            "a live server continuation opens a separate turn without reopening the settled answer",
+        );
         session.push_message(MessageRole::Assistant, "continued ans");
         report.expect(
             session.reconcile_active_transcript_from(continuation.clone(), messages, blocks),
@@ -2827,6 +2851,16 @@ fn scenario_server_initiated_continuation(harness: &Harness, run: &Run) -> Fact 
             .collect::<Vec<_>>();
         report.expect(replies == ["first answer", "continued answer"],
             format!("the final projection preserves the settled reply and heals the continuation: {replies:?}"));
+        let reply_turns = session
+            .messages
+            .iter()
+            .filter(|message| message.role == MessageRole::Assistant)
+            .map(|message| message.turn_id)
+            .collect::<Vec<_>>();
+        report.expect(
+            reply_turns == [Some(first_turn), continuation_turn],
+            "the durable continuation keeps each answer in its own turn",
+        );
         report
             .facts
             .insert("projected_replies".into(), json!(replies));

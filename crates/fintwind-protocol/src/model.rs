@@ -1310,7 +1310,7 @@ impl AgentSession {
     }
 
     /// A provider-initiated continuation replaces only output received since
-    /// its TurnStarted, preserving the already settled prefix of that turn.
+    /// its TurnStarted, preserving earlier turns and standalone rows.
     pub fn reconcile_active_transcript_from(
         &mut self,
         mut transcript: crate::provider_session::NativeTranscript,
@@ -1349,7 +1349,9 @@ impl AgentSession {
         // Presentation and attachment handles are client-owned. Native user
         // rows determine their positions, not their display metadata.
         for message in &mut transcript.messages {
-            message.turn_id = Some(turn);
+            if message.role != MessageRole::Compaction || message.turn_id.is_some() {
+                message.turn_id = Some(turn);
+            }
             message.streaming = false;
             if message.role == MessageRole::User
                 && let Some(index) = users.iter().position(|local| {
@@ -1415,26 +1417,21 @@ impl AgentSession {
         }
     }
 
-    /// Re-open the live turn when the provider starts an execution this client
-    /// did not prompt — a background bash finishing and auto-continuing, or
-    /// any other server-initiated run. Without this, `TurnStarted` is a no-op
-    /// on an idle session and every later delta is dropped.
+    /// Mark a submitted turn live, or open a separate turn for a server-started
+    /// execution after settlement. A background completion is a new reply,
+    /// not additional text in the previous answer.
     pub fn resume_provider_turn(&mut self) {
         if self.active_turn_id().is_some() {
             self.mark_active_turn_provider_started();
             self.status = SessionStatus::Working;
             return;
         }
-        if let Some(turn) = self.turns.last_mut() {
-            // A user Stop settled this turn; a late or un-cancelled
-            // `execution.started` must not revive it.
-            if turn.status == TurnStatus::Interrupted {
-                return;
-            }
-            turn.status = TurnStatus::Running;
-            turn.completed_at = None;
-            turn.provider_turn_started = true;
-            self.status = SessionStatus::Working;
+        // A late or uncancelled start after an explicit Stop is still ignored.
+        if self
+            .turns
+            .last()
+            .is_some_and(|turn| turn.status == TurnStatus::Interrupted)
+        {
             return;
         }
         self.begin_provider_turn();
@@ -4410,7 +4407,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_execution_resumes_the_settled_turn() {
+    fn provider_execution_starts_after_the_settled_turn() {
         let project = Project::from_path(PathBuf::from("/tmp/fintwind"));
         let mut session = AgentSession::new(project.id);
         let turn_id = session.begin_turn("go");
@@ -4420,17 +4417,18 @@ mod tests {
         assert!(session.active_turn_id().is_none());
 
         session.resume_provider_turn();
-        assert_eq!(session.active_turn_id(), Some(turn_id));
+        let continuation = session.active_turn_id().unwrap();
+        assert_ne!(continuation, turn_id);
         assert_eq!(session.status, SessionStatus::Working);
-        assert_eq!(session.turns[0].status, TurnStatus::Running);
-        assert!(session.turns[0].provider_turn_started);
-        assert!(session.turns[0].completed_at.is_none());
+        assert_eq!(session.turns[0].status, TurnStatus::Completed);
+        assert!(session.turns[0].completed_at.is_some());
+        assert!(session.turns[1].provider_turn_started);
         assert_eq!(session.messages.len(), 2);
 
         // An already-running turn just marks the provider started.
         session.resume_provider_turn();
-        assert_eq!(session.active_turn_id(), Some(turn_id));
-        assert_eq!(session.turns.len(), 1);
+        assert_eq!(session.active_turn_id(), Some(continuation));
+        assert_eq!(session.turns.len(), 2);
         assert_eq!(session.status, SessionStatus::Working);
     }
 

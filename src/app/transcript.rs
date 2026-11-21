@@ -739,7 +739,7 @@ pub(super) fn assistant_response_footer(
                 | TranscriptRowKind::Compacting
                 | TranscriptRowKind::ProviderRetry => None,
             })
-            .filter(|part| !part.content.trim().is_empty())
+            .filter(|part| part.role == MessageRole::Assistant && !part.content.trim().is_empty())
             .map(|part| part.content.as_str())
             .collect::<Vec<_>>()
             .join("\n\n"),
@@ -1292,12 +1292,24 @@ pub(super) fn folded_transcript_row_kinds_with_retry(
             continue;
         }
         let turn_rows = turn_rows(session, turn.id);
-        let hidden = &turn_rows[..turn_answer_start(session, &turn_rows)];
-        let Some(anchor) = hidden.first().copied() else {
+        let answer_start = turn_answer_start(session, &turn_rows);
+        // A compaction that arrives after the answer still belongs in the
+        // fold, without turning the preceding answer into interim text.
+        let mut hidden = turn_rows
+            .iter()
+            .copied()
+            .enumerate()
+            .filter_map(|(index, row)| {
+                let compaction = matches!(row, TranscriptRowKind::Message(message_index)
+                    if session.messages[message_index].role == MessageRole::Compaction);
+                (index < answer_start || compaction).then_some(row)
+            });
+        let Some(anchor) = hidden.next() else {
             continue;
         };
         fold_anchors.insert(anchor, turn.id);
-        hidden_rows.extend(hidden.iter().copied());
+        hidden_rows.insert(anchor);
+        hidden_rows.extend(hidden);
     }
 
     let mut rows = Vec::with_capacity(raw_rows.len() + fold_anchors.len() + 1);
@@ -1408,7 +1420,7 @@ fn turn_rows(session: &AgentSession, turn_id: Uuid) -> Vec<TranscriptRowKind> {
         if message.turn_id == Some(turn_id) {
             match message.role {
                 MessageRole::User if !prompt_seen => prompt_seen = true,
-                MessageRole::User | MessageRole::Assistant => {
+                MessageRole::User | MessageRole::Assistant | MessageRole::Compaction => {
                     rows.push(TranscriptRowKind::Message(message_index));
                 }
                 _ => {}

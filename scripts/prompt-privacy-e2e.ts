@@ -8,7 +8,8 @@ function register(name: string, callback: (event: never) => unknown) {
   hooks.set(name, callback as (event: unknown) => unknown);
   return Promise.resolve({ async dispose() { hooks.delete(name); } });
 }
-const dispose = await plugin.setup({ session: { hook: register }, shell: { hook: register } });
+const context = { session: { hook: register }, shell: { hook: register } };
+let dispose = await plugin.setup(context);
 const provider = Bun.serve({
   hostname: "127.0.0.1",
   port: 0,
@@ -19,8 +20,7 @@ const provider = Bun.serve({
   websocket: { message(socket, frame) { socket.send(frame); } },
 });
 
-async function send(transport: "http" | "ws", body: Record<string, unknown>) {
-  const sessionID = transport;
+async function send(transport: "http" | "ws", body: Record<string, unknown>, sessionID: string = transport) {
   if (transport === "http") {
     const event = { sessionID, request: new Request(provider.url, {
       method: "POST", body: JSON.stringify(body),
@@ -49,7 +49,54 @@ async function send(transport: "http" | "ws", body: Record<string, unknown>) {
   }
 }
 
+async function checkReferenceReuse() {
+  const sessionID = "reuse-conversation";
+  const original = `fixture-${crypto.randomUUID()}`;
+  const first = await send("http", { input: [{ role: "user", content: `password="${original}"` }] }, sessionID);
+  const ref = /^password="(FINTWIND_SECRET_[A-F0-9]{24})"$/.exec(first.input[0].content)?.[1];
+  assert.ok(ref);
+  const other = await send("http", { input: [{ role: "user", content: `password="${original}"` }] }, "other-conversation");
+  assert.notEqual(other.input[0].content, first.input[0].content);
+
+  async function runCommand() {
+    const event = { command: `-e 'process.stdout.write(process.env["${ref}"] ?? "")'`, env: {} };
+    await hooks.get("create.before")!(event);
+    // Run a real child with only this command's environment. Never print its output.
+    const child = Bun.spawnSync([process.execPath, "-e", `process.stdout.write(process.env["${ref}"] ?? "")`], {
+      env: event.env, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 3000,
+    });
+    assert.equal(child.exitCode, 0);
+    assert.ok(child.stdout.equals(Buffer.from(original)), "shell did not receive the original bytes");
+  }
+
+  await runCommand();
+  await dispose();
+  dispose = await plugin.setup(context);
+
+  for (const transport of ["http", "ws"] as const) {
+    // The earlier user turn is no longer in context; only the old reference survives.
+    const next = await send(transport, { input: [
+      { role: "assistant", content: `Use password="${ref}" from the earlier turn.` },
+      { role: "user", content: "Use the same credential again." },
+    ] }, sessionID);
+    assert.equal(next.input[0].content, `Use password="${ref}" from the earlier turn.`);
+    await runCommand();
+
+    const result = await send(transport, { input: [
+      { type: "function_call_output", call_id: "call_reuse", output: `fixture output: ${original}` },
+    ] }, sessionID);
+    assert.ok(result.input[0].output === `fixture output: ${ref}`, "tool output did not reuse the original reference");
+  }
+  assert.equal((await send("http", { input: [{ role: "user", content: `password="${original}"` }] }, sessionID)).input[0].content,
+    first.input[0].content);
+  const unrelated = { command: "fixture unrelated command", env: {} };
+  await hooks.get("create.before")!(unrelated);
+  assert.deepEqual(unrelated.env, {});
+  console.log("reuse: stable reference across turns and plugin reload; three children received exact bytes");
+}
+
 try {
+  await checkReferenceReuse();
   const failures: unknown[] = [];
   for (const transport of ["http", "ws"] as const) {
     try {

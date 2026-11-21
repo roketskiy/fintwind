@@ -15,6 +15,8 @@ type Context = {
 const referenceSource = "FINTWIND_SECRET_[A-F0-9]{24}";
 const reference = new RegExp(`\\b${referenceSource}\\b`, "g");
 const instruction = "FINTWIND_SECRET_ followed by 24 hexadecimal characters is a local private-value reference. To use it in a shell command, read the environment variable whose name is the complete reference. A program that reads its own environment takes the bare name as its key. For shell expansion use $env:NAME in PowerShell or \"$NAME\" in Bash. Never guess the original value.";
+const reuseInstruction = "Reuse the exact reference from an earlier turn directly in each shell command that needs it. Do not run separate lookup or test commands, and do not print the value. If a reference is unavailable, report that instead of using an empty value or searching for the original.";
+const compactionInstruction = "Preserve any FINTWIND_SECRET_ references needed for unfinished work exactly as written, along with what they are for. Do not resolve them or copy the original private values into the summary.";
 const tokens = new RegExp(rules.tokens, "g");
 // Selected provider formats and context-plus-entropy are adapted from
 // Gitleaks v8.30.1 and CredSweeper v1.19.6 (see docs/licenses).
@@ -197,13 +199,26 @@ function escapeRegex(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+type SessionPrivacy = { refs: Map<string, string>; scanned: Set<string>; matcher?: RegExp };
+type ProcessPrivacy = { seed: Buffer; originalByRef: Map<string, string>; sessions: Map<string, SessionPrivacy> };
+const privacyKey = Symbol.for("fintwind.prompt-privacy.process-state.v1");
+const processGlobals = globalThis as typeof globalThis & { [privacyKey]?: ProcessPrivacy };
+
+function processPrivacy(): ProcessPrivacy {
+  // A location plugin can unload between turns. Keep the references in this
+  // OpenCode process without storing originals on disk or in its environment.
+  if (!processGlobals[privacyKey]) {
+    const state: ProcessPrivacy = { seed: randomBytes(32), originalByRef: new Map(), sessions: new Map() };
+    Object.defineProperty(processGlobals, privacyKey, { value: state, enumerable: false });
+  }
+  return processGlobals[privacyKey]!;
+}
+
 export default {
   id: "fintwind.prompt-privacy",
   async setup(ctx: Context) {
     const settingsPath = process.env.FINTWIND_PROMPT_PRIVACY_SETTINGS;
-    const seed = randomBytes(32);
-    const originalByRef = new Map<string, string>();
-    const sessions = new Map<string, { refs: Map<string, string>; scanned: Set<string>; matcher?: RegExp }>();
+    const { seed, originalByRef, sessions } = processPrivacy();
     const registrations: Registration[] = [];
 
     async function enabled(): Promise<boolean> {
@@ -260,7 +275,10 @@ export default {
 
     try {
       registrations.push(await ctx.session.hook<ContextEvent>("context", async event => {
-        if (await enabled()) event.system.push({ type: "text", text: instruction });
+        if (await enabled()) event.system.push({ type: "text", text: `${instruction} ${reuseInstruction}` });
+      }));
+      registrations.push(await ctx.session.hook<ContextEvent>("compaction", async event => {
+        if (await enabled()) event.system.push({ type: "text", text: compactionInstruction });
       }));
       registrations.push(await ctx.session.hook<HttpEvent>("http.request", async event => {
         if (!event.request.body || !await enabled()) return;
@@ -287,8 +305,6 @@ export default {
     }
     return async () => {
       await Promise.all(registrations.map(registration => registration.dispose()));
-      sessions.clear();
-      originalByRef.clear();
     };
   },
 };

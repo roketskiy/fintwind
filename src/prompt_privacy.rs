@@ -26,6 +26,8 @@ struct Rules {
     weak_name: Regex,
     weak_value: Regex,
     placeholder: Regex,
+    nearby_name: Regex,
+    non_secret_value: Regex,
 }
 
 // JavaScript's whitespace includes BOM, but excludes U+0085. Its digits and
@@ -62,6 +64,8 @@ static RULES: LazyLock<Rules> = LazyLock::new(|| {
         weak_name: compile("weakName", "(?i)"),
         weak_value: compile("weakValue", ""),
         placeholder: compile("placeholder", "(?i)"),
+        nearby_name: compile("nearbyName", "(?i)"),
+        non_secret_value: compile("nonSecretValue", ""),
     }
 });
 
@@ -90,28 +94,161 @@ fn key_entropy(value: &str) -> f64 {
         .sum()
 }
 
+struct Hit<'a> {
+    range: Range<usize>,
+    original: Option<String>,
+    name: Option<&'a str>,
+    strength: u8,
+    expandable: bool,
+}
+
+// A value cut by a pattern's length limit is extended to the whole token, so
+// the marking never leaves the tail of a secret unmarked. A single trailing
+// padding equals sign belongs to a long value too.
+fn expand<'a>(text: &str, mut hit: Hit<'a>) -> Hit<'a> {
+    if !hit.expandable || hit.original.is_some() {
+        return hit;
+    }
+    let bytes = text.as_bytes();
+    let value_byte =
+        |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'+' | b'~' | b'-');
+    let mut start = hit.range.start;
+    let mut end = hit.range.end;
+    while start > 0 && value_byte(bytes[start - 1]) {
+        start -= 1;
+    }
+    while end < bytes.len() && value_byte(bytes[end]) {
+        end += 1;
+    }
+    if text[start..end].encode_utf16().count() >= 20
+        && bytes.get(end) == Some(&b'=')
+        && bytes.get(end + 1) != Some(&b'=')
+    {
+        end += 1;
+    }
+    hit.range = start..end;
+    hit
+}
+
+// A JWT-shaped candidate must still parse as a JWT header. The other formats
+// are fixed by their prefix and length, so only this one needs decoding.
+fn structured(spelling: &str) -> bool {
+    if !spelling.starts_with("eyJ") {
+        return true;
+    }
+    let parts: Vec<&str> = spelling.split('.').collect();
+    if parts.len() != 3 {
+        return false;
+    }
+    use base64::Engine as _;
+    let Ok(header) = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[0].trim_end_matches('='))
+    else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&header) else {
+        return false;
+    };
+    value
+        .as_object()
+        .is_some_and(|object| object.get("alg").is_some_and(|alg| alg.is_string()))
+}
+
+fn plain_word(spelling: &str) -> bool {
+    !spelling.is_empty()
+        && spelling.encode_utf16().count() < 24
+        && spelling.bytes().all(|b| b.is_ascii_lowercase())
+}
+
+fn value_shaped(spelling: &str) -> bool {
+    if spelling.encode_utf16().count() < 12 {
+        return false;
+    }
+    let classes: usize = [
+        spelling.bytes().any(|b| b.is_ascii_uppercase()),
+        spelling.bytes().any(|b| b.is_ascii_lowercase()),
+        spelling.bytes().any(|b| b.is_ascii_digit()),
+        spelling.bytes().any(|b| !b.is_ascii_alphanumeric()),
+    ]
+    .into_iter()
+    .map(usize::from)
+    .sum();
+    classes >= 2 && key_entropy(spelling) >= 3.0
+}
+
+// Score a candidate from the value alone and from the words just before it,
+// mirroring accepted() in the OpenCode detector. Strong formats skip
+// scoring; identifiers and timestamps are never secrets unless a password
+// field names them.
+fn accepted(text: &str, hit: &Hit<'_>, r: &Rules) -> bool {
+    let spelling = &text[hit.range.clone()];
+    if !structured(spelling) {
+        return false;
+    }
+    let password = hit
+        .name
+        .is_some_and(|name| r.password_name.is_match(name).unwrap_or(false));
+    if !password
+        && (r.non_secret_value.is_match(spelling).unwrap_or(false) || plain_word(spelling))
+    {
+        return false;
+    }
+    if hit.strength >= 3 {
+        return true;
+    }
+    let mut score = hit.strength;
+    if hit
+        .name
+        .is_some_and(|name| r.nearby_name.is_match(name).unwrap_or(false))
+    {
+        score += 1;
+    }
+    if value_shaped(spelling) {
+        score += 1;
+    }
+    let line_start = text[..hit.range.start].rfind('\n').map_or(0, |i| i + 1);
+    let prefix = &text[line_start..hit.range.start];
+    let mut units = 0;
+    let mut context_start = prefix.len();
+    for (index, ch) in prefix.char_indices().rev() {
+        let width = ch.len_utf16();
+        if units + width > 48 {
+            break;
+        }
+        units += width;
+        context_start = index;
+    }
+    if r.nearby_name.is_match(&prefix[context_start..]).unwrap_or(false) {
+        score += 2;
+    }
+    score >= 3
+}
+
 // Keep the context checks in step with discover() in the OpenCode plugin.
 fn discover(text: &str) -> impl Iterator<Item = (Range<usize>, Option<String>)> {
     let r = &*RULES;
     let mut hits = Vec::new();
-    hits.extend(
-        r.tokens
-            .find_iter(text)
-            .flatten()
-            .map(|m| (m.range(), None)),
-    );
-    hits.extend(
-        r.provider_tokens
-            .find_iter(text)
-            .flatten()
-            .map(|m| (m.range(), None)),
-    );
-    hits.extend(
-        r.webhook
-            .captures_iter(text)
-            .flatten()
-            .map(|m| (m.get(1).unwrap().range(), None)),
-    );
+    hits.extend(r.tokens.find_iter(text).flatten().map(|m| Hit {
+        range: m.range(),
+        original: None,
+        name: None,
+        strength: 3,
+        expandable: true,
+    }));
+    hits.extend(r.provider_tokens.find_iter(text).flatten().map(|m| Hit {
+        range: m.range(),
+        original: None,
+        name: None,
+        strength: 3,
+        expandable: true,
+    }));
+    hits.extend(r.webhook.captures_iter(text).flatten().map(|m| Hit {
+        range: m.get(1).unwrap().range(),
+        original: None,
+        name: None,
+        strength: 3,
+        expandable: false,
+    }));
     for m in r.generic_key.captures_iter(text).flatten() {
         let value = m.get(2).unwrap();
         if !r.generic_key_excluded_name.is_match(&m[1]).unwrap_or(false)
@@ -122,13 +259,25 @@ fn discover(text: &str) -> impl Iterator<Item = (Range<usize>, Option<String>)> 
                 .unwrap_or(false)
             && key_entropy(value.as_str()) >= 3.1
         {
-            hits.push((value.range(), None));
+            hits.push(Hit {
+                range: value.range(),
+                original: None,
+                name: Some(m.get(1).unwrap().as_str()),
+                strength: 1,
+                expandable: true,
+            });
         }
     }
     for m in r.auth_token.captures_iter(text).flatten() {
         let token = m.get(1).or_else(|| m.get(2)).unwrap();
         if is_field_value(token.as_str(), "", r) {
-            hits.push((token.range(), None));
+            hits.push(Hit {
+                range: token.range(),
+                original: None,
+                name: None,
+                strength: 2,
+                expandable: true,
+            });
         }
     }
     if text.contains('@') {
@@ -136,7 +285,13 @@ fn discover(text: &str) -> impl Iterator<Item = (Range<usize>, Option<String>)> 
         for m in r.uri_credential.captures_iter(text).flatten() {
             let pair = m.get(1).unwrap().range();
             if is_field_value(&m[2], "password", r) {
-                hits.push((pair.clone(), None));
+                hits.push(Hit {
+                    range: pair.clone(),
+                    original: None,
+                    name: Some("password"),
+                    strength: 3,
+                    expandable: true,
+                });
             }
             credentials.push(pair);
         }
@@ -152,7 +307,13 @@ fn discover(text: &str) -> impl Iterator<Item = (Range<usize>, Option<String>)> 
                 .peek()
                 .is_none_or(|pair| pair.start > email.start())
             {
-                hits.push((email.range(), None));
+                hits.push(Hit {
+                    range: email.range(),
+                    original: None,
+                    name: None,
+                    strength: 3,
+                    expandable: false,
+                });
             }
         }
     }
@@ -169,7 +330,13 @@ fn discover(text: &str) -> impl Iterator<Item = (Range<usize>, Option<String>)> 
                     && (kind == "PGP PRIVATE KEY BLOCK"
                         || r.key_body.is_match(body).unwrap_or(false))
                 {
-                    hits.push((start.start..marker.end(), None));
+                    hits.push(Hit {
+                        range: start.start..marker.end(),
+                        original: None,
+                        name: None,
+                        strength: 3,
+                        expandable: false,
+                    });
                 }
             }
         }
@@ -198,10 +365,23 @@ fn discover(text: &str) -> impl Iterator<Item = (Range<usize>, Option<String>)> 
             None
         };
         if is_field_value(original.as_deref().unwrap_or(spelling.as_str()), name, r) {
-            hits.push((offset + spelling.start()..offset + spelling.end(), original));
+            hits.push(Hit {
+                range: offset + spelling.start()..offset + spelling.end(),
+                original,
+                name: if name.is_empty() { None } else { Some(name) },
+                strength: 3,
+                expandable: true,
+            });
         }
     }
-    hits.into_iter()
+    let mut out = Vec::new();
+    for hit in hits {
+        let hit = expand(text, hit);
+        if accepted(text, &hit, r) {
+            out.push((hit.range, hit.original));
+        }
+    }
+    out.into_iter()
 }
 
 pub(crate) fn ranges(text: &str) -> Vec<Range<usize>> {

@@ -2132,7 +2132,7 @@ fn transcript_fingerprint_covers_turn_stats_appearance() {
 #[test]
 fn completed_compaction_inserts_a_transcript_divider_once() {
     let mut session = AgentSession::new(Uuid::new_v4());
-    session.begin_turn("Build it");
+    let turn = session.begin_turn("Build it");
     session.push_message(MessageRole::Assistant, "Working.");
     let state = CompactionState {
         status: CompactionStatus::Completed,
@@ -2155,7 +2155,7 @@ fn completed_compaction_inserts_a_transcript_divider_once() {
     let divider = session.messages.last().unwrap();
     assert_eq!(divider.role, MessageRole::Compaction);
     assert_eq!(divider.content, "## Objective\n- Compacted.");
-    assert_eq!(divider.turn_id, None);
+    assert_eq!(divider.turn_id, Some(turn));
 }
 
 #[test]

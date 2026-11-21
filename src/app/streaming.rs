@@ -812,6 +812,7 @@ impl Fintwind {
                         if self.state.selected_session == Some(session_id) {
                             self.invalidate_capsule_todos();
                         }
+                        self.refresh_context_summary_id(session_id);
                         self.state.mark_session_dirty(session_id);
                         if let Some(previous) = previous_kinds {
                             self.splice_active_transcript_rows_after_visibility_change(&previous);
@@ -2033,10 +2034,8 @@ pub(super) fn upsert_compaction_transcript(session: &mut AgentSession, state: &C
     {
         return;
     }
-    // A compaction is a conversation-level divider, not part of the live
-    // turn: attaching it would fold the summary behind "Worked for N".
-    session
-        .messages
-        .push(Message::new(MessageRole::Compaction, summary));
+    // A compaction performed during an execution is part of its work. An idle
+    // /compact still has no turn and keeps its standalone divider.
+    session.push_message(MessageRole::Compaction, summary);
     session.updated_at = unix_time();
 }

@@ -604,27 +604,41 @@ impl Fintwind {
 
     fn reveal_compaction_summary(&mut self, message_id: Uuid, cx: &mut Context<Self>) {
         // A click is a one-shot user action. Finding its row must never run in render.
-        let index = self.selected_session().and_then(|session| {
+        let target = self.selected_session().and_then(|session| {
             session
                 .messages
                 .iter()
-                .position(|message| message.id == message_id)
+                .enumerate()
+                .find(|(_, message)| message.id == message_id)
+                .map(|(index, message)| (index, message.turn_id))
         });
-        if let Some(index) = index
-            && let Some(row) = self
-                .transcript_row_kinds
-                .borrow()
-                .iter()
-                .position(|kind| *kind == TranscriptRowKind::Message(index))
-            {
-                self.active_transcript_rows().scroll_to(ListOffset {
-                    item_ix: row,
-                    offset_in_item: Pixels::ZERO,
-                });
-                self.transcript_anchor_following.set(false);
-                self.transcript_is_scrolled.set(true);
-                cx.notify();
-            }
+        let Some((index, turn)) = target else {
+            return;
+        };
+        let collapsed_turn = turn.filter(|turn| {
+            !self.expanded_turns.contains(turn)
+                && self
+                    .transcript_row_kinds
+                    .borrow()
+                    .contains(&TranscriptRowKind::TurnFold(*turn))
+        });
+        if let Some(turn) = collapsed_turn {
+            self.toggle_turn_fold(turn, false, cx);
+        }
+        if let Some(row) = self
+            .transcript_row_kinds
+            .borrow()
+            .iter()
+            .position(|kind| *kind == TranscriptRowKind::Message(index))
+        {
+            self.active_transcript_rows().scroll_to(ListOffset {
+                item_ix: row,
+                offset_in_item: Pixels::ZERO,
+            });
+            self.transcript_anchor_following.set(false);
+            self.transcript_is_scrolled.set(true);
+            cx.notify();
+        }
     }
 
     pub(super) fn refresh_context_summary_id(&mut self, session_id: Uuid) {

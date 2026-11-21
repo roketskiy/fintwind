@@ -2135,7 +2135,11 @@ fn translate_native_rows(
                 }
                 transcript.messages.push(Message {
                     id: uuid::Uuid::new_v4(),
-                    turn_id: None,
+                    turn_id: transcript
+                        .turns
+                        .last()
+                        .filter(|_| explicit_boundaries && !turn_closed)
+                        .map(|turn| turn.id),
                     role: MessageRole::Compaction,
                     content: text,
                     display_content: None,

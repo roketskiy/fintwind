@@ -8,6 +8,7 @@ pub(crate) struct ContextPlugin {
 }
 
 const PRIVACY_PLUGIN: &str = "prompt-privacy";
+const PRIVACY_RULES: &str = "prompt-privacy-rules.json";
 
 impl ContextPlugin {
     pub(crate) fn create(parent: &Path) -> anyhow::Result<Self> {
@@ -22,11 +23,16 @@ impl ContextPlugin {
             std::fs::write(
                 directory.join(PRIVACY_PLUGIN).join("index.ts"),
                 include_str!("../../../resources/opencode-prompt-privacy-plugin.ts"),
+            )?;
+            std::fs::write(
+                directory.join(PRIVACY_PLUGIN).join(PRIVACY_RULES),
+                include_str!("../../../resources/prompt-privacy-rules.json"),
             )
         })();
         if let Err(error) = write {
             let _ = std::fs::remove_file(directory.join("index.ts"));
             let _ = std::fs::remove_file(directory.join(PRIVACY_PLUGIN).join("index.ts"));
+            let _ = std::fs::remove_file(directory.join(PRIVACY_PLUGIN).join(PRIVACY_RULES));
             let _ = std::fs::remove_dir(directory.join(PRIVACY_PLUGIN));
             let _ = std::fs::remove_dir(&directory);
             return Err(error.into());
@@ -74,6 +80,7 @@ impl Drop for ContextPlugin {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(self.directory.join("index.ts"));
         let _ = std::fs::remove_file(self.directory.join(PRIVACY_PLUGIN).join("index.ts"));
+        let _ = std::fs::remove_file(self.directory.join(PRIVACY_PLUGIN).join(PRIVACY_RULES));
         let _ = std::fs::remove_dir(self.directory.join(PRIVACY_PLUGIN));
         let _ = std::fs::remove_dir(&self.directory);
     }

@@ -29,7 +29,9 @@ fn attach_driver(
     recover_settled_turn: bool,
 ) -> anyhow::Result<Option<(AgentSession, Option<PreparedDriver>)>> {
     let client = daemon.client();
-    let Some(session) = fintwind_client::persistence::hydrate_session_on_client(&client, session_id)? else {
+    let Some(session) =
+        fintwind_client::persistence::hydrate_session_on_client(&client, session_id)?
+    else {
         return Ok(None);
     };
     let response = client.request(
@@ -49,9 +51,9 @@ fn attach_driver(
             return Ok(None);
         }
         let settled = fintwind_client::persistence::hydrate_session_on_client(&client, session_id)?;
-        return Ok(settled.filter(|session| {
-            !session.status.is_busy() && session.active_turn_id().is_none()
-        }).map(|session| (session, None)));
+        return Ok(settled
+            .filter(|session| !session.status.is_busy() && session.active_turn_id().is_none())
+            .map(|session| (session, None)));
     };
     let (event_tx, events) = driver::event_channel(event_wake);
     let handle = driver::attach_remote(
@@ -603,9 +605,11 @@ impl Fintwind {
         let daemon = self.daemon.clone();
         let event_wake = self.event_wake_tx.clone();
         let placement_generation = self.native_placement_generation(session_id);
-        let recover_settled_turn = self.state.sessions.iter().any(|session| {
-            session.id == session_id && session.active_turn_id().is_some()
-        });
+        let recover_settled_turn = self
+            .state
+            .sessions
+            .iter()
+            .any(|session| session.id == session_id && session.active_turn_id().is_some());
         cx.spawn(async move |fintwind, cx| {
             let result = cx
                 .background_executor()
@@ -768,9 +772,9 @@ impl Fintwind {
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(
-                    async move { start_driver(request, cwd).map(|driver| Some((session, Some(driver)))) },
-                )
+                .spawn(async move {
+                    start_driver(request, cwd).map(|driver| Some((session, Some(driver))))
+                })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.finish_runtime_attachment(session_id, placement_generation, result, cx)
@@ -1011,7 +1015,9 @@ impl Fintwind {
                         probe_version: false,
                     },
                 ) {
-                    Ok(fintwind_client::ResponsePayload::ProviderProbe { probe, .. }) => (probe, None),
+                    Ok(fintwind_client::ResponsePayload::ProviderProbe { probe, .. }) => {
+                        (probe, None)
+                    }
                     Ok(_) => (fallback_probe, Some("invalid daemon response".to_owned())),
                     Err(error) => (fallback_probe, Some(error.to_string())),
                 };
@@ -2049,6 +2055,8 @@ impl Fintwind {
             runtime.settled_text.clear();
             runtime.pending_permission = None;
             runtime.pending_user_input = None;
+            runtime.queued_permissions.clear();
+            runtime.queued_user_inputs.clear();
         }
         self.invalidate_checkpoint_refs();
         if self
@@ -2286,6 +2294,8 @@ impl Fintwind {
                 provider_phase: None,
                 pending_permission: None,
                 pending_user_input: None,
+                queued_permissions: Default::default(),
+                queued_user_inputs: Default::default(),
                 last_driver_error: None,
                 last_active_at: Instant::now(),
                 last_background_refresh_at: Instant::now()
@@ -3003,9 +3013,14 @@ impl Fintwind {
         };
         self.invalidate_checkpoint_refs();
         if let Some(runtime) = self.runtimes.get_mut(&session_id) {
-            runtime
-                .pending_events
-                .retain(|event| matches!(event, DriverEvent::BackgroundWork(_)));
+            runtime.pending_events.retain(|event| {
+                matches!(
+                    event,
+                    DriverEvent::BackgroundWork(_)
+                        | DriverEvent::Permission { .. }
+                        | DriverEvent::UserInputRequested { .. }
+                )
+            });
             runtime.pending_steers.clear();
             runtime.stream_remeasure_pending = false;
             runtime.stream_phase = None;
@@ -3017,8 +3032,6 @@ impl Fintwind {
             runtime.provider_phase = None;
             // The new submission supersedes any backoff from the previous turn.
             self.provider_retries.remove(&session_id);
-            runtime.pending_permission = None;
-            runtime.pending_user_input = None;
             runtime.last_active_at = Instant::now();
         }
         // The transcript already shows the turn — the prompt message, its
@@ -3189,7 +3202,8 @@ impl Fintwind {
             }
             self.provider_model_discoveries
                 .insert(result.directory.clone());
-            self.provider_model_discovery_error = result.error.map(|error| (result.directory.clone(), error));
+            self.provider_model_discovery_error =
+                result.error.map(|error| (result.directory.clone(), error));
             if let Some(existing) = self.probes.first_mut() {
                 *existing = result.probe;
             } else {
@@ -3375,11 +3389,9 @@ impl Fintwind {
             | DriverEvent::ReasoningEnded { .. }
             | DriverEvent::TurnTranscriptReconciled { .. }
             | DriverEvent::Activity { .. }
-            | DriverEvent::RichActivity(_)
-            | DriverEvent::Permission { .. } => accepts_turn_output,
-            DriverEvent::UserInputRequested { questions, .. } => {
-                accepts_turn_output && !questions.is_empty()
-            }
+            | DriverEvent::RichActivity(_) => accepts_turn_output,
+            DriverEvent::Permission { .. } => true,
+            DriverEvent::UserInputRequested { questions, .. } => !questions.is_empty(),
             DriverEvent::TurnFinished { .. } | DriverEvent::Error(_) => active_turn,
             DriverEvent::ProcessExited => {
                 active_turn || self.session_has_live_background_work(session_id)

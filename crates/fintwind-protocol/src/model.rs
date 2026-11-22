@@ -1940,6 +1940,7 @@ pub enum DriverEvent {
     UserInputRequested {
         request_id: String,
         questions: Vec<UserInputQuestion>,
+        source_session_id: Option<String>,
     },
     /// The provider accepted a steering message into the running turn.
     SteerAccepted {

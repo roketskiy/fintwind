@@ -276,6 +276,7 @@ export function parseQuestions(value: unknown): Questions | null {
   if (!isRecord(value)) throw new Error("响应格式无效");
   return {
     requestId: reqStr(value["requestId"], 256),
+    agent: value["agent"] == null ? undefined : optStr(value["agent"], 1024),
     questions: reqArr(value["questions"], 32, (entry) => {
       if (!isRecord(entry)) throw new Error("响应格式无效");
       return {

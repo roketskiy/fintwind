@@ -3479,11 +3479,13 @@ fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
         DriverEvent::UserInputRequested {
             request_id,
             questions,
+            source_session_id,
         } => (
             "userInputRequested",
             json!({
                 "requestId": request_id,
                 "questions": questions,
+                "sourceSessionId": source_session_id,
             }),
         ),
         DriverEvent::SteerAccepted { message } => ("steerAccepted", json!({ "message": message })),
@@ -3673,6 +3675,7 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
             DriverEvent::UserInputRequested {
                 request_id: request.request_id,
                 questions: request.questions,
+                source_session_id: request.source_session_id,
             }
         }
         "steerAccepted" => {
@@ -3756,6 +3759,8 @@ struct PermissionWire {
 struct UserInputWire {
     request_id: String,
     questions: Vec<crate::model::UserInputQuestion>,
+    #[serde(default)]
+    source_session_id: Option<String>,
 }
 
 #[derive(Deserialize)]

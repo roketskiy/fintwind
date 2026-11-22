@@ -1249,6 +1249,29 @@ impl Fintwind {
             .is_some_and(BackgroundWorkRegistry::has_live)
     }
 
+    pub(super) fn question_agent_label(&self, session_id: Uuid, source: Option<&str>) -> Option<String> {
+        let source = source?;
+        let session = self.state.sessions.iter().find(|session| session.id == session_id)?;
+        if session.native_session_id.as_deref() == Some(source) {
+            return Some(if session.interaction_mode == InteractionMode::Plan {
+                "plan".to_owned()
+            } else {
+                session.agent_preset.clone().unwrap_or_else(|| "build".to_owned())
+            });
+        }
+        let key = BackgroundWorkKey::new(BackgroundWorkKind::Subagent, source);
+        let item = self.background_work.get(&session_id).and_then(|registry| registry.items.get(&key));
+        Some(match item {
+            Some(item) => match (item.role.as_deref().filter(|role| !role.is_empty()), item.title.trim()) {
+                (Some(role), title) if !title.is_empty() && title != role => format!("{role} · {title}"),
+                (Some(role), _) => role.to_owned(),
+                (None, title) if !title.is_empty() => title.to_owned(),
+                _ => source.to_owned(),
+            },
+            None => source.to_owned(),
+        })
+    }
+
     pub(super) fn background_work_upsert_is_unread(
         &self,
         session_id: Uuid,

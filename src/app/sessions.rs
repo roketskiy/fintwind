@@ -1560,6 +1560,8 @@ impl Fintwind {
             runtime.provider_phase = None;
             runtime.pending_permission = None;
             runtime.pending_user_input = None;
+            runtime.queued_permissions.clear();
+            runtime.queued_user_inputs.clear();
         }
         if has_active_turn {
             self.drop_blank_assistant_messages(session_id);
@@ -1639,10 +1641,18 @@ impl Fintwind {
         }
         if let Some(runtime) = self.runtimes.get_mut(&session_id) {
             runtime.driver.respond(request_id, option_id);
-            runtime.pending_permission = None;
+            runtime.pending_permission = runtime.queued_permissions.pop_front();
         }
         if let Some(session) = self.state.session_mut(session_id) {
-            session.status = SessionStatus::Working;
+            session.status = if self.runtimes.get(&session_id).is_some_and(|runtime| {
+                runtime.pending_permission.is_some() || runtime.pending_user_input.is_some()
+            }) {
+                SessionStatus::Waiting
+            } else if session.active_turn_id().is_some() {
+                SessionStatus::Working
+            } else {
+                SessionStatus::Idle
+            };
         }
         cx.notify();
         true
@@ -1698,12 +1708,20 @@ impl Fintwind {
         }
         if let Some(runtime) = self.runtimes.get_mut(&session_id) {
             runtime.driver.respond_user_input(request_id, answers);
-            runtime.pending_user_input = None;
+            runtime.pending_user_input = runtime.queued_user_inputs.pop_front();
         } else {
             return false;
         }
         if let Some(session) = self.state.session_mut(session_id) {
-            session.status = SessionStatus::Working;
+            session.status = if self.runtimes.get(&session_id).is_some_and(|runtime| {
+                runtime.pending_permission.is_some() || runtime.pending_user_input.is_some()
+            }) {
+                SessionStatus::Waiting
+            } else if session.active_turn_id().is_some() {
+                SessionStatus::Working
+            } else {
+                SessionStatus::Idle
+            };
         }
         cx.notify();
         true
@@ -1854,9 +1872,18 @@ impl Fintwind {
                 return;
             };
             runtime.driver.cancel_user_input(pending.request_id);
+            runtime.pending_user_input = runtime.queued_user_inputs.pop_front();
         }
         if let Some(session) = self.state.session_mut(session_id) {
-            session.status = SessionStatus::Working;
+            session.status = if self.runtimes.get(&session_id).is_some_and(|runtime| {
+                runtime.pending_permission.is_some() || runtime.pending_user_input.is_some()
+            }) {
+                SessionStatus::Waiting
+            } else if session.active_turn_id().is_some() {
+                SessionStatus::Working
+            } else {
+                SessionStatus::Idle
+            };
         }
         self.user_input_answer
             .update(cx, |input, cx| input.clear(cx));

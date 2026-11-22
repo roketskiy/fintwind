@@ -986,29 +986,50 @@ struct PendingSteer {
 
 impl From<ComposerSubmission> for PendingSteer {
     fn from(submission: ComposerSubmission) -> Self {
-        Self { submission, remote_origin: false, interrupted: false, remote_reply: None }
+        Self {
+            submission,
+            remote_origin: false,
+            interrupted: false,
+            remote_reply: None,
+        }
     }
 }
 
 impl PendingSteer {
     fn interrupt_remote(&mut self, reason: &str) {
-        if !self.remote_origin { return; }
+        if !self.remote_origin {
+            return;
+        }
         self.interrupted = true;
         if let Some(reply) = self.remote_reply.take() {
             // Delivery may have raced the terminal event. Do not claim it was
             // rejected, and never retry or queue it on the user's behalf.
-            let _ = reply.try_send(Err(format!("引导结果待确认：{reason}，请核对会话后再发送。")));
+            let _ = reply.try_send(Err(format!(
+                "引导结果待确认：{reason}，请核对会话后再发送。"
+            )));
         }
     }
 }
 
 impl SessionRuntime {
     fn interrupt_remote_steers(&mut self, reason: &str) {
-        for pending in &mut self.pending_steers { pending.interrupt_remote(reason); }
+        for pending in &mut self.pending_steers {
+            pending.interrupt_remote(reason);
+        }
         // Keep only a small late-ack tombstone tail, separate from active work.
-        let mut discard = self.pending_steers.iter().filter(|pending| pending.interrupted).count().saturating_sub(8);
+        let mut discard = self
+            .pending_steers
+            .iter()
+            .filter(|pending| pending.interrupted)
+            .count()
+            .saturating_sub(8);
         self.pending_steers.retain(|pending| {
-            if pending.interrupted && discard > 0 { discard -= 1; false } else { true }
+            if pending.interrupted && discard > 0 {
+                discard -= 1;
+                false
+            } else {
+                true
+            }
         });
     }
 }
@@ -1060,6 +1081,8 @@ struct SessionRuntime {
     provider_phase: Option<ProviderPhase>,
     pending_permission: Option<PendingPermission>,
     pending_user_input: Option<PendingUserInput>,
+    queued_permissions: std::collections::VecDeque<PendingPermission>,
+    queued_user_inputs: std::collections::VecDeque<PendingUserInput>,
     last_driver_error: Option<String>,
     /// When this session last sent or received anything, for idle reaping.
     last_active_at: Instant,
@@ -1071,6 +1094,7 @@ struct SessionRuntime {
 #[derive(Clone)]
 struct PendingUserInput {
     request_id: String,
+    source_session_id: Option<String>,
     questions: Vec<UserInputQuestion>,
     question_index: usize,
     selections: HashMap<String, Vec<String>>,
@@ -1084,6 +1108,7 @@ impl PendingUserInput {
     fn new(request_id: String, questions: Vec<UserInputQuestion>) -> Self {
         Self {
             request_id,
+            source_session_id: None,
             questions,
             question_index: 0,
             selections: HashMap::new(),
@@ -1493,9 +1518,8 @@ pub struct Fintwind {
     model_picker_highlight: Option<usize>,
     model_picker_scroll: ScrollHandle,
     model_picker_scrollbar: Rc<ScrollbarState>,
-    model_picker_loading: RefCell<
-        Option<crate::ui::loading::LoadingDelay<(Option<PathBuf>, ModelPickerTab)>>,
-    >,
+    model_picker_loading:
+        RefCell<Option<crate::ui::loading::LoadingDelay<(Option<PathBuf>, ModelPickerTab)>>>,
     branch_search: Entity<ComposerInput>,
     branch_create_input: Entity<ComposerInput>,
     branch_picker_mode: BranchPickerMode,
@@ -1580,7 +1604,9 @@ pub struct Fintwind {
     composer_attachments: Vec<ComposerAttachment>,
     composer_attachment_imports: HashMap<Uuid, Option<crate::persistence::ComposerDraftKey>>,
     composer_attachment_errors: HashMap<Uuid, composer::AttachmentImportFailure>,
-    composer_attachment_loading: RefCell<Option<crate::ui::loading::LoadingDelay<Option<crate::persistence::ComposerDraftKey>>>>,
+    composer_attachment_loading: RefCell<
+        Option<crate::ui::loading::LoadingDelay<Option<crate::persistence::ComposerDraftKey>>>,
+    >,
     /// Quotes of selected code, chat messages and files, drawn as chips above
     /// the input and folded into the next submission's prompt text. Unlike
     /// attachments these never leave on the `files` channel: a reference is
@@ -1914,7 +1940,8 @@ pub struct Fintwind {
     skills_scan_pending: bool,
     skills_remote_pending: HashMap<(Uuid, PathBuf), Option<bool>>,
     skills_remote_errors: HashMap<(Uuid, PathBuf), (Option<bool>, String)>,
-    skills_remote_loading: RefCell<Option<crate::ui::loading::LoadingDelay<(Uuid, PathBuf, Option<bool>)>>>,
+    skills_remote_loading:
+        RefCell<Option<crate::ui::loading::LoadingDelay<(Uuid, PathBuf, Option<bool>)>>>,
     skills_scan_error: Option<String>,
     skills_loading: RefCell<Option<crate::ui::loading::LoadingDelay<Option<Uuid>>>>,
     /// When the current catalog landed, for the reopen-staleness check.
@@ -2077,7 +2104,8 @@ pub struct Fintwind {
     provider_connectivity_testing: HashMap<String, u64>,
     provider_models_fetching: HashMap<String, u64>,
     provider_connectivity_errors: HashMap<String, String>,
-    provider_connectivity_loading: RefCell<HashMap<String, Option<crate::ui::loading::LoadingDelay<()>>>>,
+    provider_connectivity_loading:
+        RefCell<HashMap<String, Option<crate::ui::loading::LoadingDelay<()>>>>,
     provider_models_loading: RefCell<HashMap<String, Option<crate::ui::loading::LoadingDelay<()>>>>,
     provider_models_errors: HashMap<String, String>,
     providers_form_models_error: Option<String>,
@@ -2273,7 +2301,8 @@ pub struct Fintwind {
     opencode_binary_busy: bool,
     opencode_management_action: Option<settings::OpenCodeManagementAction>,
     opencode_management_error: Option<String>,
-    opencode_management_loading: RefCell<Option<crate::ui::loading::LoadingDelay<settings::OpenCodeManagementAction>>>,
+    opencode_management_loading:
+        RefCell<Option<crate::ui::loading::LoadingDelay<settings::OpenCodeManagementAction>>>,
     opencode_update_status: Option<settings::OpenCodeUpdateStatus>,
     general_workspace_busy: bool,
     general_workspace_resetting: bool,
@@ -2458,13 +2487,13 @@ pub struct Fintwind {
 }
 
 mod activity_diff;
+mod add_project_dialog;
 mod autocomplete;
 mod background_work;
 mod branches;
 mod browser_collaboration;
 mod btw;
 mod command_palette;
-mod add_project_dialog;
 mod commit_dialog;
 mod components;
 mod composer;
@@ -2816,7 +2845,9 @@ impl Fintwind {
     }
 
     fn dismiss_toast(&mut self, cx: &mut Context<Self>) {
-        let Some(toast) = self.toast.take() else { return; };
+        let Some(toast) = self.toast.take() else {
+            return;
+        };
         self.toast_selection.selection.borrow_mut().clear();
         self.toast_selection.registry.borrow_mut().clear();
         if !cx.reduce_motion() {
@@ -2825,7 +2856,11 @@ impl Fintwind {
             cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(TOAST_EXIT_DURATION).await;
                 let _ = this.update(cx, |app, cx| {
-                    if app.exiting_toast.as_ref().is_some_and(|toast| toast.id == id) {
+                    if app
+                        .exiting_toast
+                        .as_ref()
+                        .is_some_and(|toast| toast.id == id)
+                    {
                         app.exiting_toast = None;
                         cx.notify();
                     }
@@ -2840,7 +2875,10 @@ impl Fintwind {
         let Some(toast) = self.toast.as_mut() else {
             return;
         };
-        if matches!(toast.tone, ToastTone::Progress(_)) || toast.paused() || toast.timer_started.is_some() {
+        if matches!(toast.tone, ToastTone::Progress(_))
+            || toast.paused()
+            || toast.timer_started.is_some()
+        {
             return;
         }
 
@@ -2849,15 +2887,14 @@ impl Fintwind {
         toast.timer_started = Some(Instant::now());
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(duration).await;
-            let _ = this.update(cx, |this, cx| {
-                if this
-                    .toast
-                    .as_ref()
-                    .is_some_and(|toast| toast.timer_generation == generation && !toast.paused())
-                {
-                    this.dismiss_toast(cx);
-                }
-            });
+            let _ =
+                this.update(cx, |this, cx| {
+                    if this.toast.as_ref().is_some_and(|toast| {
+                        toast.timer_generation == generation && !toast.paused()
+                    }) {
+                        this.dismiss_toast(cx);
+                    }
+                });
         })
         .detach();
     }
@@ -2923,8 +2960,18 @@ impl Fintwind {
         let mut state = store.load_or_fresh(cwd);
         let client = fintwind_client::WorkspaceClient::new(daemon.client());
         let (migrated, migration_error) = migrate_legacy_projectless_projects(&mut state, &client);
-        let save_error = if migrated { store.save(&mut state).err() } else { None };
-        LoadedWorkspace { draft_store, drafts, state, migration_error, save_error }
+        let save_error = if migrated {
+            store.save(&mut state).err()
+        } else {
+            None
+        };
+        LoadedWorkspace {
+            draft_store,
+            drafts,
+            state,
+            migration_error,
+            save_error,
+        }
     }
 
     fn new_workspace_view(
@@ -2944,12 +2991,16 @@ impl Fintwind {
         } = loaded;
         state.apply_daemon_settings(daemon.settings());
         if embedded {
-            state.todo_enabled = daemon.settings().extra
+            state.todo_enabled = daemon
+                .settings()
+                .extra
                 .get(fintwind_protocol::settings::OPENCODE_TODO_KEY)
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
         }
-        if store.publishes_daemon_settings() && let Err(error) = daemon.update_settings(state.daemon_settings()) {
+        if store.publishes_daemon_settings()
+            && let Err(error) = daemon.update_settings(state.daemon_settings())
+        {
             eprintln!("could not normalize daemon settings after migration: {error:#}");
         }
         if !embedded {
@@ -3362,10 +3413,12 @@ impl Fintwind {
             let toast_dismiss_focus = cx.focus_handle();
             cx.on_focus(&toast_dismiss_focus, window, |app, _, cx| {
                 app.update_toast_pause(cx, |toast| toast.focused = true);
-            }).detach();
+            })
+            .detach();
             cx.on_blur(&toast_dismiss_focus, window, |app, _, cx| {
                 app.update_toast_pause(cx, |toast| toast.focused = false);
-            }).detach();
+            })
+            .detach();
             let onboarding_add_project_focus = cx.focus_handle();
             let onboarding_projectless_focus = cx.focus_handle();
             let sidebar_add_project_focus = cx.focus_handle();
@@ -3464,11 +3517,13 @@ impl Fintwind {
                     ComposerEvent::Submit(prompt) => {
                         if this.composer_attachments_unresolved() {
                             this.defer_restore_attachment_prompt(prompt.clone(), cx);
-                        } else if let Some(session_id) = this.selected_session().and_then(|session| {
-                            (btw::question(prompt).is_none()
-                                && this.response_fork_preparations.contains_key(&session.id))
-                            .then_some(session.id)
-                        }) {
+                        } else if let Some(session_id) =
+                            this.selected_session().and_then(|session| {
+                                (btw::question(prompt).is_none()
+                                    && this.response_fork_preparations.contains_key(&session.id))
+                                .then_some(session.id)
+                            })
+                        {
                             this.defer_restore_composer_after_fork(session_id, prompt.clone(), cx);
                         } else if let Some(submission) =
                             this.submission_with_attachments(prompt, cx)
@@ -3479,11 +3534,13 @@ impl Fintwind {
                     ComposerEvent::SubmitSteer(prompt) => {
                         if this.composer_attachments_unresolved() {
                             this.defer_restore_attachment_prompt(prompt.clone(), cx);
-                        } else if let Some(session_id) = this.selected_session().and_then(|session| {
-                            (btw::question(prompt).is_none()
-                                && this.response_fork_preparations.contains_key(&session.id))
-                            .then_some(session.id)
-                        }) {
+                        } else if let Some(session_id) =
+                            this.selected_session().and_then(|session| {
+                                (btw::question(prompt).is_none()
+                                    && this.response_fork_preparations.contains_key(&session.id))
+                                .then_some(session.id)
+                            })
+                        {
                             this.defer_restore_composer_after_fork(session_id, prompt.clone(), cx);
                         } else if let Some(submission) =
                             this.submission_with_attachments(prompt, cx)
@@ -3553,7 +3610,9 @@ impl Fintwind {
                 let task_store = this.store.clone();
                 let mut final_state = std::mem::replace(&mut this.state, PersistedState::empty());
                 let quit = cx.background_executor().spawn(async move {
-                    if save_navigation && let Err(error) = ssh_page::save_ssh_navigation(active_host) {
+                    if save_navigation
+                        && let Err(error) = ssh_page::save_ssh_navigation(active_host)
+                    {
                         eprintln!("could not save SSH navigation: {error:#}");
                     }
                     if let Err(error) = task_store.flush(&mut final_state) {

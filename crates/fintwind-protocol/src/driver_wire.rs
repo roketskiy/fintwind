@@ -109,11 +109,13 @@ pub fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
         DriverEvent::UserInputRequested {
             request_id,
             questions,
+            source_session_id,
         } => (
             "userInputRequested",
             json!({
                 "requestId": request_id,
                 "questions": questions,
+                "sourceSessionId": source_session_id,
             }),
         ),
         DriverEvent::SteerAccepted { message } => ("steerAccepted", json!({ "message": message })),
@@ -295,6 +297,7 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
             DriverEvent::UserInputRequested {
                 request_id: request.request_id,
                 questions: request.questions,
+                source_session_id: request.source_session_id,
             }
         }
         "steerAccepted" => {
@@ -378,6 +381,8 @@ struct PermissionWire {
 struct UserInputWire {
     request_id: String,
     questions: Vec<UserInputQuestion>,
+    #[serde(default)]
+    source_session_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -437,6 +442,7 @@ mod tests {
     fn structured_user_input_round_trips_through_the_daemon_wire() {
         let wire = event_to_wire(DriverEvent::UserInputRequested {
             request_id: "request-1".into(),
+            source_session_id: None,
             questions: vec![UserInputQuestion {
                 id: "deployment".into(),
                 header: "Environment".into(),
@@ -454,6 +460,7 @@ mod tests {
         let DriverEvent::UserInputRequested {
             request_id,
             questions,
+            ..
         } = event_from_wire(wire).unwrap()
         else {
             panic!("the event changed variants during its wire round trip");

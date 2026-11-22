@@ -68,6 +68,7 @@ export interface Question {
 }
 export interface Questions {
   requestId: string;
+  agent?: string;
   questions: Question[];
 }
 export interface TodoSnapshot {

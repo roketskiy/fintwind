@@ -113,22 +113,23 @@ impl Fintwind {
         };
         if opened {
             runtime.stream_phase = Some(StreamPhase::Text);
-        } else if already_open && self.state.selected_session == Some(session_id)
+        } else if already_open
+            && self.state.selected_session == Some(session_id)
             && let Some(message_id) = runtime.open_text.get(&part).copied()
-                && let Some(index) = self
-                    .state
-                    .sessions
-                    .iter()
-                    .find(|session| session.id == session_id)
-                    .and_then(|session| {
-                        session
-                            .messages
-                            .iter()
-                            .position(|message| message.id == message_id)
-                    })
-            {
-                self.remeasure_transcript_message(index);
-            }
+            && let Some(index) = self
+                .state
+                .sessions
+                .iter()
+                .find(|session| session.id == session_id)
+                .and_then(|session| {
+                    session
+                        .messages
+                        .iter()
+                        .position(|message| message.id == message_id)
+                })
+        {
+            self.remeasure_transcript_message(index);
+        }
         self.state.mark_session_dirty(session_id);
     }
 
@@ -969,29 +970,39 @@ impl Fintwind {
                 detail,
                 options,
             } => {
-                if self.accepts_turn_output(session_id) {
-                    runtime.provider_phase = None;
-                    runtime.pending_permission = Some(PendingPermission {
-                        request_id,
-                        title,
-                        detail,
-                        options,
-                    });
-                    if let Some(session) = self.state.session_mut(session_id) {
-                        session.status = SessionStatus::Waiting;
-                    }
+                runtime.provider_phase = None;
+                let permission = PendingPermission {
+                    request_id,
+                    title,
+                    detail,
+                    options,
+                };
+                if runtime.pending_permission.is_some() {
+                    runtime.queued_permissions.push_back(permission);
+                } else {
+                    runtime.pending_permission = Some(permission);
+                }
+                if let Some(session) = self.state.session_mut(session_id) {
+                    session.status = SessionStatus::Waiting;
                 }
             }
             DriverEvent::UserInputRequested {
                 request_id,
                 questions,
+                source_session_id,
             } => {
-                if self.accepts_turn_output(session_id) && !questions.is_empty() {
+                if !questions.is_empty() {
                     runtime.provider_phase = None;
-                    runtime.pending_user_input = Some(PendingUserInput::new(request_id, questions));
-                    if self.state.selected_session == Some(session_id) {
-                        self.user_input_answer
-                            .update(cx, |input, cx| input.clear(cx));
+                    let mut input = PendingUserInput::new(request_id, questions);
+                    input.source_session_id = source_session_id;
+                    if runtime.pending_user_input.is_some() {
+                        runtime.queued_user_inputs.push_back(input);
+                    } else {
+                        runtime.pending_user_input = Some(input);
+                        if self.state.selected_session == Some(session_id) {
+                            self.user_input_answer
+                                .update(cx, |input, cx| input.clear(cx));
+                        }
                     }
                     if let Some(session) = self.state.session_mut(session_id) {
                         session.status = SessionStatus::Waiting;
@@ -1007,9 +1018,17 @@ impl Fintwind {
                     // Providers normally echo the exact transport text, but a
                     // normalized echo still acknowledges the oldest pending
                     // steer. Preserve its attachment presentation metadata.
-                    .or_else(|| runtime.pending_steers.iter().position(|pending| !pending.interrupted).and_then(|index| runtime.pending_steers.remove(index)))
+                    .or_else(|| {
+                        runtime
+                            .pending_steers
+                            .iter()
+                            .position(|pending| !pending.interrupted)
+                            .and_then(|index| runtime.pending_steers.remove(index))
+                    })
                     .unwrap_or_else(|| ComposerSubmission::plain(message.clone()).into());
-                if pending.interrupted { return true; }
+                if pending.interrupted {
+                    return true;
+                }
                 let submission = pending.submission;
                 // The provider folded the message into the live turn. Append
                 // it to the same turn so the transcript mirrors the provider
@@ -1032,14 +1051,27 @@ impl Fintwind {
                     .iter()
                     .position(|pending| pending.submission.provider_prompt() == message)
                     .and_then(|index| runtime.pending_steers.remove(index))
-                    .or_else(|| runtime.pending_steers.iter().position(|pending| !pending.interrupted).and_then(|index| runtime.pending_steers.remove(index)));
+                    .or_else(|| {
+                        runtime
+                            .pending_steers
+                            .iter()
+                            .position(|pending| !pending.interrupted)
+                            .and_then(|index| runtime.pending_steers.remove(index))
+                    });
                 // An unmatched rejection cannot prove there is a user-owned
                 // message to queue. In particular, never revive an old remote steer.
-                let Some(pending) = pending else { return true; };
-                if pending.interrupted { return true; }
+                let Some(pending) = pending else {
+                    return true;
+                };
+                if pending.interrupted {
+                    return true;
+                }
                 let submission = pending.submission;
                 if let Some(reply) = pending.remote_reply {
-                    let _ = reply.try_send(Err(format!("引导未交付：{}", compact_driver_error(&reason))));
+                    let _ = reply.try_send(Err(format!(
+                        "引导未交付：{}",
+                        compact_driver_error(&reason)
+                    )));
                     return true;
                 }
                 let (busy, settled_cleanly) = self
@@ -1358,7 +1390,11 @@ impl Fintwind {
                 self.drop_blank_assistant_messages(session_id);
                 let needs_fallback = !self.turn_has_assistant_message(session_id);
                 if let Some(session) = self.state.session_mut(session_id) {
-                    session.status = if success {
+                    session.status = if runtime.pending_permission.is_some()
+                        || runtime.pending_user_input.is_some()
+                    {
+                        SessionStatus::Waiting
+                    } else if success {
                         SessionStatus::Idle
                     } else {
                         SessionStatus::Failed
@@ -1385,8 +1421,6 @@ impl Fintwind {
                     },
                 );
                 self.reconcile_native_turn_stats(session_id, cx);
-                runtime.pending_permission = None;
-                runtime.pending_user_input = None;
                 // The agent may have edited files or switched branches, so the
                 // cached view of the workspace is no longer trustworthy. This
                 // handler has no `Context`, so the drain loop acts on the flag.
@@ -1467,6 +1501,8 @@ impl Fintwind {
                 self.provider_retries.remove(&session_id);
                 runtime.pending_permission = None;
                 runtime.pending_user_input = None;
+                runtime.queued_permissions.clear();
+                runtime.queued_user_inputs.clear();
                 self.drop_blank_assistant_messages(session_id);
                 let failure_message = runtime
                     .last_driver_error

@@ -1257,6 +1257,8 @@ impl Fintwind {
         let questions = question_source.filter(|_| questions_supported)
             .map(|pending| json!({
                 "requestId": pending.request_id,
+                "agent": self.question_agent_label(session.id, pending.source_session_id.as_deref())
+                    .map(|agent| bounded_text(&agent, 1024)),
                 "questions": pending.questions.iter().take(32).map(|question| json!({
                     "id": question.id,
                     "header": bounded_text(&question.header, 1024),

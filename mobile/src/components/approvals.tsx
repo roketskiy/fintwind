@@ -382,6 +382,7 @@ function QuestionForm({
     >
       <Card size="sm" className="apc-card min-w-0">
         <CardContent className="min-w-0">
+          {questions.agent && <div className="mb-2 text-xs font-medium text-muted-foreground">{questions.agent}</div>}
           {reviewing ? (
             <div ref={review} tabIndex={-1} aria-label="检查回答" aria-live="polite" className="apc-review">
               {questions.questions.map((question, questionIndex) => {

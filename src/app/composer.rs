@@ -689,12 +689,23 @@ impl Fintwind {
                 ))
         });
 
+        let agent = self.state.selected_session.and_then(|session_id| {
+            self.question_agent_label(session_id, pending.source_session_id.as_deref())
+        });
+
         let header = div()
             .w_full()
             .py(px(2.0))
             .flex()
             .items_center()
             .gap(px(8.0))
+            .children(agent.map(|agent| {
+                div()
+                    .text_size(ui_px(10.5))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.text_secondary)
+                    .child(SharedString::from(agent))
+            }))
             .child(
                 div()
                     .text_size(ui_px(10.5))

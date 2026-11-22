@@ -180,7 +180,9 @@ enum CommandMessage {
     Goal(fintwind_protocol::goal::GoalAction),
     RefreshGoal,
     Cancel,
-    WatchdogStopChild { session_id: String },
+    WatchdogStopChild {
+        session_id: String,
+    },
     CompactChild {
         session_id: String,
     },
@@ -382,6 +384,7 @@ fn form_delete_path(session_id: &str, form_id: &str) -> String {
 /// are still served. The reason tells the agent why it has no answer.
 fn cancel_form_on_server(
     server: &crate::opencode_pool::PooledServer,
+    directory: &str,
     preferred_session: &str,
     form_id: &str,
 ) -> anyhow::Result<()> {
@@ -406,7 +409,13 @@ fn cancel_form_on_server(
         Err(error) => error,
     };
     let pending = crate::opencode_session::request_form_list(server.port, |path| {
-        server.request("GET", path, None)
+        server.request_for_directory_with_timeout(
+            directory,
+            "GET",
+            path,
+            None,
+            Duration::from_secs(2),
+        )
     })
     .ok();
     let owner = pending
@@ -417,8 +426,10 @@ fn cancel_form_on_server(
     if pending.is_some() && owner.is_none() {
         return Ok(());
     }
-    if let Some(owner) = owner.filter(|owner| owner != preferred_session) {
-        if let Ok(()) = attempt(&owner) { return Ok(()) }
+    if let Some(owner) = owner.filter(|owner| owner != preferred_session)
+        && let Ok(()) = attempt(&owner)
+    {
+        return Ok(());
     }
     Err(first_error)
 }
@@ -817,7 +828,14 @@ pub struct OpenCodeDriver {
 impl OpenCodeDriver {
     #[cfg(test)]
     pub fn start(options: DriverStartOptions, events: DriverEventSender) -> anyhow::Result<Self> {
-        Self::start_with_tools(options, events, None, None, None, Arc::new(AtomicBool::new(true)))
+        Self::start_with_tools(
+            options,
+            events,
+            None,
+            None,
+            None,
+            Arc::new(AtomicBool::new(true)),
+        )
     }
 
     pub(crate) fn start_with_tools(
@@ -992,15 +1010,16 @@ impl OpenCodeDriver {
         // would ride the same endpoint. The model reference on this wire is
         // `{id, providerID}`, unlike v1's `{providerID, modelID}`.
         if let Some(model) = model.as_ref()
-            && let Some(model_ref) = opencode_model_ref(model, reasoning_effort.as_deref()) {
-                server
-                    .request(
-                        "POST",
-                        &format!("/api/session/{}/model", encode_path_segment(&session_id)),
-                        Some(&json!({"model": model_ref})),
-                    )
-                    .context("switch OpenCode model/variant")?;
-            }
+            && let Some(model_ref) = opencode_model_ref(model, reasoning_effort.as_deref())
+        {
+            server
+                .request(
+                    "POST",
+                    &format!("/api/session/{}/model", encode_path_segment(&session_id)),
+                    Some(&json!({"model": model_ref})),
+                )
+                .context("switch OpenCode model/variant")?;
+        }
 
         let usage_metadata = Arc::new(OpenCodeUsageMetadata::default());
         let previous_usage_path = format!(
@@ -1069,10 +1088,7 @@ impl OpenCodeDriver {
         // renders as a Compaction section. One that was still running
         // re-announces itself through `session.compaction.delta` even without
         // `started`.
-        if let Some(state) = previous_usage
-            .as_ref()
-            .and_then(latest_opencode_compaction)
-        {
+        if let Some(state) = previous_usage.as_ref().and_then(latest_opencode_compaction) {
             let _ = events.send(DriverEvent::CompactionUpdated(state));
         }
 
@@ -1177,16 +1193,20 @@ impl OpenCodeDriver {
         let poll_forms = Arc::clone(&forms);
         let permission_feed = Arc::clone(&event_feed);
         let poll_family = Arc::clone(&session_family);
+        let cwd = Arc::new(Mutex::new(cwd));
+        let poll_cwd = Arc::clone(&cwd);
         thread::Builder::new()
             .name("fintwind-opencode-permissions".into())
             .spawn(move || {
                 while !permission_feed.is_cancelled() {
-                    if let Ok(pending) = crate::opencode_session::request_json_on_port(
+                    let directory = opencode_location_directory(&poll_cwd.lock());
+                    if let Ok(pending) = crate::opencode_session::request_json_on_port_with_directory(
                         permission_port,
                         "GET",
                         "/api/permission/request",
                         None,
                         Duration::from_secs(2),
+                        Some(&directory),
                     ) {
                         let Some(requests) = pending.get("data").and_then(Value::as_array) else {
                             thread::sleep(PERMISSION_POLL_INTERVAL);
@@ -1204,7 +1224,7 @@ impl OpenCodeDriver {
                             }
                             let adapted = json!({
                                 "id": request.get("id").cloned().unwrap_or(Value::Null),
-                                "sessionID": request.get("sessionID").cloned().unwrap_or(Value::Null),
+                                "sessionID": request_session,
                                 "permission": request.get("action").cloned().unwrap_or(Value::Null),
                                 "patterns": request.get("resources").cloned().unwrap_or(Value::Null),
                                 "always": request.get("save").cloned().unwrap_or(Value::Null),
@@ -1228,12 +1248,13 @@ impl OpenCodeDriver {
                     if let Ok(pending) = crate::opencode_session::request_form_list(
                         permission_port,
                         |path| {
-                            crate::opencode_session::request_json_on_port(
+                            crate::opencode_session::request_json_on_port_with_directory(
                                 permission_port,
                                 "GET",
                                 path,
                                 None,
                                 Duration::from_secs(2),
+                                Some(&directory),
                             )
                         },
                     ) {
@@ -1276,7 +1297,6 @@ impl OpenCodeDriver {
         let stream_family = Arc::clone(&session_family);
         let stream_background_shells = Arc::clone(&background_shells);
         let stream_liveness = server.liveness();
-        let cwd = Arc::new(Mutex::new(cwd));
         let stream_cwd = Arc::clone(&cwd);
         let background_refresh_generation = Arc::new(AtomicU64::new(0));
         let stream_background_generation = Arc::clone(&background_refresh_generation);
@@ -1349,10 +1369,19 @@ impl OpenCodeDriver {
                                 let session = event_session_id(&value);
                                 let belongs = session == Some(stream_session.as_str())
                                     || session.is_some_and(|id| state.children.contains_key(id));
-                                if belongs && watchdog.observe(&value, watchdog_enabled.load(Ordering::Acquire)) {
-                                    let _ = stream_event_sink.send(DriverEvent::Error(tr!("errors.watchdog_repeat")));
-                                    if let Some(child) = session.filter(|id| *id != stream_session) {
-                                        let _ = stream_commands.send(CommandMessage::WatchdogStopChild { session_id: child.to_owned() });
+                                if belongs
+                                    && watchdog
+                                        .observe(&value, watchdog_enabled.load(Ordering::Acquire))
+                                {
+                                    let _ = stream_event_sink
+                                        .send(DriverEvent::Error(tr!("errors.watchdog_repeat")));
+                                    if let Some(child) = session.filter(|id| *id != stream_session)
+                                    {
+                                        let _ = stream_commands.send(
+                                            CommandMessage::WatchdogStopChild {
+                                                session_id: child.to_owned(),
+                                            },
+                                        );
                                     }
                                     let _ = stream_commands.send(CommandMessage::Cancel);
                                 }
@@ -1388,10 +1417,11 @@ impl OpenCodeDriver {
                             &mut state,
                             &stream_event_sink,
                             stream_port,
-                        ) {
-                            watchdog.clear(&stream_session);
-                            reconciliation.mark_completed(completed);
-                        }
+                        )
+                    {
+                        watchdog.clear(&stream_session);
+                        reconciliation.mark_completed(completed);
+                    }
                 }
                 if !stream_feed.is_cancelled() {
                     let _ = stream_event_sink.send(DriverEvent::ProcessExited);
@@ -2028,6 +2058,7 @@ impl OpenCodeDriver {
                             option_id,
                             session_id,
                         } => {
+                            let directory = opencode_location_directory(&worker_cwd.lock());
                             let target = session_id
                                 .filter(|id| !id.is_empty())
                                 .unwrap_or_else(|| worker_session.clone());
@@ -2038,7 +2069,10 @@ impl OpenCodeDriver {
                                         &option_id,
                                     )
                                 },
-                                |path| worker_server.request("GET", path, None),
+                                |path| worker_server.request_for_directory_with_timeout(
+                                    &directory,
+                                    "GET", path, None, Duration::from_secs(2),
+                                ),
                                 |path| {
                                     post_permission_decision(
                                         |body| worker_server.request("POST", path, Some(body)),
@@ -2062,6 +2096,7 @@ impl OpenCodeDriver {
                             answers,
                             session_id,
                         } => {
+                            let directory = opencode_location_directory(&worker_cwd.lock());
                             // Current opencode routes the question tool's
                             // answers through the form that carried the
                             // prompt; the dedicated question route stays for
@@ -2087,7 +2122,10 @@ impl OpenCodeDriver {
                                     |_path| {
                                         crate::opencode_session::request_form_list(
                                             worker_server.port,
-                                            |path| worker_server.request("GET", path, None),
+                                            |path| worker_server.request_for_directory_with_timeout(
+                                                &directory,
+                                                "GET", path, None, Duration::from_secs(2),
+                                            ),
                                         )
                                     },
                                     |_| Ok(Value::Null),
@@ -2135,6 +2173,7 @@ impl OpenCodeDriver {
                             request_id,
                             session_id,
                         } => {
+                            let directory = opencode_location_directory(&worker_cwd.lock());
                             // Skipping a question is the provider's own cancel
                             // path: the form settles as cancelled and the
                             // question tool reports that rejection to the
@@ -2147,7 +2186,12 @@ impl OpenCodeDriver {
                                     .filter(|id| !id.is_empty())
                                     .or(stored_session)
                                     .unwrap_or_else(|| worker_session.clone());
-                                cancel_form_on_server(&worker_server, &target, &request_id)
+                                cancel_form_on_server(
+                                    &worker_server,
+                                    &directory,
+                                    &target,
+                                    &request_id,
+                                )
                             } else {
                                 let path = format!(
                                     "/api/question/{}/reject",
@@ -3591,10 +3635,14 @@ fn dispatch_server_event(
             if let (Some(id), Some("user"), Some(text)) = (
                 payload.get("inboxID").and_then(Value::as_str),
                 payload.pointer("/item/type").and_then(Value::as_str),
-                payload.pointer("/item/payload/text").and_then(Value::as_str),
+                payload
+                    .pointer("/item/payload/text")
+                    .and_then(Value::as_str),
             ) {
                 let pending = state.child_inbox.entry(session.to_owned()).or_default();
-                if !state.child_consumed_inputs.contains(&(session.to_owned(), id.to_owned()))
+                if !state
+                    .child_consumed_inputs
+                    .contains(&(session.to_owned(), id.to_owned()))
                     && !pending.iter().any(|(existing, _)| existing == id)
                 {
                     pending.push_back((id.to_owned(), text.to_owned()));
@@ -3616,7 +3664,9 @@ fn dispatch_server_event(
                     .child_consumed_inputs
                     .insert((session.to_owned(), id.to_owned()));
             }
-            if kind == "session.inbox.delivered" && let Some(text) = text {
+            if kind == "session.inbox.delivered"
+                && let Some(text) = text
+            {
                 if !state.children.contains_key(session) {
                     let mut child = OpenCodeChildSession::new(session, root, payload);
                     child.item.title.clear();
@@ -3707,7 +3757,13 @@ fn dispatch_server_event(
             restore_event_output(value, port, &state.directory, root, &["text", "summary"])
         }
         "session.tool.success" | "session.tool.error" | "session.tool.failed" => {
-            restore_event_output(value, port, &state.directory, root, &["content", "output", "error"])
+            restore_event_output(
+                value,
+                port,
+                &state.directory,
+                root,
+                &["content", "output", "error"],
+            )
         }
         _ => None,
     };
@@ -3730,14 +3786,20 @@ fn restore_event_output(
     session: &str,
     keys: &[&str],
 ) -> Option<Value> {
-    let property = if event.get("data").is_some() { "data" } else { "properties" };
+    let property = if event.get("data").is_some() {
+        "data"
+    } else {
+        "properties"
+    };
     let mut restored = event.clone();
     let fields = restored.get_mut(property)?.as_object_mut()?;
     crate::context_plugin::restore_output(
         port,
         Some(directory),
         session,
-        fields.iter_mut().filter_map(|(key, value)| keys.contains(&key.as_str()).then_some(value)),
+        fields
+            .iter_mut()
+            .filter_map(|(key, value)| keys.contains(&key.as_str()).then_some(value)),
     );
     Some(restored)
 }
@@ -3770,6 +3832,10 @@ fn handle_child_event(
     match kind {
         "form.created" => {
             let _ = request_user_input_from_form(payload, &state.forms, events);
+            return;
+        }
+        "question.asked" | "question.v2.asked" => {
+            request_user_input(payload, events);
             return;
         }
         "form.replied" | "form.cancelled" => {
@@ -5081,6 +5147,7 @@ fn request_user_input(properties: &Value, events: &impl DriverEventSink) {
         let _ = events.send(DriverEvent::UserInputRequested {
             request_id: request_id.to_owned(),
             questions,
+            source_session_id: value_session_id(properties).map(str::to_owned),
         });
     }
 }
@@ -5181,6 +5248,7 @@ fn request_user_input_from_form(
     let _ = events.send(DriverEvent::UserInputRequested {
         request_id: form_id.to_owned(),
         questions,
+        source_session_id: value_session_id(form).map(str::to_owned),
     });
     Some(())
 }
@@ -7135,6 +7203,7 @@ mod tests {
         let DriverEvent::UserInputRequested {
             request_id,
             questions,
+            ..
         } = event_rx.try_recv().unwrap()
         else {
             panic!("OpenCode question.asked must use the structured question event");
@@ -7180,6 +7249,7 @@ mod tests {
         let DriverEvent::UserInputRequested {
             request_id,
             questions,
+            ..
         } = event_rx.try_recv().unwrap()
         else {
             panic!("form.created must deliver the structured question event");
@@ -7529,6 +7599,7 @@ mod tests {
                 DriverEvent::UserInputRequested {
                     request_id,
                     questions,
+                    ..
                 } => break (request_id, questions),
                 DriverEvent::Error(error) => panic!("the server reported: {error}"),
                 _ => {}

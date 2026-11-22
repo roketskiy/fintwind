@@ -1791,7 +1791,7 @@ impl Fintwind {
                     });
                     let ctx = ctx.with_privacy(view.and_then(|view| {
                         view.privacy(
-                            privacy_enabled && message.role == MessageRole::User,
+                            privacy_enabled && (message.role == MessageRole::User || !message.streaming),
                             window.current_view(),
                             cx,
                         )

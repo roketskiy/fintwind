@@ -616,6 +616,7 @@ impl OpenCodeServer {
             ])
             .env("OPENCODE_SERVER_PASSWORD", &password)
             .env("OPENCODE_SERVER_USERNAME", "opencode")
+            .env("FINTWIND_OPENCODE_SERVER_PORT", port.to_string())
             .current_dir(cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::null())

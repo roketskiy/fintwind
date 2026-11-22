@@ -132,19 +132,16 @@ fn opencode_session_permissions(mode: RuntimeMode, interaction_mode: Interaction
         };
         return json!([
             { "action": "shell", "resource": "*", "effect": effect },
-            { "action": "fintwind_browser_*", "resource": "*", "effect": "allow" },
         ]);
     }
     match access {
         RuntimeMode::Ask => json!([
             { "action": "edit", "resource": "*", "effect": "ask" },
             { "action": "shell", "resource": "*", "effect": "ask" },
-            { "action": "fintwind_browser_*", "resource": "*", "effect": "allow" },
         ]),
         RuntimeMode::AutoAcceptEdits => json!([
             { "action": "edit", "resource": "*", "effect": "allow" },
             { "action": "shell", "resource": "*", "effect": "ask" },
-            { "action": "fintwind_browser_*", "resource": "*", "effect": "allow" },
         ]),
         _ => json!([{ "action": "*", "resource": "*", "effect": "allow" }]),
     }
@@ -728,37 +725,6 @@ fn opencode_location_directory(cwd: &Path) -> String {
     crate::opencode_session::resolve_request_directory(cwd)
 }
 
-/// Client-hosted MCP (`/api/experimental/client-mcp`) arrived in OpenCode
-/// 2.1.4. When a browser binding fails, state the installed CLI version if
-/// it predates that endpoint; otherwise the attach error stands on its own.
-/// Probed once per binary: driver start is already off the UI thread, and
-/// this only runs on the binding-failure path.
-fn browser_mcp_version_hint(binary: &Path) -> String {
-    static MINIMUM: &str = "2.1.4";
-    static PROBED: std::sync::OnceLock<std::sync::Mutex<HashMap<PathBuf, Option<String>>>> =
-        std::sync::OnceLock::new();
-    let installed: Option<String> = PROBED
-        .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
-        .lock()
-        .ok()
-        .and_then(|mut versions| {
-            versions
-                .entry(binary.to_path_buf())
-                .or_insert_with(|| crate::model::probe_provider_version(binary))
-                .clone()
-        });
-    match installed {
-        Some(version)
-            if semver::Version::parse(&version).is_ok_and(|current| {
-                semver::Version::parse(MINIMUM).is_ok_and(|minimum| current < minimum)
-            }) =>
-        {
-            format!(" (installed OpenCode {version}; browser tools need {MINIMUM} or newer)")
-        }
-        _ => String::new(),
-    }
-}
-
 pub(crate) fn reconcile_saved_submission(
     port: u16,
     session: &str,
@@ -796,7 +762,6 @@ fn verify_resume_location(session: &Value, cwd: &Path, session_id: &str) -> anyh
 }
 
 pub struct OpenCodeDriver {
-    browser_binding: Option<crate::browser_mcp::Binding>,
     scheduled_binding: Option<crate::scheduled::mcp::Binding>,
     // `Drop` releases this lease before waking the worker, guaranteeing that
     // final process teardown runs on the worker rather than the UI thread.
@@ -833,7 +798,6 @@ impl OpenCodeDriver {
             events,
             None,
             None,
-            None,
             Arc::new(AtomicBool::new(true)),
         )
     }
@@ -841,7 +805,6 @@ impl OpenCodeDriver {
     pub(crate) fn start_with_tools(
         options: DriverStartOptions,
         events: DriverEventSender,
-        browser: Option<crate::browser_mcp::Runtime>,
         blobs: Option<Arc<crate::blob_store::BlobStore>>,
         scheduled: Option<crate::scheduled::tools::Runtime>,
         watchdog_enabled: Arc<AtomicBool>,
@@ -869,8 +832,6 @@ impl OpenCodeDriver {
 
         // OpenCode hosts many sessions per process, and a second
         // `opencode serve` in the same workspace contends with the live one.
-        // The browser MCP host attaches per directory after the session
-        // exists, so the server itself needs no browser-specific startup.
         let server = crate::opencode_pool::acquire(&binary, &cwd)?;
 
         // Reuse the native session when resuming so the conversation, and the
@@ -940,28 +901,6 @@ impl OpenCodeDriver {
                     .ok_or_else(|| anyhow!("OpenCode returned no session ID"))?
             }
         };
-        let browser_binding = browser.and_then(|runtime| {
-            match crate::browser_mcp::Binding::attach(
-                &server,
-                &location_directory,
-                &session_id,
-                runtime,
-            ) {
-                Ok(binding) => Some(binding),
-                Err(error) => {
-                    // Browser integration is optional, ordinary chat is not.
-                    // No binding means every tool call fails closed. Do not make
-                    // an unsupported or disabled MCP host break provider recovery.
-                    // Name the installed CLI when it predates the client-hosted
-                    // MCP endpoint, so the log states the version requirement.
-                    let hint = browser_mcp_version_hint(&binary);
-                    eprintln!("Fintwind browser MCP unavailable{hint}: {error:#}");
-                    crate::opencode_diagnostics::record("browser-mcp-unavailable", server.port, 0);
-                    None
-                }
-            }
-        });
-
         let scheduled_binding = scheduled.and_then(|runtime| {
             match crate::scheduled::mcp::Binding::attach(
                 &server,
@@ -2223,7 +2162,6 @@ impl OpenCodeDriver {
             })?;
 
         Ok(Self {
-            browser_binding,
             scheduled_binding,
             server: Some(server),
             session_id,
@@ -2730,7 +2668,6 @@ impl DriverControl for OpenCodeDriver {
 
 impl Drop for OpenCodeDriver {
     fn drop(&mut self) {
-        drop(self.browser_binding.take());
         drop(self.scheduled_binding.take());
         self.event_feed.cancel();
         // The worker owns the other server lease. Release the UI-owned lease
@@ -5290,10 +5227,7 @@ fn request_permission(
     // pooled Full Access task must never suppress prompts in a Supervised task,
     // so Fintwind sends only one-shot provider replies and retains durable choices
     // in this driver's session-local state.
-    if permission_request
-        .permission
-        .starts_with("fintwind_browser_")
-        || auto_approve.allows(&permission_request.permission)
+    if auto_approve.allows(&permission_request.permission)
         || permissions.lock().is_approved(&permission_request)
     {
         let _ = commands.send(CommandMessage::Respond {
@@ -6753,7 +6687,6 @@ mod tests {
             json!([
                 { "action": "edit", "resource": "*", "effect": "ask" },
                 { "action": "shell", "resource": "*", "effect": "ask" },
-                { "action": "fintwind_browser_*", "resource": "*", "effect": "allow" },
             ])
         );
         assert_eq!(
@@ -6761,7 +6694,6 @@ mod tests {
             json!([
                 { "action": "edit", "resource": "*", "effect": "allow" },
                 { "action": "shell", "resource": "*", "effect": "ask" },
-                { "action": "fintwind_browser_*", "resource": "*", "effect": "allow" },
             ])
         );
         assert_eq!(
@@ -6772,14 +6704,12 @@ mod tests {
             opencode_session_permissions(RuntimeMode::Ask, InteractionMode::Plan),
             json!([
                 { "action": "shell", "resource": "*", "effect": "ask" },
-                { "action": "fintwind_browser_*", "resource": "*", "effect": "allow" },
             ])
         );
         assert_eq!(
             opencode_session_permissions(RuntimeMode::FullAccess, InteractionMode::Plan),
             json!([
                 { "action": "shell", "resource": "*", "effect": "allow" },
-                { "action": "fintwind_browser_*", "resource": "*", "effect": "allow" },
             ])
         );
     }

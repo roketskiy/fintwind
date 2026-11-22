@@ -17,7 +17,6 @@ use tungstenite::protocol::WebSocketConfig;
 use tungstenite::{Message, WebSocket, accept_hdr_with_config};
 use uuid::Uuid;
 
-use crate::browser_broker::BrowserBroker;
 use crate::model::{AgentSession, Project, SessionStatus};
 use crate::protocol::MAX_WIRE_MESSAGE_BYTES;
 use crate::protocol::{
@@ -53,35 +52,21 @@ impl Drop for ConnectionPermit {
 /// The connection loop has several `?` early returns (a failed shutdown
 /// acknowledgement, a WebSocket error) and can unwind on a panic. Returning
 /// past the tail of `handle_connection` on those paths would leave the
-/// subscriber registered in the hub and its browser publications, spent
-/// requestor ids and pending work in the broker — orphan grants that no
-/// reconnect could ever clean. Dropping this guard is the single cleanup,
-/// so no path can skip it.
+/// subscriber registered in the hub. Dropping this guard is the single
+/// cleanup, so no path can skip it.
 struct ConnectionGuard {
     hub: Arc<Hub>,
-    broker: Arc<BrowserBroker>,
     subscriber_id: u64,
 }
 
 impl Drop for ConnectionGuard {
     fn drop(&mut self) {
         self.hub.unsubscribe(self.subscriber_id);
-        self.broker.remove_connection(self.subscriber_id);
     }
 }
 
 pub trait Backend: Send + Sync + 'static {
     fn handle(&self, request: Request, events: EventSink) -> anyhow::Result<ResponsePayload>;
-
-    fn browser_mcp(&self) -> Option<Arc<crate::browser_mcp::Registry>> {
-        None
-    }
-
-    /// Previous plugin wire. Production no longer serves it; the isolated
-    /// e2e harness still drives it directly.
-    fn browser_tools(&self) -> Option<Arc<crate::browser_tools::BrowserTools>> {
-        None
-    }
 
     fn attach_system_channel(self: Arc<Self>, _channel: SystemChannel) -> anyhow::Result<()> {
         Ok(())
@@ -256,7 +241,6 @@ struct RuntimeMailbox {
 struct RequestDispatcher {
     backend: Arc<dyn Backend>,
     hub: Arc<Hub>,
-    broker: Arc<BrowserBroker>,
     /// A live provider runtime is an actor owned by the daemon, not by any
     /// particular WebSocket connection. One mailbox per session preserves
     /// lifecycle order across desktop and web clients without serializing
@@ -442,11 +426,10 @@ impl Hub {
 }
 
 impl RequestDispatcher {
-    fn new(backend: Arc<dyn Backend>, hub: Arc<Hub>, broker: Arc<BrowserBroker>) -> Self {
+    fn new(backend: Arc<dyn Backend>, hub: Arc<Hub>) -> Self {
         Self {
             backend,
             hub,
-            broker,
             runtime_mailboxes: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -472,7 +455,6 @@ impl RequestDispatcher {
     ) {
         let backend = self.backend.clone();
         let hub = self.hub.clone();
-        let broker = self.broker.clone();
         let failed_request_id = request.request_id;
         let failed_outgoing = outgoing.clone();
         if let Err(error) = std::thread::Builder::new()
@@ -484,7 +466,6 @@ impl RequestDispatcher {
                     source_subscriber_id,
                     backend,
                     hub,
-                    broker,
                 );
             })
         {
@@ -539,7 +520,6 @@ impl RequestDispatcher {
 
             let backend = self.backend.clone();
             let hub = self.hub.clone();
-            let broker = self.broker.clone();
             let mailbox_registry = Arc::downgrade(&self.runtime_mailboxes);
             let worker = std::thread::Builder::new()
                 .name(format!("fintwind-daemon-runtime-{session_id}"))
@@ -551,7 +531,6 @@ impl RequestDispatcher {
                         mailbox_registry,
                         backend,
                         hub,
-                        broker,
                     );
                 });
             if let Err(error) = worker {
@@ -585,23 +564,6 @@ pub fn serve(
         .set_nonblocking(true)
         .context("could not configure fintwind daemon listener")?;
     let hub = Arc::new(Hub::default());
-    let broker = Arc::new(BrowserBroker::new());
-    if let Some(registry) = backend.browser_mcp() {
-        registry.attach(&broker);
-    }
-    // Previous plugin wire. Production no longer provides it; the isolated
-    // e2e harness still drives it directly through its own backend.
-    let legacy_tools = backend.browser_tools();
-    if let Some(legacy) = &legacy_tools {
-        legacy.attach(
-            format!(
-                "ws://{}{}",
-                listener.local_addr()?,
-                fintwind_protocol::browser_tools::BROWSER_TOOL_ENDPOINT
-            ),
-            &broker,
-        );
-    }
     // The mermaid check endpoint rides the same listener. A failure to
     // install only removes the model's validation tool; the daemon itself
     // keeps serving.
@@ -612,11 +574,7 @@ pub fn serve(
     )) {
         eprintln!("fintwind-daemon mermaid check endpoint unavailable: {error:#}");
     }
-    let dispatcher = Arc::new(RequestDispatcher::new(
-        backend.clone(),
-        hub.clone(),
-        broker.clone(),
-    ));
+    let dispatcher = Arc::new(RequestDispatcher::new(backend.clone(), hub.clone()));
     let options = Arc::new(options);
     let active_connections = Arc::new(AtomicUsize::new(0));
     backend
@@ -637,8 +595,6 @@ pub fn serve(
                 let token = token.clone();
                 let dispatcher = dispatcher.clone();
                 let hub = hub.clone();
-                let broker = broker.clone();
-                let legacy_tools = legacy_tools.clone();
                 let shutdown = shutdown.clone();
                 let options = options.clone();
                 std::thread::Builder::new()
@@ -650,8 +606,6 @@ pub fn serve(
                             &token,
                             dispatcher,
                             hub,
-                            broker,
-                            legacy_tools,
                             shutdown,
                             &options,
                         ) {
@@ -680,8 +634,6 @@ fn handle_connection(
     expected_token: &str,
     dispatcher: Arc<RequestDispatcher>,
     hub: Arc<Hub>,
-    broker: Arc<BrowserBroker>,
-    legacy_tools: Option<Arc<crate::browser_tools::BrowserTools>>,
     shutdown: Arc<AtomicBool>,
     options: &ServerOptions,
 ) -> anyhow::Result<()> {
@@ -693,26 +645,12 @@ fn handle_connection(
     let config = WebSocketConfig::default()
         .max_message_size(Some(MAX_HANDSHAKE_MESSAGE_BYTES))
         .max_frame_size(Some(MAX_HANDSHAKE_MESSAGE_BYTES));
-    let is_legacy_browser_tool = Arc::new(AtomicBool::new(false));
-    let handshake_legacy_browser_tool = is_legacy_browser_tool.clone();
     let is_mermaid_check = Arc::new(AtomicBool::new(false));
     let handshake_mermaid_check = is_mermaid_check.clone();
-    let legacy_has_tools = legacy_tools.is_some();
     let mut socket = accept_hdr_with_config(
         stream,
         move |request: &HandshakeRequest, response| {
-            if legacy_has_tools
-                && request.uri().path() == fintwind_protocol::browser_tools::BROWSER_TOOL_ENDPOINT
-            {
-                if request.headers().contains_key("origin") {
-                    return Err(handshake_error(
-                        StatusCode::FORBIDDEN,
-                        "browser tool connections must originate from the private plugin",
-                    ));
-                }
-                handshake_legacy_browser_tool.store(true, Ordering::Relaxed);
-                Ok(response)
-            } else if request.uri().path() == fintwind_protocol::mermaid::MERMAID_CHECK_ENDPOINT {
+            if request.uri().path() == fintwind_protocol::mermaid::MERMAID_CHECK_ENDPOINT {
                 if request.headers().contains_key("origin") {
                     return Err(handshake_error(
                         StatusCode::FORBIDDEN,
@@ -728,10 +666,6 @@ fn handle_connection(
         Some(config),
     )
     .context("WebSocket handshake failed")?;
-    if is_legacy_browser_tool.load(Ordering::Relaxed) {
-        let tools = legacy_tools.context("legacy browser tools are unavailable")?;
-        return crate::browser_tools_transport::handle(socket, tools, shutdown);
-    }
     if is_mermaid_check.load(Ordering::Relaxed) {
         return crate::mermaid_check::handle(socket, shutdown);
     }
@@ -786,13 +720,11 @@ fn handle_connection(
 
     let (outgoing, outgoing_rx) = unbounded();
     let subscriber_id = hub.subscribe(&resume_from, outgoing.clone());
-    broker.register_connection(subscriber_id);
     // Everything after this point is cleaned by Drop, including error
     // returns and unwinds, so a broken socket cannot leave a subscribed
-    // connection with live publications behind.
+    // connection behind.
     let _connection_guard = ConnectionGuard {
         hub: hub.clone(),
-        broker: broker.clone(),
         subscriber_id,
     };
 
@@ -821,62 +753,6 @@ fn handle_connection(
                     )?;
                 }
                 Ok(ClientMessage::Hello { .. }) => {}
-                Ok(ClientMessage::BrowserPublish { pages }) => {
-                    // Bound the refusal too: raw authenticated clients need
-                    // not respect the desktop's local 256-page cap.
-                    let attempted_scopes: Vec<_> = pages
-                        .iter()
-                        .take(fintwind_protocol::browser::MAX_BROWSER_PAGES_PER_CONNECTION)
-                        .map(|page| page.scope.clone())
-                        .collect();
-                    if let Err(error) = broker.publish(subscriber_id, pages, outgoing.clone()) {
-                        let _ = write_json(
-                            &mut socket,
-                            &ServerMessage::BrowserShareRejected {
-                                scopes: attempted_scopes,
-                                message: error.to_string(),
-                            },
-                        );
-                    }
-                }
-                Ok(ClientMessage::BrowserHost { scope }) => {
-                    // A launcher registration is bound to this connection,
-                    // exactly like a page publish. A refusal carries the
-                    // attempted scope so the GUI drops the capability it
-                    // just tried to register. A refusal never disturbs the
-                    // connection's pages.
-                    if let Err(error) =
-                        broker.register_host(subscriber_id, scope.clone(), outgoing.clone())
-                    {
-                        let _ = write_json(
-                            &mut socket,
-                            &ServerMessage::BrowserShareRejected {
-                                scopes: scope.into_iter().collect(),
-                                message: error.to_string(),
-                            },
-                        );
-                    }
-                }
-                Ok(ClientMessage::BrowserResult { request_id, result }) => {
-                    if let Err(error) = broker.complete(request_id, subscriber_id, result) {
-                        let _ = write_json(
-                            &mut socket,
-                            &ServerMessage::Rejected {
-                                message: error.to_string(),
-                            },
-                        );
-                    }
-                }
-                Ok(ClientMessage::BrowserCancel { request_id }) => {
-                    if let Err(error) = broker.cancel(request_id, subscriber_id) {
-                        let _ = write_json(
-                            &mut socket,
-                            &ServerMessage::Rejected {
-                                message: error.to_string(),
-                            },
-                        );
-                    }
-                }
                 Err(error) => {
                     eprintln!("fintwind-daemon ignored invalid message: {error}");
                 }
@@ -892,15 +768,15 @@ fn handle_connection(
         }
     }
     // Normal exit. The early `?` returns and any unwind above rely on the
-    // same Drop, so the hub subscription and the broker's view of this
-    // connection always end together with the socket.
+    // same Drop, so the hub subscription always ends together with the
+    // socket.
     Ok(())
 }
 
-/// The general desktop endpoint uses the daemon token. The restricted
-/// `/v1/browser-tools` endpoint is selected before this callback and uses a
-/// separate process capability plus an Origin rejection. Neither transport
-/// accepts the other transport's credential or message protocol.
+/// The general desktop endpoint uses the daemon token. The Mermaid check
+/// endpoint is selected before this callback and uses its own isolated
+/// credential. Neither transport accepts the other transport's credential
+/// or message protocol.
 fn validate_handshake(
     request: &HandshakeRequest,
     response: HandshakeResponse,
@@ -961,7 +837,6 @@ fn run_runtime_mailbox(
     mailbox_registry: Weak<Mutex<HashMap<Uuid, RuntimeMailbox>>>,
     backend: Arc<dyn Backend>,
     hub: Arc<Hub>,
-    broker: Arc<BrowserBroker>,
 ) {
     let mut active_runtime_id = None;
     let mut pending = None;
@@ -989,7 +864,6 @@ fn run_runtime_mailbox(
             dispatched.source_subscriber_id,
             backend.clone(),
             hub.clone(),
-            broker.clone(),
         );
 
         if handled.executed {
@@ -1090,7 +964,6 @@ fn handle_request(
     source_subscriber_id: u64,
     backend: Arc<dyn Backend>,
     hub: Arc<Hub>,
-    broker: Arc<BrowserBroker>,
 ) -> HandledRequest {
     let request_id = request.request_id;
     let notification = request_id.is_nil();
@@ -1115,17 +988,6 @@ fn handle_request(
                 },
             },
             false,
-        )
-    } else if is_browser_command(&request.command) {
-        // Browser RPCs deliberately bypass the shared response cache in both
-        // directions: a snapshot is page data that must not linger in a
-        // cross-connection cache, and a replayed request id must never be
-        // answered from a cache entry instead of failing closed. Non-replay
-        // is enforced by the broker's per-connection seen-id set, so a
-        // repeated id returns an error instead of executing again.
-        (
-            browser_command_outcome(&request, source_subscriber_id, &broker),
-            true,
         )
     } else if !notification && let Some(cached) = hub.cached_response(request_id) {
         (cached, false)
@@ -1201,53 +1063,6 @@ fn task_catalog_action(command: &Command) -> TaskCatalogAction {
         | Command::ForkSessionFromResponse { .. }
         | Command::RewindSessionToMessage { .. } => TaskCatalogAction::Changed,
         _ => TaskCatalogAction::None,
-    }
-}
-
-fn is_browser_command(command: &Command) -> bool {
-    matches!(
-        command,
-        Command::BrowserList | Command::BrowserInvoke { .. }
-    )
-}
-
-/// Answer a browser RPC without touching the backend. `BrowserInvoke`
-/// blocks here for the GUI round trip; the caller runs it on a dedicated
-/// request worker thread, never on the connection or a runtime mailbox.
-fn browser_command_outcome(
-    request: &Request,
-    source_subscriber_id: u64,
-    broker: &BrowserBroker,
-) -> ResponseOutcome {
-    let value = match &request.command {
-        Command::BrowserList => serde_json::to_value(broker.list())
-            .unwrap_or_else(|_| serde_json::Value::Array(Vec::new())),
-        Command::BrowserInvoke { scope, action } => {
-            // Pages are addressed by page id only. The outer request's
-            // session and runtime are provider routing and are ignored here.
-            // A nil request id is the fire-and-forget form used by
-            // notifications; an action with side effects never runs in that
-            // form, because there is no id to refuse replays with.
-            if request.request_id.is_nil() {
-                return ResponseOutcome::Error {
-                    error: RpcError {
-                        message: "a browser invoke requires a request id".into(),
-                    },
-                };
-            }
-            let result = broker.invoke(
-                scope.clone(),
-                action.clone(),
-                source_subscriber_id,
-                request.request_id,
-            );
-            serde_json::to_value(result)
-                .unwrap_or_else(|_| serde_json::Value::Object(Default::default()))
-        }
-        _ => serde_json::Value::Object(Default::default()),
-    };
-    ResponseOutcome::Ok {
-        payload: ResponsePayload::Json { value },
     }
 }
 
@@ -1905,7 +1720,6 @@ mod tests {
             0,
             Arc::new(TestBackend::default()),
             hub.clone(),
-            Arc::new(BrowserBroker::new()),
         );
 
         assert!(handled.executed);
@@ -2010,7 +1824,7 @@ mod tests {
             release_probe: release_probe_rx,
         });
         let hub = Arc::new(Hub::default());
-        let dispatcher = RequestDispatcher::new(backend, hub, Arc::new(BrowserBroker::new()));
+        let dispatcher = RequestDispatcher::new(backend, hub);
 
         let probe_id = Uuid::new_v4();
         dispatcher.dispatch(
@@ -2099,7 +1913,6 @@ mod tests {
                 release_start: release_start_rx,
             }),
             Arc::new(Hub::default()),
-            Arc::new(BrowserBroker::new()),
         );
         let (start_outgoing, start_responses) = unbounded();
         let (second_client_outgoing, second_client_responses) = unbounded();

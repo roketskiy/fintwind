@@ -50,7 +50,6 @@ use crate::ui::menu::{
 use crate::ui::scrollbar::{self, ScrollbarState};
 use crate::ui::tooltip::Tooltip;
 
-use crate::browser::BrowserView;
 use crate::persistence::{
     ComposerDraftStore, ComposerDrafts, DEFAULT_RIGHT_PANEL_WIDTH, DEFAULT_SIDEBAR_WIDTH,
     PersistedState, PersistedWindowState, StateStore,
@@ -597,7 +596,6 @@ fn fitted_panel_widths(
 enum RightPanelSurface {
     Context,
     Btw,
-    Browser(Uuid),
     Terminal(Uuid),
     BackgroundWork {
         key: BackgroundWorkKey,
@@ -1914,18 +1912,6 @@ pub struct Fintwind {
     /// since the event handler has no `Context` to refresh them itself.
     workspace_queries_stale: bool,
     right_panel_terminals: HashMap<Uuid, Entity<TerminalView>>,
-    right_panel_browsers: HashMap<Uuid, Entity<BrowserView>>,
-    /// A Browser surface was just opened; the next right panel render moves
-    /// focus into its address bar.
-    right_panel_pending_browser_focus: Option<Uuid>,
-    /// Which pages are shared with which live session runtime, and the
-    /// background bridge that carries the daemon's direct browser traffic.
-    browser_collaboration: browser_collaboration::AppBrowserCollaborationState,
-    /// GPUI is compositing deferred draws on a plane above native views, so
-    /// menus render over the live webview and no snapshot occlusion is needed.
-    /// When the overlay could not be enabled, the browser falls back to
-    /// swapping in frozen page pixels while an overlay is open.
-    scene_overlay_enabled: bool,
     mode: WorkspaceMode,
     /// The settings category shown while the workspace is in the settings
     /// mode. It survives leaving and re-entering settings.
@@ -2491,7 +2477,6 @@ mod add_project_dialog;
 mod autocomplete;
 mod background_work;
 mod branches;
-mod browser_collaboration;
 mod btw;
 mod command_palette;
 mod commit_dialog;
@@ -3385,17 +3370,6 @@ impl Fintwind {
         let transcript_view = SessionTabState::new();
         let sidebar_list_state = ListState::new(0, ListAlignment::Top, px(256.0));
         let branch_picker_list_state = ListState::new(0, ListAlignment::Top, px(152.0));
-        // Enable GPUI's experimental overlay plane so deferred draws (menus,
-        // tooltips, popovers) composite above native content — without it the
-        // browser surface would cover them.
-        //
-        // Both backends of the pinned fork implement it, and both browser
-        // hosts render somewhere it can reach: a sibling NSView below GPUI's
-        // overlay layer on macOS, a DirectComposition visual between GPUI's
-        // base and overlay planes on Windows. When it is unavailable the
-        // surface falls back to freezing the page to a bitmap while an
-        // overlay is open.
-        let scene_overlay_enabled = window.enable_scene_overlay().is_ok();
         let entity = cx.new(|cx| {
             let scheduled_tasks_view =
                 cx.new(|cx| scheduled::ScheduledTasksView::new(daemon.clone(), window, cx));
@@ -3495,12 +3469,8 @@ impl Fintwind {
             })
             .detach();
 
-            // A closed surface can take the window's focus down with it —
-            // closing a browser tab drops the focused address input — and
-            // with nothing focused, action availability walks only the root
-            // dispatch node, so every app menu item greys out. When focus
-            // dies with its element, send it home to the composer, the way
-            // Zed's workspace refocuses itself.
+            // When focus dies with its element, send it home to the composer,
+            // the way Zed's workspace refocuses itself.
             cx.on_focus_lost(window, |this: &mut Self, window, cx| {
                 let focus = this.composer_focus(cx);
                 window.focus(&focus, cx);
@@ -4285,10 +4255,6 @@ impl Fintwind {
                 working_trees: QueryCache::new(MAX_CACHED_WORKSPACES),
                 workspace_queries_stale: false,
                 right_panel_terminals: HashMap::new(),
-                right_panel_browsers: HashMap::new(),
-                right_panel_pending_browser_focus: None,
-                browser_collaboration: browser_collaboration::AppBrowserCollaborationState::new(),
-                scene_overlay_enabled,
                 mode: WorkspaceMode::default(),
                 settings_page: SettingsPage::General,
                 session_cleanup: HashMap::new(),
@@ -4643,9 +4609,6 @@ impl Fintwind {
                 this.start_runtime_attachment(session_id, cx);
             }
             this.start_pending_checkpoint_captures(cx);
-            // The browser collaboration bridge starts empty: nothing is
-            // shared until the user asks for it from the right panel.
-            this.start_browser_collaboration(window, cx);
             // The autocomplete indexes prefetch alongside, so typing `/` or
             // `@` into the very first prompt already has data to draw.
             this.refresh_composer_sources(cx);

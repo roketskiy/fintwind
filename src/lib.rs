@@ -31,9 +31,6 @@ macro_rules! tr_cow {
 mod activity;
 mod app;
 mod assets;
-mod browser;
-#[cfg(all(target_os = "windows", feature = "browser-poc"))]
-mod browser_poc;
 pub mod daemon;
 mod driver;
 mod ely;
@@ -60,14 +57,6 @@ pub use fintwind_client::{
     checkpoint, command_env, composer_complete, git_branch, git_commit, git_history, i18n,
     identity, model, model_catalog, persistence, projectless, skills, usage, worktree,
 };
-
-/// Stage-one browser PoC entry point: an isolated host for the composition
-/// WebView2 surfaces, driven by an external runner over CDP. Only reachable
-/// through the explicit `--browser-poc` flag in `main`, and only in a build
-/// that asked for the `browser-poc` feature — a normal build neither compiles
-/// nor runs it.
-#[cfg(all(target_os = "windows", feature = "browser-poc"))]
-pub use browser_poc::try_run_browser_poc;
 
 use gpui::{
     App, Application, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions,
@@ -132,19 +121,7 @@ actions!(
         ToggleFindCaseSensitive,
         ToggleFindWholeWord,
         ToggleFindRegex,
-        ReplaceAllMatches,
-        BrowserBack,
-        BrowserForward,
-        BrowserReload,
-        BrowserHardReload,
-        BrowserStop,
-        BrowserDevtools,
-        FocusBrowserAddress,
-        BrowserAddressCancel,
-        WebviewCopy,
-        WebviewCut,
-        WebviewPaste,
-        WebviewSelectAll
+        ReplaceAllMatches
     ]
 );
 
@@ -350,24 +327,6 @@ pub fn run() {
                 KeyBinding::new("secondary-alt-r", ToggleFindRegex, Some("FileEditorPane")),
                 KeyBinding::new("shift-enter", FindPrevious, Some("FindBar")),
                 KeyBinding::new("secondary-alt-enter", ReplaceAllMatches, Some("FindBar")),
-                // Browser surface. Deeper than "Fintwind", so while focus is on the
-                // page or its address bar the browser reads the platform's
-                // conventional navigation shortcuts; the same keys elsewhere
-                // keep their app meanings. The clipboard trio is rebound
-                // because GPUI's window view claims key equivalents before
-                // AppKit can walk the responder chain into the webview.
-                KeyBinding::new("secondary-l", FocusBrowserAddress, Some("Browser")),
-                KeyBinding::new("secondary-r", BrowserReload, Some("Browser")),
-                KeyBinding::new("secondary-shift-r", BrowserHardReload, Some("Browser")),
-                KeyBinding::new("secondary-[", BrowserBack, Some("Browser")),
-                KeyBinding::new("secondary-]", BrowserForward, Some("Browser")),
-                KeyBinding::new("escape", BrowserStop, Some("Browser")),
-                KeyBinding::new("secondary-alt-i", BrowserDevtools, Some("Browser")),
-                KeyBinding::new("secondary-c", WebviewCopy, Some("Browser")),
-                KeyBinding::new("secondary-x", WebviewCut, Some("Browser")),
-                KeyBinding::new("secondary-v", WebviewPaste, Some("Browser")),
-                KeyBinding::new("secondary-a", WebviewSelectAll, Some("Browser")),
-                KeyBinding::new("escape", BrowserAddressCancel, Some("BrowserAddress")),
             ]);
 
             cx.on_action(|_: &Quit, cx| cx.quit());

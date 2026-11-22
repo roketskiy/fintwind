@@ -30,8 +30,6 @@ and relaunch the app normally. Keep that watcher running while you work. Do
 not start a second watcher or manually relaunch the debug app. Press `Ctrl-C`,
 or quit the app, to stop it.
 
-The right-panel browser runs on WebView2.
-
 ## Windows bundle
 
 To produce the portable archive and the installer:

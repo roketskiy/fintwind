@@ -22,11 +22,6 @@ impl Fintwind {
         let active = self
             .panel_resize_drag
             .is_some_and(|drag| drag.target == target);
-        // The right panel's left edge abuts the browser webview, a native view
-        // that composites above every base-scene pixel at or beyond the edge.
-        // Its bar and hover strip therefore sit entirely left of the edge,
-        // where GPUI still owns rendering and input; the other edges keep the
-        // conventional straddle.
         let (strip_left, strip_width) = match target {
             PanelResizeTarget::RightPanel => (-7.0, 8.0),
             PanelResizeTarget::Sidebar | PanelResizeTarget::FileTree => (-5.0, 10.0),
@@ -276,19 +271,15 @@ impl Render for Fintwind {
         // Both transcript panes share caches, so age them once per window
         // frame, not once per pane (which would evict each other's rows).
         self.begin_transcript_cache_frame();
-        // Panel geometry first: the browser sync right below reads whether a
-        // panel is mid-slide, and settling here rather than at the point of
-        // use keeps the pane islands and the transcript on one set of widths.
+        // Panel geometry settles before the panes below read it: settling
+        // here rather than at the point of use keeps the pane islands and the
+        // transcript on one set of widths.
         let panels = self.settle_panel_slides(window);
         if panels.sliding {
             // The manual drive for the width tweens — the same scheduling
             // `with_animation` would do, minus its element-id keying.
             window.request_animation_frame();
         }
-        // Before anything can early-return (the settings page below), settle
-        // whether each native browser webview belongs on screen this frame —
-        // it floats above everything GPUI paints.
-        self.sync_browser_webviews(cx);
         if self.fps_counter_visible {
             self.tick_fps(window);
         }

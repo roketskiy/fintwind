@@ -278,7 +278,6 @@ fn verify_settings_write(
     save_general_setting(Some(remote.clone()), GeneralSetting::Workspace, workspace)?;
     for (field, value) in [
         (GeneralSetting::NetworkProxy, "http://127.0.0.1:9"),
-        (GeneralSetting::BrowserTools, "true"),
         (GeneralSetting::ScheduledTools, "true"),
         (GeneralSetting::Watchdog, "false"),
         (GeneralSetting::AutoCompact, "false"),
@@ -297,7 +296,6 @@ fn verify_settings_write(
         "remote settings were not preserved"
     );
     ensure!(second.network_proxy_url() == Some("http://127.0.0.1:9")
-        && second.browser_tools_enabled()
         && second.scheduled_tools_enabled()
         && !second.watchdog_enabled()
         && !second.auto_compact_enabled()
@@ -311,7 +309,6 @@ fn verify_settings_write(
     ensure!(cleared.network_proxy_url().is_none(), "remote proxy could not be cleared");
     let unavailable = save_general_setting(Some(remote.clone()), GeneralSetting::OpenCodePath, "/bin/sh")?;
     for field in [
-        GeneralSetting::BrowserTools,
         GeneralSetting::ScheduledTools,
         GeneralSetting::AutoCompact,
         GeneralSetting::CompactThreshold,

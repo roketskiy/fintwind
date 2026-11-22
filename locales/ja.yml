@@ -199,10 +199,8 @@ settings.image_generation_model_unavailable: "%{model}（利用不可）"
 providers.protocol_inherit: プロバイダーから継承
 settings.image_generation_load_failed: "画像生成の設定を読み込めませんでした：%{error}"
 settings.image_generation_save_failed: "画像生成の設定を保存できませんでした：%{error}"
-settings.browser_tools: ブラウザツール
 settings.prompt_privacy: プロンプトの秘匿化
 settings.prompt_privacy_description: 検出した認証情報とメールアドレスは、入力欄と会話履歴内のユーザーメッセージで強調表示されます。送信するかどうかを判断する際に確認できます。検出した値はモデルに送信する前に置き換えます。
-settings.browser_tools_description: 既定でオフ。オンにするとモデルに内蔵ブラウザ操作ツールと説明が渡され、コンテキストを少し消費します。OpenCode 2.1.4 以降が必要
 settings.todo_list: Todo リスト
 settings.todo_list_description: 既定でオフ。オンにすると、エージェントは todowrite でタスクリストを管理でき、入力欄の上に表示されます
 settings.todo_list_failed: "OpenCode の Todo 設定を更新できませんでした: %{error}"
@@ -1094,7 +1092,6 @@ session.rewind_title: "%{title}（巻き戻し）"
 session.rewound: タスクをターン %{turn} の前まで巻き戻しました
 session.rewound_with_stale_refs: "タスクをターン %{turn} の前まで巻き戻しましたが、古い ref が残っています：%{error}"
 
-right_panel.browser: ブラウザ
 right_panel.terminal: ターミナル
 right_panel.files: ファイル
 right_panel.history: 履歴
@@ -1102,7 +1099,6 @@ right_panel.toggle: 右パネルの表示を切り替える
 right_panel.toggle_unavailable: 右パネルはセッション表示でのみ使用できます
 right_panel.open_surface: パネルを開く
 right_panel.choose_surface: 右パネルに表示する内容を選択します
-right_panel.browser_description: ローカルアプリまたは URL を開きます
 right_panel.terminal_description: このワークスペースでシェルを起動します
 right_panel.files_description: ワークスペースのファイルを閲覧します
 right_panel.terminal_unavailable: ターミナルを利用できません
@@ -1112,41 +1108,6 @@ right_panel.tabs: 右パネルのタブ
 right_panel.add_tab: パネルタブを追加
 right_panel.hide: 右パネルを隠す
 right_panel.close_tab: "%{title} を閉じる"
-right_panel.share_browser: 現在のセッションに共有
-right_panel.revoke_browser_share: 引き継いで共有を解除
-right_panel.browser_share_blocked: ローカルのデーモンと実行中のセッションが必要です
-browser_collaboration.click_summary: "クリック: %{selector}"
-browser_collaboration.fill_summary: "入力 %{selector}: %{text}"
-browser_collaboration.navigate_summary: "移動: %{url}"
-browser_collaboration.reading: ページを読み取る
-browser_collaboration.running: ブラウザ操作を実行中
-browser_collaboration.shared_status: 現在のセッションに共有中。操作には承認が必要です。共有を停止すると引き継げます。
-browser_collaboration.approve_once: 今回のみ許可
-browser_collaboration.reject: 拒否
-browser_collaboration.open_approval_title: このページを開くことを許可しますか？
-browser_collaboration.open_approval_detail: この新しいページだけを許可します。
-browser_collaboration.open_approval_allow: 今回のみ許可
-browser_collaboration.take_over: 共有を停止
-browser_collaboration.share: 共有
-browser_collaboration.shared: 共有中
-browser_collaboration.opening: 開いています
-browser_collaboration.stop_opening: ブラウザーの自動操作を停止
-browser_collaboration.share_rejected: "ページの共有が拒否されました: %{message}"
-browser_collaboration.runtime_replaced: セッションのランタイムが差し替えられたため、共有を解除しました。再度共有してください。
-browser_collaboration.publish_failed: "デーモン接続が切れたため、ページの共有を解除しました: %{error}"
-browser_collaboration.too_many_pages: この接続の共有ページ数が上限です。先にいずれかの共有を解除してください。
-browser_collaboration.automatic_status: フルアクセスで自動操作できます。通常の閲覧では共有を解除しません。共有を停止すると引き継げます。
-browser_collaboration.scroll_summary: "スクロール: %{delta_y}"
-browser_collaboration.open_handled: ページを開く（アプリホストが処理）
-browser_collaboration.screenshot_summary: 共有ページのスクリーンショットを撮影
-browser_collaboration.evaluate_summary: "JavaScript を実行: %{expression}"
-browser_collaboration.click_at_summary: "座標 (%{x}, %{y}) をクリック"
-browser_collaboration.double_click_summary: "%{selector} をダブルクリック"
-browser_collaboration.press_summary: "%{selector} で %{key} を押す"
-browser_collaboration.hover_summary: "%{selector} にホバー"
-browser_collaboration.select_summary: "%{selector} で %{value} を選択"
-browser_collaboration.drag_summary: "%{from} を %{to} へドラッグ"
-browser_collaboration.close_handled: ページのクローズはアプリホストが処理します。
 
 environment.title: 環境
 environment.summary: 環境とバックグラウンド作業
@@ -1394,16 +1355,6 @@ diff.rows_hidden: "残り %{count} 行 · レビューを開くと変更全体�
 terminal.transport_failed: ターミナル転送に失敗しました
 terminal.no_workspace_description: ターミナルを開く前にタスクを選択してください。
 terminal.process_exited: プロセスが終了しました
-
-browser.back: 戻る（%{shortcut}）
-browser.forward: 進む（%{shortcut}）
-browser.stop_loading: 読み込みを停止（Esc）
-browser.reload: 再読み込み（%{shortcut}）
-browser.open_external: デフォルトのブラウザで開く
-browser.browse_web: ウェブを閲覧
-browser.start_hint: 上に URL または検索語句を入力してください — %{shortcut} でアドレスバーにフォーカス
-browser.unavailable: ブラウザを利用できません
-browser.unavailable_on_platform: ブラウザパネルはこのプラットフォームではまだ利用できません
 
 find.bad_pattern: 無効なパターン
 find.no_results: 結果なし

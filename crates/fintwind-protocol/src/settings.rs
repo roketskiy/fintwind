@@ -46,6 +46,7 @@ impl DaemonSettings {
             "computer_use_enabled",
             "computer_use_allowed_apps",
             "auto_compact_threshold_tokens",
+            "browser_tools_enabled",
         ] {
             self.extra.remove(key);
         }
@@ -61,16 +62,6 @@ impl DaemonSettings {
     pub fn scheduled_tools_enabled(&self) -> bool {
         self.extra
             .get(SCHEDULED_TOOLS_ENABLED_KEY)
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-    }
-
-    /// Whether the daemon lets the browser plugin expose its tools to models.
-    /// The default is off: browser tools cost model context, so enabling them
-    /// is an explicit act. A missing or non-boolean value reads as off.
-    pub fn browser_tools_enabled(&self) -> bool {
-        self.extra
-            .get(BROWSER_TOOLS_ENABLED_KEY)
             .and_then(Value::as_bool)
             .unwrap_or(false)
     }
@@ -142,7 +133,6 @@ pub enum OpenCodeGeneralSetting {
 }
 pub const OPENCODE_BINARY_PATH_KEY: &str = "opencode_binary_path";
 pub const GENERAL_WORKSPACE_PATH_KEY: &str = "general_workspace_path";
-pub const BROWSER_TOOLS_ENABLED_KEY: &str = "browser_tools_enabled";
 pub const NETWORK_PROXY_URL_KEY: &str = "network_proxy_url";
 pub const AUTO_COMPACT_ENABLED_KEY: &str = "auto_compact_enabled";
 pub const WATCHDOG_ENABLED_KEY: &str = "watchdog_enabled";

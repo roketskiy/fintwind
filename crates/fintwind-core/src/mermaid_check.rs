@@ -5,9 +5,9 @@
 //! `fintwind_diagram::diagram_compile`, so a check result can never drift
 //! from what the app's renderer does with the same source.
 //!
-//! The transport mirrors the browser-tool wire: a dedicated endpoint on the
-//! daemon listener, a per-daemon random token (never the main daemon token),
-//! no `Origin` header, and structurally bounded messages. One connection
+//! The transport is a dedicated endpoint on the daemon listener, with a
+//! per-daemon random token (never the main daemon token), no `Origin`
+//! header, and structurally bounded messages. One connection
 //! serves any number of checks; each answer is a single bounded reply, so
 //! the connection thread can compile inline without a worker pool.
 

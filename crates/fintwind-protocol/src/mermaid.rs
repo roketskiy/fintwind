@@ -1,6 +1,6 @@
-//! Mermaid-check plugin transport. Like the browser-tool wire, this is not
-//! the desktop daemon protocol: it carries one read-only validation call for
-//! the private OpenCode plugin and nothing else.
+//! Mermaid-check plugin transport. This is not the desktop daemon protocol:
+//! it carries one read-only validation call for the private OpenCode plugin
+//! and nothing else.
 //!
 //! The grammar is additive: a newer daemon accepts messages an older client
 //! never sends, and a newer client sending an unknown message to an older

@@ -5,7 +5,7 @@ use crate::DaemonSupervisor;
 use anyhow::{Context, Result, ensure};
 use fintwind_protocol::settings::{
     AUTO_COMPACT_ENABLED_KEY, AUTO_COMPACT_THRESHOLD_PERCENT_KEY, BACKGROUND_COMPACT_ENABLED_KEY,
-    BROWSER_TOOLS_ENABLED_KEY, DaemonSettings, GENERAL_WORKSPACE_PATH_KEY, NETWORK_PROXY_URL_KEY,
+    DaemonSettings, GENERAL_WORKSPACE_PATH_KEY, NETWORK_PROXY_URL_KEY,
     OPENCODE_BINARY_PATH_KEY, SCHEDULED_TOOLS_ENABLED_KEY, WATCHDOG_ENABLED_KEY,
 };
 use russh::{ChannelMsg, client};
@@ -105,7 +105,6 @@ pub enum GeneralSetting {
     OpenCodePath,
     Workspace,
     NetworkProxy,
-    BrowserTools,
     ScheduledTools,
     Watchdog,
     PromptPrivacy,
@@ -124,7 +123,6 @@ impl GeneralSetting {
             OpenCodePath => OPENCODE_BINARY_PATH_KEY,
             Workspace => GENERAL_WORKSPACE_PATH_KEY,
             NetworkProxy => NETWORK_PROXY_URL_KEY,
-            BrowserTools => BROWSER_TOOLS_ENABLED_KEY,
             ScheduledTools => SCHEDULED_TOOLS_ENABLED_KEY,
             Watchdog => WATCHDOG_ENABLED_KEY,
             PromptPrivacy => fintwind_protocol::settings::PROMPT_PRIVACY_ENABLED_KEY,
@@ -179,7 +177,7 @@ pub fn save_general_setting(
             ensure!(value.split_once('/').is_some_and(|(provider, model)| !provider.is_empty() && !model.is_empty()) && !value.chars().any(char::is_whitespace), "expected provider/model");
             Some(value.into())
         }
-        BrowserTools | ScheduledTools | Watchdog | PromptPrivacy | AutoCompact | BackgroundCompact | Todo => {
+        ScheduledTools | Watchdog | PromptPrivacy | AutoCompact | BackgroundCompact | Todo => {
             Some(value.parse::<bool>()?.into())
         }
     };

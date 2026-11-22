@@ -63,6 +63,7 @@ impl ContextPlugin {
             .or_insert_with(|| json!([]))
             .as_array_mut()
             .context("inline OpenCode plugins must be an array")?;
+        plugins.push(json!("-opencode.browser"));
         plugins.push(json!(self.directory));
         plugins.push(json!(self.directory.join(PRIVACY_PLUGIN)));
         // The check is read-only compilation with no side effects, so sitting

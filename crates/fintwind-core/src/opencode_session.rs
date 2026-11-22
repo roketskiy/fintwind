@@ -525,8 +525,6 @@ fn fork_message_id(message_ids: &[String], retained_turns: usize) -> anyhow::Res
 pub(crate) struct OpenCodeServer {
     child: Arc<Mutex<Child>>,
     pub(crate) scheduled_mcp: Mutex<HashMap<String, std::sync::Weak<crate::scheduled::mcp::Host>>>,
-    pub(crate) browser_mcp: Mutex<HashMap<String, std::sync::Weak<crate::browser_mcp::Host>>>,
-    _browser_plugin: crate::browser_plugin::BrowserPlugin,
     _context_plugin: crate::context_plugin::ContextPlugin,
     pub(crate) port: u16,
 }
@@ -536,28 +534,22 @@ impl OpenCodeServer {
         Self::start_with_env(binary, cwd, &[])
     }
 
-    /// Starts the server with extra environment, so a caller can hand it the
-    /// Computer Use configuration the same way a one-shot invocation got it.
-    /// Every private server carries the suppression-only browser plugin: it
-    /// removes OpenCode's built-in desktop browser stack and repeats the
-    /// in-app instruction when the browser MCP is present. Browser capability
-    /// itself rides the per-directory MCP host, not per-server tokens.
+    /// Starts the server with extra environment, so a caller can hand it
+    /// configuration the same way a one-shot invocation got it. An inherited
+    /// `OPENCODE_CONFIG_CONTENT` is merged into the context plugin's config
+    /// instead of being replaced.
     pub(crate) fn start_with_env(
         binary: &Path,
         cwd: &Path,
         environment: &[(String, String)],
     ) -> anyhow::Result<Self> {
-        let plugin = crate::browser_plugin::BrowserPlugin::create(cwd)?;
-        let mut environment: Vec<(String, String)> = environment.to_vec();
-        environment.push(("OPENCODE_CONFIG_CONTENT".into(), plugin.config()?));
-        Self::start_inner(binary, cwd, &environment, plugin)
+        Self::start_inner(binary, cwd, environment)
     }
 
     fn start_inner(
         binary: &Path,
         cwd: &Path,
         environment: &[(String, String)],
-        browser_plugin: crate::browser_plugin::BrowserPlugin,
     ) -> anyhow::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .context("could not reserve a local port for OpenCode")?;
@@ -591,9 +583,9 @@ impl OpenCodeServer {
         // The model traffic this server makes rides the configured proxy.
         // Setting the conventional variables overrides anything inherited from
         // the user's shell, and the loopback exemption keeps the server's own
-        // requests to local addresses (Fintwind's browser-tool endpoint, MCP
-        // servers on 127.0.0.1) out of the proxy. When no proxy is configured
-        // the environment stays exactly as inherited.
+        // requests to local addresses (MCP servers on 127.0.0.1) out of the
+        // proxy. When no proxy is configured the environment stays exactly
+        // as inherited.
         if let Some(proxy) = fintwind_protocol::http::active_proxy() {
             command
                 .env("HTTP_PROXY", &proxy)
@@ -629,8 +621,6 @@ impl OpenCodeServer {
         let server = Self {
             child: Arc::new(Mutex::new(child)),
             scheduled_mcp: Mutex::new(HashMap::new()),
-            browser_mcp: Mutex::new(HashMap::new()),
-            _browser_plugin: browser_plugin,
             _context_plugin: context_plugin,
             port,
         };

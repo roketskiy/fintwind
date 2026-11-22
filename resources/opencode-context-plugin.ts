@@ -57,8 +57,7 @@ type Context = {
   };
 };
 
-// The mermaid check capability arrives through the environment, the same way
-// the browser plugin receives its bridge. OpenCode re-imports plugins for
+// The mermaid check capability arrives through the environment. OpenCode re-imports plugins for
 // each location: keep one process-local copy before removing the variables,
 // so later locations work without forwarding credentials to spawned shell
 // processes. Other trusted plugins in the same process are not an OS

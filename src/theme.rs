@@ -789,9 +789,8 @@ pub fn sync_ely_theme(cx: &mut App) {
         ActiveTheme as _, Mode as ElyMode, Palette as ElyPalette, Theme as ElyTheme,
     };
 
-    // Ely registers its theme global in its own init; the browser PoC host
-    // runs the Fintwind theme startup without that init, and there is
-    // nothing to project onto there.
+    // Ely registers its theme global in its own init; before that there is
+    // nothing to project onto.
     if !cx.has_global::<ElyTheme>() {
         return;
     }

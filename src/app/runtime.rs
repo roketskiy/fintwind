@@ -589,7 +589,6 @@ impl Fintwind {
             // project; keep its group unfolded so the active row stays visible.
             self.reveal_sidebar_session_project(selected, cx);
         }
-        self.sync_browser_automation_host(cx);
         if self.mode == WorkspaceMode::ScheduledTasks {
             self.refresh_scheduled_task_catalog(cx);
         }
@@ -2217,7 +2216,7 @@ impl Fintwind {
                     .get(&session_id)
                     .is_some_and(|runtime| runtime.options_generation == generation);
                 if is_current && !applied {
-                    fintwind.reset_session_runtime(session_id, cx);
+                    fintwind.reset_session_runtime(session_id);
                     cx.notify();
                 } else if is_current && applied {
                     fintwind.btw_options_pending.remove(&session_id);
@@ -3320,9 +3319,6 @@ impl Fintwind {
                 && self.selected_transcript_blocks().len() > previous_count
             {
                 self.remeasure_transcript_block(previous_count - 1);
-            }
-            if self.state.selected_session == Some(session_id) {
-                self.sync_browser_automation_host(cx);
             }
             let session_updated = runtime_changed || background_changed;
             changed |= session_updated;

@@ -511,12 +511,6 @@ pub struct ComposerInput {
     read_only: bool,
     /// Obscure rendered text without changing the value, selection or IME offsets.
     obscured: bool,
-    /// The focusing click selects the whole content on release, the way a
-    /// browser address bar arms its URL for retyping.
-    select_all_on_focus_click: bool,
-    /// A plain click landed while the field was unfocused; unless it grows
-    /// into a drag-selection first, the release selects everything.
-    focus_click_select_all: bool,
     /// Language for paint-only syntax colouring, in code mode.
     language: Option<Lang>,
     /// Cached token spans over `content`, as absolute byte ranges. Recomputed
@@ -620,8 +614,6 @@ impl ComposerInput {
             mode: FieldMode::Composer,
             read_only: false,
             obscured: false,
-            select_all_on_focus_click: false,
-            focus_click_select_all: false,
             language: None,
             highlight: Vec::new(),
             search_matches: Vec::new(),
@@ -696,12 +688,6 @@ impl ComposerInput {
             self.blink_cursor.update(cx, |cursor, cx| cursor.stop(cx));
         }
         cx.notify();
-    }
-
-    /// Whether this field's right-click menu is open. The browser surface
-    /// treats that as an overlay above its native webview.
-    pub fn context_menu_open(&self) -> bool {
-        self.context_menu.is_open()
     }
 
     fn context_menu_preserves_visual_focus(&self) -> bool {
@@ -792,14 +778,6 @@ impl ComposerInput {
 
     pub fn is_obscured(&self) -> bool {
         self.obscured
-    }
-
-    /// Make the focusing click select the whole content on release, the way a
-    /// browser address bar arms its URL for retyping. A drag from unfocused
-    /// still selects the dragged range, and the next click places the caret.
-    pub fn select_all_on_focus_click(mut self) -> Self {
-        self.select_all_on_focus_click = true;
-        self
     }
 
     /// Reject edits while still allowing selection and copy.
@@ -1062,8 +1040,6 @@ impl ComposerInput {
     }
 
     fn on_blur(&mut self, _: &mut Window, cx: &mut Context<Self>) {
-        // An armed focusing click dies with the focus it was tied to.
-        self.focus_click_select_all = false;
         if self.context_menu_preserves_visual_focus() {
             cx.notify();
             return;
@@ -1485,20 +1461,12 @@ impl ComposerInput {
     fn on_mouse_down(
         &mut self,
         event: &MouseDownEvent,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.vertical_navigation = None;
         self.is_selecting = true;
         self.selected_word_range = None;
-        // A plain click that is also the focusing click arms select-all for
-        // its release. This handler runs before gpui's focus-on-mouse-down
-        // transfer (user listeners dispatch first in the bubble phase), so
-        // the pre-click focus is still observable here.
-        self.focus_click_select_all = self.select_all_on_focus_click
-            && event.click_count == 1
-            && !event.modifiers.shift
-            && !self.is_visually_focused(window);
         let offset = self.index_for_mouse_position(event.position);
 
         if event.click_count >= 3 {
@@ -1536,23 +1504,14 @@ impl ComposerInput {
         window.focus(&self.focus_handle, cx);
     }
 
-    fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, _cx: &mut Context<Self>) {
         self.is_selecting = false;
         self.selected_word_range = None;
-        if self.focus_click_select_all {
-            self.focus_click_select_all = false;
-            self.select_all_text(cx);
-        }
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
         if self.is_selecting {
             self.select_to(self.index_for_mouse_position(event.position), cx);
-            // Growing a real drag-selection turns the focusing click into a
-            // range selection; releasing must keep it.
-            if !self.selected_range.is_empty() {
-                self.focus_click_select_all = false;
-            }
         }
     }
 

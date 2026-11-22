@@ -650,14 +650,10 @@ settings.image_generation_load_failed:
   en: "Could not read the image generation setting: %{error}"
 settings.image_generation_save_failed:
   en: "Could not save the image generation setting: %{error}"
-settings.browser_tools:
-  en: Browser tools
 settings.prompt_privacy:
   en: Prompt privacy
 settings.prompt_privacy_description:
   en: Detected credentials and email addresses are highlighted in the input and in your messages in chat history. Check the highlights before deciding whether to send. Detected values are replaced before the text reaches the model.
-settings.browser_tools_description:
-  en: Off by default. When on, the model gets the built-in browser tools and instructions, which use some context. Requires OpenCode 2.1.4+
 settings.todo_list:
   en: Todo list
 settings.todo_list_description:
@@ -2381,8 +2377,6 @@ session.rewind_during_undo:
 session.rewound_with_stale_refs:
   en: "Rewound to before turn %{turn}; stale refs remain: %{error}"
 
-right_panel.browser:
-  en: Browser
 right_panel.terminal:
   en: Terminal
 right_panel.files:
@@ -2395,8 +2389,6 @@ right_panel.open_surface:
   en: Open a surface
 right_panel.choose_surface:
   en: Choose what to show in the right panel
-right_panel.browser_description:
-  en: Open a local app or URL
 right_panel.terminal_description:
   en: Start a shell in this workspace
 right_panel.files_description:
@@ -2415,76 +2407,6 @@ right_panel.hide:
   en: Hide right panel
 right_panel.close_tab:
   en: Close %{title}
-right_panel.share_browser:
-  en: Share with the current session
-right_panel.revoke_browser_share:
-  en: Take over and stop sharing
-right_panel.browser_share_blocked:
-  en: Needs a local daemon and a running session
-browser_collaboration.click_summary:
-  en: "Click: %{selector}"
-browser_collaboration.fill_summary:
-  en: "Fill %{selector}: %{text}"
-browser_collaboration.navigate_summary:
-  en: "Navigate: %{url}"
-browser_collaboration.reading:
-  en: Read page
-browser_collaboration.running:
-  en: Browser operation in progress
-browser_collaboration.shared_status:
-  en: Shared with this session; changes require approval. Stop sharing to take over.
-browser_collaboration.approve_once:
-  en: Approve once
-browser_collaboration.reject:
-  en: Reject
-browser_collaboration.open_approval_title:
-  en: Allow browser to open this page?
-browser_collaboration.open_approval_detail:
-  en: This grants access to this new page only.
-browser_collaboration.open_approval_allow:
-  en: Allow once
-browser_collaboration.take_over:
-  en: Stop sharing
-browser_collaboration.share:
-  en: Share
-browser_collaboration.shared:
-  en: Shared
-browser_collaboration.opening:
-  en: Opening
-browser_collaboration.stop_opening:
-  en: Stop browser automation
-browser_collaboration.share_rejected:
-  en: "Page sharing was rejected: %{message}"
-browser_collaboration.runtime_replaced:
-  en: The session runtime was replaced; the shared page was revoked. Share it again to continue.
-browser_collaboration.publish_failed:
-  en: "The daemon connection dropped, so the shared page was revoked: %{error}"
-browser_collaboration.too_many_pages:
-  en: This connection already shares the maximum number of pages; stop sharing one first.
-browser_collaboration.automatic_status:
-  en: Full-access automation is enabled. Browsing keeps sharing active; stop sharing to take over.
-browser_collaboration.scroll_summary:
-  en: "Scroll: %{delta_y}"
-browser_collaboration.open_handled:
-  en: Open a page (handled by the app host)
-browser_collaboration.screenshot_summary:
-  en: Take a screenshot of the shared page
-browser_collaboration.evaluate_summary:
-  en: "Run JavaScript: %{expression}"
-browser_collaboration.click_at_summary:
-  en: Click at (%{x}, %{y})
-browser_collaboration.double_click_summary:
-  en: Double-click %{selector}
-browser_collaboration.press_summary:
-  en: Press %{key} on %{selector}
-browser_collaboration.hover_summary:
-  en: Hover over %{selector}
-browser_collaboration.select_summary:
-  en: Select %{value} in %{selector}
-browser_collaboration.drag_summary:
-  en: Drag %{from} to %{to}
-browser_collaboration.close_handled:
-  en: Page close is handled by the app host.
 
 environment.title:
   en: Environment
@@ -2988,25 +2910,6 @@ terminal.no_workspace_description:
   en: Select a task before opening a terminal.
 terminal.process_exited:
   en: Process exited
-
-browser.back:
-  en: Back (%{shortcut})
-browser.forward:
-  en: Forward (%{shortcut})
-browser.stop_loading:
-  en: Stop loading (Esc)
-browser.reload:
-  en: Reload (%{shortcut})
-browser.open_external:
-  en: Open in default browser
-browser.browse_web:
-  en: Browse the web
-browser.start_hint:
-  en: Enter a URL or search above — %{shortcut} focuses the address bar
-browser.unavailable:
-  en: Browser unavailable
-browser.unavailable_on_platform:
-  en: The browser surface is not available on this platform yet
 
 find.bad_pattern:
   en: Bad pattern

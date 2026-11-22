@@ -319,10 +319,6 @@ impl CommandPaletteUi {
             matcher: crate::composer_complete::matcher(),
         }
     }
-
-    pub(super) fn is_open(&self) -> bool {
-        self.open
-    }
 }
 
 impl Fintwind {
@@ -659,7 +655,7 @@ impl Fintwind {
                     "icons/panel-right.svg",
                     Some("Ctrl+Shift+B"),
                     PaletteAction::ToggleRightPanel,
-                    "toggle show hide right panel files diff terminal browser",
+                    "toggle show hide right panel files diff terminal",
                     next(),
                 ),
             ]);

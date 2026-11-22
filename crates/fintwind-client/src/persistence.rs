@@ -291,9 +291,6 @@ pub struct AppSettings {
     pub code_text_scale: f32,
     pub ui_font_family: String,
     pub code_font_family: String,
-    /// Off by default: browser tools cost model context, so enabling them
-    /// is an explicit act.
-    pub browser_tools_enabled: bool,
     /// Off by default: enables OpenCode's experimental `todowrite` tool and
     /// the capsule's todo section.
     #[serde(default)]
@@ -330,7 +327,6 @@ impl Default for AppSettings {
             code_text_scale: DEFAULT_CODE_TEXT_SCALE,
             ui_font_family: DEFAULT_UI_FONT_FAMILY.to_owned(),
             code_font_family: DEFAULT_CODE_FONT_FAMILY.to_owned(),
-            browser_tools_enabled: false,
             todo_enabled: false,
             scheduled_tools_enabled: false,
             mermaid_visualization_enabled: false,
@@ -434,10 +430,6 @@ pub struct PersistedState {
     pub ui_font_family: String,
     #[serde(default = "default_code_font_family")]
     pub code_font_family: String,
-    /// Off by default: browser tools cost model context, so enabling them
-    /// is an explicit act.
-    #[serde(default)]
-    pub browser_tools_enabled: bool,
     #[serde(default)]
     pub todo_enabled: bool,
     #[serde(default)]
@@ -519,7 +511,6 @@ impl PersistedState {
             code_text_scale: DEFAULT_CODE_TEXT_SCALE,
             ui_font_family: DEFAULT_UI_FONT_FAMILY.to_owned(),
             code_font_family: DEFAULT_CODE_FONT_FAMILY.to_owned(),
-            browser_tools_enabled: false,
             todo_enabled: false,
             scheduled_tools_enabled: false,
             mermaid_visualization_enabled: false,
@@ -625,12 +616,9 @@ impl PersistedState {
     pub fn daemon_settings(&self) -> DaemonSettings {
         let mut extra = self.daemon_settings_extra.clone();
         extra.remove("auto_compact_threshold_tokens");
+        extra.remove("browser_tools_enabled");
         // The app-side toggle is the source of truth: whatever the daemon
         // file round-tripped back must not override the user's choice.
-        extra.insert(
-            fintwind_protocol::settings::BROWSER_TOOLS_ENABLED_KEY.to_owned(),
-            serde_json::Value::Bool(self.browser_tools_enabled),
-        );
         extra.insert(
             fintwind_protocol::settings::SCHEDULED_TOOLS_ENABLED_KEY.to_owned(),
             serde_json::Value::Bool(self.scheduled_tools_enabled),
@@ -739,7 +727,6 @@ impl PersistedState {
             code_text_scale: self.code_text_scale,
             ui_font_family: self.ui_font_family.clone(),
             code_font_family: self.code_font_family.clone(),
-            browser_tools_enabled: self.browser_tools_enabled,
             todo_enabled: self.todo_enabled,
             scheduled_tools_enabled: self.scheduled_tools_enabled,
             mermaid_visualization_enabled: self.mermaid_visualization_enabled,
@@ -784,7 +771,6 @@ impl PersistedState {
         self.code_text_scale = settings.code_text_scale;
         self.ui_font_family = settings.ui_font_family;
         self.code_font_family = settings.code_font_family;
-        self.browser_tools_enabled = settings.browser_tools_enabled;
         self.todo_enabled = settings.todo_enabled;
         self.scheduled_tools_enabled = settings.scheduled_tools_enabled;
         self.mermaid_visualization_enabled = settings.mermaid_visualization_enabled;

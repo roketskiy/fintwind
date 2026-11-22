@@ -4,9 +4,8 @@
 //! the parent-child tree outward from this process using a Toolhelp snapshot,
 //! and every membership decision is guarded by process creation times, so a
 //! reused PID can never adopt an unrelated process. That covers the daemon,
-//! the pooled OpenCode servers, and whatever they
-//! spawn (terminals, tools, browser helpers) — all descendants, nothing else
-//! on the machine.
+//! the pooled OpenCode servers, and whatever they spawn (terminals, tools) —
+//! all descendants, nothing else on the machine.
 //!
 //! The module is plain std + Win32 on purpose: no gpui, no locks the UI
 //! thread could touch. The window in `perf_monitor` moves a [`Sampler`]

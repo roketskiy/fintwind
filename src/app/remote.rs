@@ -949,9 +949,6 @@ impl Fintwind {
                     session.runtime_mode = access;
                 }
                 session.updated_at = unix_time();
-                if self.state.selected_session == Some(session_id) {
-                    self.browser_access_mode_changed(cx);
-                }
                 self.apply_session_options(session_id, cx);
                 self.save();
                 cx.notify();

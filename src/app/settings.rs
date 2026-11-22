@@ -331,7 +331,6 @@ impl Fintwind {
     /// funnels through here, so the mode is the single navigation state.
     pub(super) fn open_settings_page(&mut self, page: SettingsPage, cx: &mut Context<Self>) {
         if let Some(owner) = self.ssh_workspace_owner() {
-            self.hide_workspace_webviews(cx);
             owner.update(cx, |app, cx| app.open_workspace_settings(page, cx));
             return;
         }
@@ -921,29 +920,6 @@ impl Fintwind {
                                 }
                             }),
                         ),
-                    )
-                    .child(settings_separator(theme))
-                    .child(
-                        settings_row(
-                            "icons/app-window.svg",
-                            tr!("settings.browser_tools"),
-                            Some(tr!("settings.browser_tools_description")),
-                            theme,
-                        )
-                        .child(toggle_switch(
-                            "browser-tools-toggle",
-                            self.state.browser_tools_enabled,
-                            false,
-                            theme,
-                            window,
-                            cx,
-                            move |this: &mut Self, _, cx| {
-                                this.set_browser_tools_enabled(
-                                    !this.state.browser_tools_enabled,
-                                    cx,
-                                );
-                            },
-                        )),
                     )
                     .child(settings_separator(theme))
                     .child(
@@ -2385,24 +2361,6 @@ impl Fintwind {
         .detach();
     }
 
-    /// While off, the plugin keeps its tools and instruction out of model
-    /// context entirely. Saving pushes the daemon setting, which forwards the
-    /// new state to connected plugins in time for the next request.
-    fn set_browser_tools_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        if self.state.browser_tools_enabled == enabled {
-            return;
-        }
-        self.state.browser_tools_enabled = enabled;
-        if self.save() {
-            self.show_success_toast(if enabled {
-                tr!("settings.toggle_on", name = tr!("settings.browser_tools"))
-            } else {
-                tr!("settings.toggle_off", name = tr!("settings.browser_tools"))
-            });
-        }
-        cx.notify();
-    }
-
     /// The todo tool is OpenCode's experimental feature: the switch has to
     /// reach `experimental.todo` or the model never gets `todowrite`. The
     /// config write is a one-time user action, never a frame path.
@@ -2756,9 +2714,6 @@ impl Fintwind {
         self.refresh_file_search_localized_text(cx);
         self.scheduled_tasks_view
             .update(cx, |view, cx| view.refresh_localized_text(cx));
-        for browser in self.right_panel_browsers.values() {
-            browser.update(cx, |browser, cx| browser.refresh_localized_text(cx));
-        }
         for terminal in self.right_panel_terminals.values() {
             terminal.update(cx, |terminal, cx| terminal.refresh_localized_text(cx));
         }

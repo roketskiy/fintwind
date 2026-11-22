@@ -785,9 +785,6 @@ impl Fintwind {
     ) {
         self.cancel_ssh_navigation_restore();
         let Some(host) = host else {
-            if let Some(workspace) = self.active_ssh_workspace() {
-                workspace.update(cx, |app, cx| app.hide_workspace_webviews(cx));
-            }
             self.ssh.active_workspace = None;
             window.focus(&self.composer_focus(cx), cx);
             cx.notify();
@@ -851,23 +848,10 @@ impl Fintwind {
             self.ssh.workspaces.insert(host, workspace.clone());
             workspace
         };
-        if let Some(previous) = self.active_ssh_workspace() {
-            if previous != workspace {
-                previous.update(cx, |app, cx| app.hide_workspace_webviews(cx));
-            }
-        } else {
-            self.hide_workspace_webviews(cx);
-        }
         self.ssh.restoring_workspace = None;
         self.ssh.active_workspace = Some(host);
         cx.notify();
         Some(workspace)
-    }
-
-    pub(super) fn hide_workspace_webviews(&self, cx: &mut Context<Self>) {
-        for browser in self.right_panel_browsers.values() {
-            browser.update(cx, |view, cx| view.sync_native_state(false, false, cx));
-        }
     }
 
     pub(super) fn open_workspace_settings(&mut self, page: SettingsPage, cx: &mut Context<Self>) {
@@ -1953,7 +1937,6 @@ impl Fintwind {
                                 OpenCodePath => tr!("settings.opencode_binary"),
                                 Workspace => tr!("settings.general_workspace"),
                                 NetworkProxy => tr!("settings.network_proxy"),
-                                BrowserTools => tr!("settings.browser_tools"),
                                 ScheduledTools => tr!("settings.scheduled_tools"),
                                 Watchdog => tr!("settings.watchdog"),
                                 PromptPrivacy => tr!("settings.prompt_privacy"),
@@ -2213,7 +2196,6 @@ impl Fintwind {
                         ))
                     };
                     let feature_toggles = [
-                        ("ssh-browser-tools", "icons/app-window.svg", tr!("settings.browser_tools"), Some(tr!("settings.browser_tools_description")), GeneralSetting::BrowserTools, settings.browser_tools_enabled()),
                         ("ssh-todo", "icons/list.svg", tr!("settings.todo_list"), Some(tr!("settings.todo_list_description")), GeneralSetting::Todo, settings.extra.get(OPENCODE_TODO_KEY).and_then(serde_json::Value::as_bool).unwrap_or(false)),
                         ("ssh-scheduled-tools", "icons/clock.svg", tr!("settings.scheduled_tools"), Some(tr!("settings.scheduled_tools_description")), GeneralSetting::ScheduledTools, settings.scheduled_tools_enabled()),
                         ("ssh-watchdog", "icons/alert.svg", tr!("settings.watchdog"), None, GeneralSetting::Watchdog, settings.watchdog_enabled()),

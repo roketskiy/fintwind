@@ -34,7 +34,6 @@ use fintwind_protocol::submission::{SubmissionReceipt, SubmissionRecord, Submiss
 
 pub struct FintwindBackend {
     scheduled_tools: Arc<crate::scheduled::mcp::Registry>,
-    browser_mcp: Arc<crate::browser_mcp::Registry>,
     sessions: Arc<Mutex<HashMap<Uuid, (Uuid, DriverHandle)>>>,
     terminals: Mutex<HashMap<Uuid, (Uuid, crate::terminal::DaemonTerminal)>>,
     settings: DaemonSettingsStore,
@@ -122,18 +121,12 @@ impl FintwindBackend {
                 .unwrap_or_else(|| std::path::Path::new("."))
                 .join("attachments"),
         );
-        let browser_mcp = Arc::new(crate::browser_mcp::Registry::new(
-            settings.get().browser_tools_enabled(),
-        ));
         let scheduled_tools = Arc::new(crate::scheduled::mcp::Registry::new(
             settings.get().scheduled_tools_enabled(),
         ));
         let usage_index =
             crate::usage_index::UsageIndex::new(task_store.path().with_file_name("usage-index.db"));
-        // Seed from the persisted setting so a daemon that comes up before
-        // the app connects already exposes the right state to the MCP host.
-        browser_mcp.set_enabled(settings.get().browser_tools_enabled());
-        // Same for the proxy: fetches and later `opencode serve` children must
+        // The proxy: fetches and later `opencode serve` children must
         // ride it even when no client ever pushes settings in this run.
         fintwind_protocol::http::set_active_proxy(
             settings.get().network_proxy_url().map(str::to_owned),
@@ -141,7 +134,6 @@ impl FintwindBackend {
         Ok(Self {
             watchdog_enabled: Arc::new(AtomicBool::new(settings.get().watchdog_enabled())),
             scheduled_tools,
-            browser_mcp,
             sessions: Arc::new(Mutex::new(HashMap::new())),
             terminals: Mutex::new(HashMap::new()),
             settings,
@@ -1225,7 +1217,7 @@ fn settings_for_client(settings: crate::DaemonSettings) -> crate::DaemonSettings
                 }
             }
             if version >= semver::Version::new(2, 1, 4) {
-                capabilities.extend([BROWSER_TOOLS_ENABLED_KEY, SCHEDULED_TOOLS_ENABLED_KEY]);
+                capabilities.push(SCHEDULED_TOOLS_ENABLED_KEY);
             }
             if version >= semver::Version::new(2, 3, 2) {
                 capabilities.push(PROMPT_PRIVACY_ENABLED_KEY);
@@ -1251,10 +1243,6 @@ fn settings_for_client(settings: crate::DaemonSettings) -> crate::DaemonSettings
 }
 
 impl Backend for FintwindBackend {
-    fn browser_mcp(&self) -> Option<Arc<crate::browser_mcp::Registry>> {
-        Some(self.browser_mcp.clone())
-    }
-
     fn attach_system_channel(self: Arc<Self>, channel: SystemChannel) -> anyhow::Result<()> {
         self.self_weak
             .set(Arc::downgrade(&self))
@@ -1660,8 +1648,6 @@ impl Backend for FintwindBackend {
                 crate::projectless::set_workspace_root(Some(root));
                 // Persisting alone keeps the MCP host on its previous state;
                 // apply it so the change reaches models on the next request.
-                self.browser_mcp
-                    .set_enabled(self.settings.get().browser_tools_enabled());
                 self.scheduled_tools
                     .set_enabled(self.settings.get().scheduled_tools_enabled());
                 // Reinstall the proxy so later fetches and `opencode serve`
@@ -2649,11 +2635,6 @@ impl Backend for FintwindBackend {
                 let handle = driver::start_local(
                     options,
                     event_sender,
-                    crate::browser_mcp::Runtime {
-                        registry: self.browser_mcp.clone(),
-                        session_id,
-                        runtime_id,
-                    },
                     self.task_store.blobs(),
                     crate::scheduled::tools::Runtime {
                         registry: self.scheduled_tools.clone(),
@@ -3365,8 +3346,6 @@ fn handle_driver_command(
         | Command::ResizeTerminal { .. }
         | Command::CloseTerminal
         | Command::CloseSession
-        | Command::BrowserList
-        | Command::BrowserInvoke { .. }
         | Command::ListScheduledTasks
         | Command::SaveScheduledTask { .. }
         | Command::DeleteScheduledTask { .. }

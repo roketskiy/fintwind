@@ -18,6 +18,10 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+### 移除
+
+- 移除内置浏览器及其浏览器工具。网页链接与登录仍通过系统浏览器打开。
+
 ## [0.3.2]
 
 ```

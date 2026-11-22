@@ -299,12 +299,10 @@ settings.image_generation_model_description: 请求未指定模型时使用
 settings.image_generation_model_auto: 自动
 settings.image_generation_load_failed: "读取图像生成设置失败：%{error}"
 settings.image_generation_save_failed: "保存图像生成设置失败：%{error}"
-settings.browser_tools: 浏览器工具
 settings.prompt_privacy: 提示词脱敏
 settings.prompt_privacy_description: 输入框和会话历史中的用户消息会高亮检测到的凭据和邮箱。发送前可查看标记，再决定是否发送。检测到的内容会在发给模型前替换。
 settings.image_generation_model_unavailable: "%{model}（不可用）"
 providers.protocol_inherit: 继承提供商
-settings.browser_tools_description: 默认关闭。开启后向模型提供内置浏览器操作工具与使用说明，会占用少量上下文。需 OpenCode 2.1.4+
 settings.todo_list: 待办列表
 settings.todo_list_description: 默认关闭。开启后 Agent 可用 todowrite 维护任务清单，并显示在输入框上方
 settings.todo_list_failed: 无法更新 OpenCode 的 Todo 设置：%{error}
@@ -1168,7 +1166,6 @@ session.provider_cannot_rewind: "%{provider} 目前还无法安全回退原生�
 session.rewind_title: "%{title}（回退）"
 session.rewound: 已回退到第 %{turn} 轮任务之前
 session.rewound_with_stale_refs: "已回退到第 %{turn} 轮任务之前，但仍有过期引用：%{error}"
-right_panel.browser: 浏览器
 right_panel.terminal: 终端
 right_panel.files: 文件
 right_panel.history: 历史
@@ -1176,7 +1173,6 @@ right_panel.toggle: 显示或隐藏右侧面板
 right_panel.toggle_unavailable: 右侧面板仅在会话页面可用
 right_panel.open_surface: 打开一个面板
 right_panel.choose_surface: 选择要在右侧面板中显示的内容
-right_panel.browser_description: 打开本地应用或网址
 right_panel.terminal_description: 在此工作区中启动 Shell
 right_panel.files_description: 浏览并阅读工作区文件
 right_panel.terminal_unavailable: 终端不可用
@@ -1186,41 +1182,6 @@ right_panel.tabs: 右侧面板标签页
 right_panel.add_tab: 添加面板标签页
 right_panel.hide: 隐藏右侧面板
 right_panel.close_tab: 关闭%{title}
-right_panel.share_browser: 共享给当前会话
-right_panel.revoke_browser_share: 接管并取消共享
-right_panel.browser_share_blocked: 需要本地 daemon 与正在运行的会话
-browser_collaboration.click_summary: 点击:%{selector}
-browser_collaboration.fill_summary: 输入%{selector}:%{text}
-browser_collaboration.navigate_summary: 导航至%{url}
-browser_collaboration.reading: 读取页面
-browser_collaboration.running: 正在操作浏览器
-browser_collaboration.shared_status: 已共享给当前会话，操作需逐次确认；停止共享即可接管。
-browser_collaboration.approve_once: 允许这一次
-browser_collaboration.reject: 拒绝
-browser_collaboration.open_approval_title: 允许打开此页面？
-browser_collaboration.open_approval_detail: 仅授权此新页面。
-browser_collaboration.open_approval_allow: 允许一次
-browser_collaboration.take_over: 停止共享
-browser_collaboration.share: 共享
-browser_collaboration.shared: 已共享
-browser_collaboration.opening: 正在打开
-browser_collaboration.stop_opening: 停止浏览器自动化
-browser_collaboration.share_rejected: 页面共享被拒绝：%{message}
-browser_collaboration.runtime_replaced: 会话 runtime 已更换，共享已撤销，请重新共享
-browser_collaboration.publish_failed: daemon 连接已断开，页面共享随之撤销：%{error}
-browser_collaboration.too_many_pages: 当前连接共享页面数已达上限，请先取消一个页面
-browser_collaboration.automatic_status: 完全访问下可连续操作。普通浏览不会取消共享；停止共享即可接管。
-browser_collaboration.scroll_summary: 滚动:%{delta_y}
-browser_collaboration.open_handled: 打开页面（由应用宿主处理）
-browser_collaboration.screenshot_summary: 截取共享页面的屏幕截图
-browser_collaboration.evaluate_summary: 执行 JavaScript：%{expression}
-browser_collaboration.click_at_summary: 点击坐标 (%{x}, %{y})
-browser_collaboration.double_click_summary: 双击 %{selector}
-browser_collaboration.press_summary: 在 %{selector} 上按下 %{key}
-browser_collaboration.hover_summary: 悬停在 %{selector}
-browser_collaboration.select_summary: 在 %{selector} 中选择 %{value}
-browser_collaboration.drag_summary: 将 %{from} 拖动到 %{to}
-browser_collaboration.close_handled: 页面关闭由应用宿主处理。
 environment.title: 环境
 environment.summary: 环境和后台工作
 environment.changes: 更改
@@ -1470,15 +1431,6 @@ diff.rows_hidden: "还有 %{count} 行 · 打开审阅查看完整更改"
 terminal.transport_failed: 终端传输失败
 terminal.no_workspace_description: 请先选择一个任务，再打开终端。
 terminal.process_exited: 进程已退出
-browser.back: 后退（%{shortcut}）
-browser.forward: 前进（%{shortcut}）
-browser.stop_loading: 停止加载（Esc）
-browser.reload: 重新加载（%{shortcut}）
-browser.open_external: 在默认浏览器中打开
-browser.browse_web: 浏览网页
-browser.start_hint: 在上方输入网址或搜索内容 — 按 %{shortcut} 聚焦地址栏
-browser.unavailable: 浏览器不可用
-browser.unavailable_on_platform: 浏览器面板尚不支持当前平台
 find.bad_pattern: 表达式无效
 find.no_results: 无结果
 find.result_count: "%{current} / %{total}"

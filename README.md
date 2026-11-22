@@ -55,9 +55,9 @@ provider credentials, and MCP configuration. You do not need to start
 This release supports OpenCode up to 2.3.2. Version requirements for optional
 features:
 
-- Browser and scheduled task MCPs: OpenCode 2.1.4+. Enable them in
+- Scheduled task MCP: OpenCode 2.1.4+. Enable it in
   **Settings → General → Features**; Fintwind manages the experimental MCP
-  connections automatically. See [agent-created scheduled tasks](docs/scheduled-tasks-mcp.md).
+  connection automatically. See [agent-created scheduled tasks](docs/scheduled-tasks-mcp.md).
 - Image generation: OpenCode 2.2.1+ and a compatible connected image model.
 - Native Goal: integration targets OpenCode 2.2.1; older versions without native
   Goal cannot use it. See [Goal](docs/goals.md).
@@ -85,7 +85,7 @@ against the sha256 published with the release, installs silently without
 administrator rights, and restarts into the new version. Portable installs have
 no install record, so their update entry still opens the release page. See
 [Windows setup and troubleshooting](docs/windows.md) for SmartScreen, CLI
-detection, data locations, and WebView2 details.
+detection and data locations.
 
 ## Features
 
@@ -143,14 +143,7 @@ detection, data locations, and WebView2 details.
   actions in a split button; a failed branch switch keeps its state and offers
   retry. Attach files from the composer or by dropping them onto the
   conversation; images and PDFs are sent inline to OpenCode.
-- **Terminal and browser.** Work in a built-in terminal or the optional
-  WebView2 browser panel. Enable the browser tools in settings (off by
-  default; requires OpenCode 2.1.4+) and agents in any session can operate all
-  open browser tabs, including manually opened tabs, without per-page approval
-  or session isolation. Tools can open, observe, click, fill, scroll, navigate,
-  and take screenshots; they support local file pages and password fields, and
-  snapshots can include passwords and hidden form values. The session interface
-  itself remains native GPUI.
+- **Terminal.** Work in a built-in terminal alongside the session.
 - **Usage and subscriptions.** The usage page combines overview KPIs, a usage
   flow diagram (model shares feeding the total composition of cache reads, input,
   output, cache writes, and reasoning; click to highlight a flow), a subscription

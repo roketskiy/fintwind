@@ -733,17 +733,17 @@ body { -webkit-font-smoothing: antialiased; }
 .palette-heading { display: flex; align-items: center; gap: 6px; padding: 6px 10px 4px; font-size: 11px; color: var(--muted-foreground); }
 .palette-heading kbd { margin-left: auto; border: 1px solid var(--border); padding: 0 4px; border-radius: 3px; font-size: 10px; }
 .slash-results { padding: 4px; max-height: min(270px, 35dvh); overflow-y: auto; }
-.slash-results [role="option"] { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; height: auto; padding: 6px; border-radius: 8px; text-align: left; }
+.slash-results [role="option"] { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; height: auto; padding: 3px 6px; border-radius: 8px; text-align: left; }
 .slash-results [data-highlighted] { background: var(--muted); }
-.command-symbol { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid var(--border); background: var(--card); border-radius: 7px; color: var(--muted-foreground); }
-.command-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 3px; }
+.command-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 1px; }
 .command-copy strong { font-size: 12px; font-weight: 550; }
 .command-copy small { font-size: 11px; color: var(--muted-foreground); white-space: normal; }
-.slash-results [role="option"] > span:last-child { color: var(--muted-foreground); }
+.slash-results [role="option"] > span:last-child:not(.command-copy) { color: var(--muted-foreground); }
 .palette-empty { padding: 18px 12px; font-size: 12px; color: var(--muted-foreground); }
 .goal-card { flex: none; margin: 6px 8px 0; border: 1px solid var(--border); border-radius: 10px; background: var(--bui-card-surface); box-shadow: var(--bui-card-shadow); max-height: 32dvh; overflow: auto; }
 .goal-heading { display: flex; align-items: center; padding: 0 3px 0 8px; gap: 0; }
 .goal-trigger { flex: 1; justify-content: flex-start; gap: 6px; min-width: 0; height: 44px; padding-inline: 0; border-radius: 8px; font-size: 12px; }
+.goal-trigger[aria-expanded], .goal-trigger:active { background-color: transparent; }
 .goal-summary { display: flex; flex: 1; min-width: 0; flex-direction: column; align-items: flex-start; gap: 1px; }
 .goal-summary strong { font-size: 11px; font-weight: 550; }
 .goal-summary > span { max-width: 100%; font-size: 11px; font-weight: 400; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

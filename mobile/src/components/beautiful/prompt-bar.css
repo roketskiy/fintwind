@@ -1,7 +1,6 @@
 /* Beautiful UI PromptBar: 14px surface, 4px inset, 32px control faces.
    Touch slots remain 44px; the painted face does not become a 44px block. */
 .bui-prompt { display: flex; flex-direction: column; min-width: 0; padding: 4px; border: 1px solid var(--border); border-radius: 14px; background: var(--bui-card-surface); box-shadow: var(--bui-card-shadow); }
-.bui-prompt:focus-within { border-color: var(--ring); }
 .composer-region .bui-prompt-input { display: block; width: 100%; min-width: 0; min-height: 30px; max-height: min(144px, 24dvh); margin: 0; padding: 4px 7px 0; border: 0; border-radius: 0; background: transparent; color: var(--foreground); font: inherit; font-size: 16px; font-weight: 400; line-height: 24px; resize: none; field-sizing: content; outline: none; }
 .bui-prompt-input::placeholder { color: var(--muted-foreground); }
 .bui-prompt-controls { display: flex; align-items: center; gap: 0; min-width: 0; }

@@ -1,0 +1,36 @@
+[Unit]
+Description=Fintwind STUN-only address discovery service (coturn, no TURN/relay)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fintwind-stun
+Group=fintwind-stun
+ExecStart=/usr/bin/turnserver -c /etc/fintwind-stun/turnserver.conf
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+# STUN-only needs no relay port range and binds the unprivileged UDP 18762, so
+# no capabilities are required.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+CapabilityBoundingSet=
+LimitNOFILE=4096
+MemoryMax=128M
+TasksMax=32
+UMask=0077
+# Creates and owns /var/log/fintwind-stun for the log file under ProtectSystem.
+LogsDirectory=fintwind-stun
+LogsDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target

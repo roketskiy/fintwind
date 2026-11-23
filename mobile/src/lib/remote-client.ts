@@ -13,8 +13,11 @@ import {
   encodeBase64Url,
   openEnvelope,
   sealRecord,
+  validHash,
   validToken,
 } from "./remote-crypto";
+import { connectDirect, type DirectConnection } from "./remote-direct";
+import { MESSAGE_MAX_BYTES } from "./remote-framing";
 import {
   REVISION_RE,
   checkFieldBounds,
@@ -28,15 +31,13 @@ import { SessionUpdates } from "./session-updates";
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const COMMAND_TIMEOUT_MS = 120000;
-const HANDSHAKE_TIMEOUT_MS = 15000;
+const HANDSHAKE_TIMEOUT_MS = 60000;
 const RECONNECT_BASE_MS = 1500;
 const RECONNECT_MAX_MS = 30000;
 const READ_CACHE_MAX_ITEMS = 8;
 const READ_CACHE_MAX_BYTES = 2 * 1024 * 1024;
 const READ_CACHE_ITEM_MAX_BYTES = 512 * 1024;
-const FRAME_MAX_BYTES = 1024 * 1024;
 const UNRESOLVED_MAX_ITEMS = 512;
-const PAIR_KEY = "fintwind-pair";
 const UNRESOLVED_PREFIX = "fintwind-unresolved";
 const PROJECT_KEY = "fintwind-project";
 const SESSION_KEY = "fintwind-session";
@@ -73,12 +74,14 @@ export class RemoteClient {
     pendingScopes: [],
   };
   private started = false;
-  private ws: WebSocket | null = null;
+  private connection: DirectConnection | null = null;
+  private connecting: Promise<DirectConnection> | null = null;
   private sendKey: CryptoKey | null = null;
   private receiveKey: CryptoKey | null = null;
   private phoneNonce: Uint8Array | null = null;
   private sendSeq = 0;
   private receiveSeq = 0;
+  private handshake: "hello" | "auth" | "ready" | "authenticated" = "hello";
   private sendQueue: Promise<void> = Promise.resolve();
   private receiveQueue: Promise<void> = Promise.resolve();
   private transportGeneration = 0;
@@ -98,6 +101,7 @@ export class RemoteClient {
   private reconnectDelay = RECONNECT_BASE_MS;
   private onlineHandler: (() => void) | null = null;
   private offlineHandler: (() => void) | null = null;
+  private visibilityHandler: (() => void) | null = null;
   private storageHandler: ((event: StorageEvent) => void) | null = null;
   private sessionWatch: { id: string; updates: SessionUpdates; receive: (detail: SessionDetail) => void; fail: (error: Error) => void } | null = null;
 
@@ -129,22 +133,26 @@ export class RemoteClient {
   start(): void {
     if (this.started || this.forgetting) return;
     this.started = true;
+    this.reconnectDelay = RECONNECT_BASE_MS;
     this.onlineHandler = () => {
       if (!this.started) return;
-      if (this.ready && this.ws?.readyState === WebSocket.OPEN) {
-        if (this.snapshot.connection !== "connected")
-          this.setPhase("connected", null);
-        return;
-      }
-      this.reconnectDelay = RECONNECT_BASE_MS;
-      this.connectNow();
+      if (this.snapshot.connection === "offline") this.reconnect();
     };
     this.offlineHandler = () => {
       if (!this.started) return;
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = 0;
       this.setPhase("offline", "网络已断开，等待恢复。");
+    };
+    this.visibilityHandler = () => {
+      if (!this.started || document.hidden || navigator.onLine === false) return;
+      if (!this.ready && !this.connecting && (this.reconnectTimer || this.snapshot.connection === "reconnecting" || this.snapshot.connection === "offline")) {
+        this.reconnect();
+      }
     };
     window.addEventListener("online", this.onlineHandler);
     window.addEventListener("offline", this.offlineHandler);
+    document.addEventListener("visibilitychange", this.visibilityHandler);
     this.storageHandler = (event) => {
       if (event.storageArea !== localStorage || (event.key !== "fintwind-paired-route" && event.key !== null)) return;
       if (event.newValue === this.route) return;
@@ -162,16 +170,12 @@ export class RemoteClient {
   }
 
   stop(): void {
-    if (!this.started && this.ws === null && this.reconnectTimer === 0) return;
+    if (!this.started && this.connection === null && this.connecting === null && this.reconnectTimer === 0) return;
     this.started = false;
     this.sessionWatch = null;
     this.lease?.release();
     this.lease = null;
-    this.transportGeneration += 1;
-    this.ready = false;
-    this.sendKey = null;
-    this.receiveKey = null;
-    this.phoneNonce = null;
+    this.invalidateTransport();
     window.clearTimeout(this.reconnectTimer);
     window.clearTimeout(this.handshakeTimer);
     this.reconnectTimer = 0;
@@ -182,17 +186,18 @@ export class RemoteClient {
       window.removeEventListener("offline", this.offlineHandler);
     this.onlineHandler = null;
     this.offlineHandler = null;
+    if (this.visibilityHandler)
+      document.removeEventListener("visibilitychange", this.visibilityHandler);
+    this.visibilityHandler = null;
     if (this.storageHandler) window.removeEventListener("storage", this.storageHandler);
     this.storageHandler = null;
-    this.interruptInflight();
-    const owned = this.ws;
-    this.ws = null;
-    this.sendQueue = Promise.resolve();
-    this.receiveQueue = Promise.resolve();
-    try {
-      owned?.close();
-    } catch {
-      /* already gone */
+    const owned = this.connection;
+    const ownedConnecting = this.connecting;
+    this.connection = null;
+    this.connecting = null;
+    owned?.close();
+    if (ownedConnecting) {
+      void ownedConnecting.then((connection) => connection.close(), () => {});
     }
     this.setPhase("idle", null);
   }
@@ -202,22 +207,18 @@ export class RemoteClient {
       this.start();
       return;
     }
-    this.transportGeneration += 1;
-    this.ready = false;
-    this.sendKey = null;
-    this.receiveKey = null;
-    this.phoneNonce = null;
-    this.interruptInflight();
+    this.invalidateTransport();
     window.clearTimeout(this.reconnectTimer);
     window.clearTimeout(this.handshakeTimer);
     this.reconnectTimer = 0;
     this.handshakeTimer = 0;
-    const owned = this.ws;
-    this.ws = null;
-    try {
-      owned?.close();
-    } catch {
-      /* already gone */
+    const owned = this.connection;
+    const ownedConnecting = this.connecting;
+    this.connection = null;
+    this.connecting = null;
+    owned?.close();
+    if (ownedConnecting) {
+      void ownedConnecting.then((connection) => connection.close(), () => {});
     }
     this.reconnectDelay = RECONNECT_BASE_MS;
     this.connectNow();
@@ -256,7 +257,7 @@ export class RemoteClient {
     type: K,
     fields: CommandMap[K]["fields"],
   ): Promise<CommandMap[K]["result"]> {
-    if (!this.ready || !this.ws) throw new Error("尚未建立加密连接");
+    if (!this.ready || !this.connection) throw new Error("尚未建立加密连接");
     const fieldView = fields as unknown as {
       projectId?: string;
       sessionId?: string;
@@ -285,7 +286,7 @@ export class RemoteClient {
       this.refreshSnapshot();
     }
     const generation = this.transportGeneration;
-    const target = this.ws;
+    const target = this.connection;
     const cacheKey = this.readKey(type, fieldView);
     const cached = cacheKey ? this.readCache.get(cacheKey)?.data : undefined;
     const startEpoch = ++this.epochCounter;
@@ -336,7 +337,7 @@ export class RemoteClient {
         const envelope = await sealRecord(this.sendKey, seq, request);
         if (generation !== this.transportGeneration || !this.ready)
           throw new Error("连接已改变，操作结果待确认");
-        this.sendRaw(envelope, target);
+        await target.send(envelope);
       });
       this.sendQueue = sending.catch(() => {});
       await sending;
@@ -354,8 +355,7 @@ export class RemoteClient {
       }
       if (
         generation === this.transportGeneration &&
-        target === this.ws &&
-        target.readyState === WebSocket.OPEN
+        target === this.connection
       ) {
         try {
           target.close();
@@ -486,7 +486,10 @@ export class RemoteClient {
         "",
         window.location.pathname + window.location.search,
       );
-    if (values.get("v") === "1" && values.has("route") && values.has("key")) {
+    const linkVersion = values.get("v");
+    if (linkVersion !== null && linkVersion !== "2")
+      throw new Error("配对链接版本过旧，请更新桌面后重新扫码。");
+    if (values.get("v") === "2" && values.has("route") && values.has("key")) {
       const keys = Array.from(values.keys());
       if (
         keys.length !== 3 ||
@@ -505,45 +508,13 @@ export class RemoteClient {
       const pair = await rememberPairing(next.route, next.key);
       if (previous !== next.route) this.clearRouteState(previous || "", next.route);
       localStorage.setItem("fintwind-paired-route", next.route);
-      sessionStorage.removeItem(PAIR_KEY);
       return pair;
     }
     const remembered = await loadPairing();
     if (remembered) return remembered;
-    let saved: string | null = null;
-    try {
-      saved = sessionStorage.getItem(PAIR_KEY);
-    } catch {
-      throw new Error("配对信息无效");
-    }
-    if (!saved) {
-      const error = new Error("请使用桌面生成的配对链接");
-      error.name = "MissingPairing";
-      throw error;
-    }
-    let next: unknown;
-    try {
-      next = JSON.parse(saved) as unknown;
-    } catch {
-      throw new Error("配对信息无效");
-    }
-    if (
-      !isRecord(next) ||
-      !validToken(next["route"]) ||
-      !validToken(next["key"])
-    )
-      throw new Error("配对信息无效");
-    const pair = await rememberPairing(next["route"], next["key"]);
-    localStorage.setItem("fintwind-paired-route", pair.route);
-    sessionStorage.removeItem(PAIR_KEY);
-    return pair;
-  }
-
-  private sendRaw(value: string, target: WebSocket | null): void {
-    if (!target || target !== this.ws || target.readyState !== WebSocket.OPEN)
-      throw new Error("连接不可用");
-    if (target.bufferedAmount > FRAME_MAX_BYTES) throw new Error("连接不可用");
-    target.send(value);
+    const error = new Error("请使用桌面生成的配对链接");
+    error.name = "MissingPairing";
+    throw error;
   }
 
   private settleMutation(scope: string, id: string): void {
@@ -610,14 +581,11 @@ export class RemoteClient {
     for (const listener of this.listeners) listener();
   }
 
-  private failCurrentWs(ws: WebSocket, message: string): void {
-    this.ready = false;
+  private failCurrentConnection(connection: DirectConnection, message: string): void {
+    if (this.connection !== connection) return;
     this.setPhase("error", message);
-    try {
-      ws.close();
-    } catch {
-      /* close handler reports */
-    }
+    connection.close();
+    this.connectionLost(connection, message);
   }
 
   private async connectNow(): Promise<void> {
@@ -631,6 +599,7 @@ export class RemoteClient {
       window.navigator.onLine === false
     ) {
       this.setPhase("offline", "网络已断开，等待恢复。");
+      return;
     } else {
       this.setPhase(this.route ? "reconnecting" : "connecting", null);
     }
@@ -640,6 +609,7 @@ export class RemoteClient {
     this.sendKey = null;
     this.receiveKey = null;
     this.phoneNonce = null;
+    this.handshake = "hello";
     this.sendSeq = 0;
     this.receiveSeq = 0;
     this.sendQueue = Promise.resolve();
@@ -674,102 +644,132 @@ export class RemoteClient {
       return;
     }
     if (generation !== this.transportGeneration || !this.started) return;
-    const previous = this.ws;
-    this.ws = null;
-    if (previous) {
-      try {
-        previous.close();
-      } catch {
-        /* already gone */
-      }
+    const previous = this.connection;
+    const previousConnecting = this.connecting;
+    this.connection = null;
+    this.connecting = null;
+    previous?.close();
+    if (previousConnecting) {
+      void previousConnecting.then((connection) => connection.close(), () => {});
     }
-    let ws: WebSocket;
+    let connecting: Promise<DirectConnection>;
     try {
-      ws = new WebSocket(
-        `wss://${window.location.host}/c/${encodeURIComponent(this.route)}/__fintwind_remote__`,
-      );
+      connecting = connectDirect({
+        route: this.route,
+        secret: this.secret,
+        onMessage: (text) => {
+          const target = this.connection;
+          if (!target || generation !== this.transportGeneration) return;
+          const pending = this.receiveQueue.then(() =>
+            this.processMessage(text, target, generation),
+          );
+          this.receiveQueue = pending.catch(() => {});
+        },
+        onDisconnect: (error) => {
+          if (generation !== this.transportGeneration) return;
+          this.connectionLost(this.connection ?? connecting, error.message);
+        },
+      });
     } catch {
       this.setPhase("error", "连接失败");
-      this.scheduleReconnect(this.ws);
+      this.scheduleReconnect();
       return;
     }
-    this.ws = ws;
+    this.connecting = connecting;
     window.clearTimeout(this.handshakeTimer);
     this.handshakeTimer = window.setTimeout(() => {
       if (
-        this.ws === ws &&
+        (this.connecting === connecting || this.connection !== null) &&
         !this.ready &&
         generation === this.transportGeneration
-      )
-        ws.close();
+      ) {
+        this.invalidateTransport();
+        this.connecting = null;
+        this.connection = null;
+        this.setPhase("error", "连接超时，请重试");
+        void connecting.then((connection) => connection.close(), () => {});
+        this.scheduleReconnect();
+      }
     }, HANDSHAKE_TIMEOUT_MS);
-    ws.addEventListener("open", () => {
-      if (generation !== this.transportGeneration || this.ws !== ws) return;
+    void connecting.then(async (connection) => {
+      if (generation !== this.transportGeneration || !this.started || this.connecting !== connecting) {
+        connection.close();
+        return;
+      }
+      if (this.snapshot.connection === "offline") this.setPhase("connecting", null);
+      this.connecting = null;
+      this.connection = connection;
       try {
         const nonceBytes = crypto.getRandomValues(new Uint8Array(32));
         this.phoneNonce = nonceBytes;
-        this.sendRaw(
+        await connection.send(
           JSON.stringify({
             type: "hello",
-            version: 1,
+            version: 2,
             nonce: encodeBase64Url(nonceBytes),
           }),
-          ws,
         );
       } catch {
-        try {
-          ws.close();
-        } catch {
-          /* close handler reports */
-        }
+        this.failCurrentConnection(connection, "连接握手失败");
         return;
       }
-      this.setPhase("connecting", null);
-    });
-    ws.addEventListener("message", (event: MessageEvent) => {
-      const pending = this.receiveQueue.then(() =>
-        this.processMessage(event, ws, generation),
-      );
-      this.receiveQueue = pending.catch(() => {});
-    });
-    ws.addEventListener("close", () => {
-      if (this.ws !== ws || generation !== this.transportGeneration) return;
+      if (generation === this.transportGeneration && this.connection === connection)
+        this.setPhase("connecting", null);
+    }).catch((error: unknown) => {
+      if (generation !== this.transportGeneration || !this.started || this.connecting !== connecting) return;
+      this.connecting = null;
       window.clearTimeout(this.handshakeTimer);
-      this.transportGeneration += 1;
-      this.ready = false;
-      this.sendKey = null;
-      this.receiveKey = null;
-      this.phoneNonce = null;
+      this.handshakeTimer = 0;
       this.interruptInflight();
-      if (!this.started) return;
-      if (
-        typeof window.navigator !== "undefined" &&
-        window.navigator.onLine === false
-      ) {
-        this.setPhase("offline", "网络已断开，等待恢复。");
-      } else {
-        this.setPhase("reconnecting", this.snapshot.error);
-      }
-      this.scheduleReconnect(ws);
-    });
-    ws.addEventListener("error", () => {
-      if (
-        this.ws === ws &&
-        generation === this.transportGeneration &&
-        !this.ready
-      )
-        this.setPhase("connecting", "连接失败");
+      const message = error instanceof Error ? error.message : "无法建立直连";
+      this.setPhase("reconnecting", message);
+      this.scheduleReconnect();
     });
   }
 
-  private scheduleReconnect(previous: WebSocket | null): void {
+  private invalidateTransport(): void {
+    this.transportGeneration += 1;
+    this.ready = false;
+    this.sendKey = null;
+    this.receiveKey = null;
+    this.phoneNonce = null;
+    this.handshake = "hello";
+    this.sendSeq = 0;
+    this.receiveSeq = 0;
+    this.sendQueue = Promise.resolve();
+    this.receiveQueue = Promise.resolve();
+    this.interruptInflight();
+  }
+
+  private connectionLost(connection: DirectConnection | Promise<DirectConnection>, message: string): void {
+    const ownsConnection = this.connection === connection;
+    const ownsConnecting = this.connecting === connection;
+    if (!ownsConnection && !ownsConnecting) return;
+    if ("then" in connection)
+      void connection.then((owned) => owned.close(), () => {});
+    window.clearTimeout(this.handshakeTimer);
+    this.handshakeTimer = 0;
+    this.invalidateTransport();
+    this.connection = null;
+    this.connecting = null;
+    if (!this.started) return;
+    if (typeof window.navigator !== "undefined" && window.navigator.onLine === false)
+      this.setPhase("offline", "网络已断开，等待恢复。");
+    else
+      this.setPhase("reconnecting", message);
+    this.scheduleReconnect();
+  }
+
+  private scheduleReconnect(): void {
     if (!this.started) return;
     window.clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = 0;
+    if (navigator.onLine === false || document.hidden) return;
     const delay = this.reconnectDelay;
     this.reconnectDelay = Math.min(delay * 2, RECONNECT_MAX_MS);
     this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = 0;
       if (!this.started) return;
-      if (previous !== null && this.ws !== previous && this.ws !== null) return;
       this.connectNow();
     }, delay);
   }
@@ -791,21 +791,21 @@ export class RemoteClient {
   }
 
   private async processMessage(
-    event: MessageEvent,
-    ws: WebSocket,
+    text: string,
+    connection: DirectConnection,
     generation: number,
   ): Promise<void> {
     try {
-      if (generation !== this.transportGeneration || this.ws !== ws) return;
-      if (typeof event.data !== "string" || event.data.length > FRAME_MAX_BYTES)
+      if (generation !== this.transportGeneration || this.connection !== connection) return;
+      if (text.length > MESSAGE_MAX_BYTES)
         throw new Error("收到无效数据");
-      const value = JSON.parse(event.data) as unknown;
+      const value = JSON.parse(text) as unknown;
       if (!isRecord(value)) throw new Error("收到无效数据");
-      if (!this.sendKey || !this.receiveKey) {
+      if (this.handshake === "hello") {
         if (
           Object.keys(value).length !== 3 ||
           value["type"] !== "hello" ||
-          value["version"] !== 1 ||
+          value["version"] !== 2 ||
           typeof value["nonce"] !== "string"
         ) {
           throw new Error("握手无效");
@@ -827,25 +827,55 @@ export class RemoteClient {
           this.phoneNonce,
           desktopNonce,
         );
-        if (generation !== this.transportGeneration || this.ws !== ws) return;
+        if (generation !== this.transportGeneration || this.connection !== connection) return;
         this.sendKey = derived[0];
         this.receiveKey = derived[1];
+        this.handshake = "auth";
         return;
       }
+      if (!this.sendKey || !this.receiveKey) throw new Error("尚未建立加密连接");
       const expectedSeq = this.receiveSeq;
       const response = await openEnvelope(value, this.receiveKey, expectedSeq);
-      if (generation !== this.transportGeneration || this.ws !== ws) return;
+      if (generation !== this.transportGeneration || this.connection !== connection) return;
       this.receiveSeq = expectedSeq + 1;
       if (!isRecord(response)) throw new Error("响应格式无效");
-      if (!this.ready) {
-        if (Object.keys(response).length !== 1 || response["type"] !== "ready")
+      if (this.handshake === "auth") {
+        if (
+          this.sendSeq !== 0 || response["type"] !== "auth" ||
+          Object.keys(response).length !== 5 || response["role"] !== "desktop" ||
+          response["attempt"] !== connection.attempt ||
+          response["offerHash"] !== connection.offerHash ||
+          response["answerHash"] !== connection.answerHash ||
+          !validHash(response["offerHash"]) || !validHash(response["answerHash"])
+        )
+          throw new Error("连接校验失败");
+        await connection.send(await sealRecord(this.sendKey, this.sendSeq++, {
+          type: "auth",
+          role: "phone",
+          attempt: connection.attempt,
+          offerHash: connection.offerHash,
+          answerHash: connection.answerHash,
+        }));
+        this.handshake = "ready";
+        if (generation !== this.transportGeneration || this.connection !== connection) return;
+        return;
+      }
+      if (this.handshake === "ready") {
+        if (
+          Object.keys(response).length !== 2 || response["type"] !== "ready" ||
+          response["attempt"] !== connection.attempt
+        )
           throw new Error("连接校验失败");
         window.clearTimeout(this.handshakeTimer);
+        this.handshakeTimer = 0;
+        this.handshake = "authenticated";
         this.ready = true;
         this.reconnectDelay = RECONNECT_BASE_MS;
         this.setPhase("connected", null);
         return;
       }
+      if (this.handshake !== "authenticated" || !this.ready)
+        throw new Error("连接尚未完成认证");
       if (response["type"] === "sessionUpdate") {
         const watch = this.sessionWatch;
         if (!watch || response["watchId"] !== watch.id) return;
@@ -926,9 +956,9 @@ export class RemoteClient {
         item.reject(new Error(message.slice(0, 512) || "桌面操作失败"));
       }
     } catch (error) {
-      if (this.ws === ws && generation === this.transportGeneration)
-        this.failCurrentWs(
-          ws,
+      if (this.connection === connection && generation === this.transportGeneration)
+        this.failCurrentConnection(
+          connection,
           error instanceof Error ? error.message : "连接数据无效",
         );
     }

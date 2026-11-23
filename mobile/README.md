@@ -20,16 +20,20 @@ The frontend publisher builds and uploads only static files plus the reviewed si
 ## Ownership
 
 - `src/lib/remote-client.ts` owns connection state, pairing, request tracking, bounded conditional caching and reconnects.
-- `src/lib/remote-crypto.ts` implements the existing encrypted protocol. `remote-validation.ts` validates incoming data.
+- `src/lib/remote-direct.ts` connects to `/signal/v2`, exchanges encrypted SDP, and owns the WebRTC data channel. It uses only `stun:<page-hostname>:18762` and has no TURN or business relay fallback.
+- `src/lib/remote-framing.ts` splits complete text messages into 8192-byte chunks, reassembles one message at a time, and bounds the send queue.
+- `src/lib/remote-crypto.ts` derives separate signalling keys and per-connection business keys. `remote-validation.ts` validates incoming business data.
 - `src/hooks/use-remote.ts` owns workspace and session selection, reads and user operations.
 - `src/app.tsx` composes the session-list and conversation screens. Message and approval components live in `src/components`.
 - `src/components/ui` contains shadcn component source. Theme tokens and responsive layout live in `src/index.css`.
 
-Lists and conversations are separate phone screens. Browser Back returns to the session list. The list remains mounted to retain scroll position. Drafts stay in memory per session. Chat content is not persisted. A page reload can recover pairing and unresolved operation IDs from per-tab session storage, but does not restore drafts or queue messages offline.
+Lists and conversations are separate phone screens. Browser Back returns to the session list. The list remains mounted to retain scroll position. Drafts stay in memory per session. Chat content is not persisted. IndexedDB retains the version 2 pairing. Local storage retains unresolved operation IDs by pairing route. A page reload does not restore drafts or queue messages offline.
 
 ## Security and deployment
 
-The existing end-to-end encryption and restricted desktop commands remain in use. Mutation commands are never automatically retried. A timeout or disconnect leaves the operation blocked until a later read confirms current state. Pairing secrets never enter application navigation URLs, logging or rendered markup.
+Version 2 pairing links use `v=2`, a route token, and a pairing key. Older saved pairings require a new scan. The signalling server receives the route hash and encrypted connection descriptions, never business commands or attachments. The phone and desktop authenticate each other over the data channel and bind the exchange to the connection attempt and both complete SDP hashes. The client becomes connected only after the desktop verifies the phone authentication and sends `ready`.
+
+The existing restricted desktop commands remain in use. Mutation commands are never automatically retried. A timeout or disconnect leaves the operation blocked until a later read confirms current state. Pairing secrets never enter application navigation URLs, logging or rendered markup. A signalling disconnect does not close a healthy data channel. Automatic reconnects stop after five failed attempts and remain available through the manual retry control.
 
 Markdown does not execute HTML. External images are not loaded. The UI uses system fonts and same-origin scripts. No analytics, service worker or third-party CDN is used. Caddy permits inline style attributes for Base UI layout variables, but scripts and style elements remain same-origin only.
 

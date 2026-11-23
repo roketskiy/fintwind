@@ -1,19 +1,46 @@
-# Mobile relay deployment
+# Mobile remote-control deployment
 
-This directory contains reusable relay source, the service unit, a Caddy site
-template, and a static-web publisher. Personal bootstrap and one-time migration
-scripts are not part of the repository. Keep host addresses, SSH identity paths,
-DNS administration settings, deployment-owner markers, and migration snapshots
-in a private directory outside the checkout. Never commit registration keys,
-signing secrets, pairing links, live environment files, or deployment archives.
+This directory holds the direct-connect signaling service (`signal/`), the
+STUN-only address discovery service (`stun/`), the shared Caddy site template, the
+service installer, and the static-web publisher. The legacy business relay
+(`relay/`) is retained as upstream source reference only; its routes are retired
+from the Caddy template and the publisher no longer depends on it. Keep host
+addresses, SSH identity paths, DNS administration settings, and migration
+snapshots in a private directory outside the checkout. Never commit registration
+keys, signing secrets, pairing links, live environment files, or deployment
+archives.
+
+## Install the signaling and STUN services
+
+The public site and WebSocket use TCP 18761, and STUN uses UDP 18762. Caddy
+manages the site's TLS certificate; its HTTP-01 renewal challenge also requires
+inbound TCP 80 when a certificate is issued or renewed.
+
+Run `install-signal-stun.sh` as root once per host before the first frontend
+release, and again after changing the signal source or unit. Pass a Node 20+
+linux-x64 tarball URL or local path; add `--with-stun` to also install the
+STUN-only service (the distribution coturn package must be present first).
+
+The installer prepares a complete new version in its own release directory under
+`/opt/fintwind-signal/releases/<id>` (Node runtime and locked dependencies, install
+scripts disabled), then atomically repoints the `current` symlinks and restarts
+`fintwind-signal.service`. A running process is never overwritten, the health
+check reflects the new code, and the previous release is kept for rollback. It
+writes a default environment file only when absent. It runs on the remote host and
+does not assume a local proxy: curl and npm honor the process environment
+(`HTTP_PROXY`/`HTTPS_PROXY`), and `FINTWIND_INSTALL_PROXY` overrides the proxy only
+when explicitly set (empty forces a direct connection). Downloads and the whole
+`npm ci` have bounded timeouts. It does not publish the frontend, reload Caddy, or
+touch the legacy relay. See `signal/README.md` and `stun/README.md` for configuration
+and boundaries.
 
 ## Publish the mobile webpage
 
 1. Copy `mobile-ui.example.json` to a private location outside the repository.
    Replace its example values and restrict the file to the deployment operator.
 2. Inspect the configured Caddy site on the intended host. Record its current
-   SHA256 and confirm that Caddy and the relay service are healthy.
-3. After explicit deployment approval, run with a suitable command timeout:
+   SHA256 and confirm that Caddy and the signaling service are healthy.
+3. Run with a suitable command timeout:
 
    ```powershell
    pwsh -NoProfile -File scripts/deploy-mobile-ui.ps1 -ConfigPath <private-config-path> -ExpectedSiteHash <current-site-sha256>
@@ -27,24 +54,17 @@ the checkout. It does not print the configuration or copy it into the release.
 publisher substitutes the configured domain in the staged release. Do not copy
 the unresolved template onto a live server without configuring its variable.
 The publisher verifies the archive and file hashes, refuses to overwrite a site
-whose hash changed, atomically changes the frontend symlink, retains rollback
-files, and reloads only Caddy. It does not restart the relay or run remote-control
-feature tests. Only deploy the built `mobile/dist` files, not preview fixtures or
-source files.
+whose hash changed, atomically changes the frontend symlink and the Caddy site,
+retains rollback files, and reloads only Caddy. It checks that the signaling
+service stays healthy and its PID is unchanged; it does not restart signaling or
+run remote-control feature tests. Only deploy the built `mobile/dist` files, not
+preview fixtures or source files.
 
-## Relay installation and maintenance
+## Legacy relay reference
 
-Use the pinned upstream source described in `UPSTREAM.md` and inspect the relay
-and service unit before adapting them for a new installation. Generate secrets on
-the server and keep them in an operator-controlled environment file. Do not
-reuse another installation's private bootstrap or signing key. Personal migration
-scripts are intentionally excluded rather than generalized into a tool that
-could replace an unrelated service.
-
-The bundled administration CLI supports `revoke <installation-id>`, `list`, and
-`allow <installation-id>`. Installation IDs are public SHA256 identifiers, not
-pairing secrets. Run the CLI using the intended installation's Node runtime and
-`admin.mjs` path. Its policy file must remain root-owned and service-readable.
-Confirm that an interrupted administration command has stopped before removing
-its exact lock file. Missing or invalid policy must fail closed. Reinstalling can
-create a new identity; retain IP and global admission limits as well.
+`relay/` vendors the upstream Alma relay described in `UPSTREAM.md`. It is no
+longer the deployment target: the Caddy template serves the mobile page and
+`/signal/v2` on one origin and returns 404 for the former `/agent`, `/c/*`, and
+`/v1/admission/*` routes. The bundled administration CLI (`revoke`, `list`,
+`allow`) and admission policy apply only to that legacy service and are not used
+by the direct-connect path.

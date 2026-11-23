@@ -1,0 +1,33 @@
+[Unit]
+Description=Fintwind direct-connect WebRTC signaling service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fintwind-signal
+Group=fintwind-signal
+WorkingDirectory=/opt/fintwind-signal/current
+EnvironmentFile=/etc/fintwind-signal.env
+ExecStart=/opt/fintwind-signal/node/current/bin/node /opt/fintwind-signal/current/index.mjs
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+CapabilityBoundingSet=
+LimitNOFILE=4096
+MemoryMax=192M
+TasksMax=64
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

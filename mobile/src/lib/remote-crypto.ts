@@ -2,6 +2,8 @@ const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
 export const MAX_SAFE_SEQ = Number.MAX_SAFE_INTEGER;
 export const FRAME_MAX_BYTES = 1024 * 1024;
 export const RESPONSE_MAX_BYTES = 512 * 1024;
+const HASH_RE = /^[a-f0-9]{64}$/;
+const SIGNAL_MAX_BYTES = 48 * 1024;
 
 export function encodeBase64Url(bytes: Uint8Array): string {
   let text = "";
@@ -26,6 +28,103 @@ export function validToken(text: unknown): text is string {
   } catch {
     return false;
   }
+}
+
+export async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
+export function validHash(value: unknown): value is string {
+  return typeof value === "string" && HASH_RE.test(value);
+}
+
+export async function deriveSignalKeys(
+  secret: CryptoKey,
+  attempt: Uint8Array,
+): Promise<[CryptoKey, CryptoKey]> {
+  const derive = (role: "phone" | "desktop"): Promise<CryptoKey> =>
+    crypto.subtle.deriveKey(
+      {
+        name: "HKDF",
+        hash: "SHA-256",
+        salt: new Uint8Array(attempt),
+        info: new TextEncoder().encode(`fintwind.direct.v2.signal.${role}`),
+      },
+      secret,
+      { name: "AES-GCM", length: 256 },
+      false,
+      role === "phone" ? ["encrypt"] : ["decrypt"],
+    );
+  return Promise.all([derive("phone"), derive("desktop")]);
+}
+
+export async function sealSignal(
+  key: CryptoKey,
+  sequence: number,
+  aad: string,
+  value: { kind: "offer" | "answer"; sdp: string },
+): Promise<string> {
+  if (!Number.isSafeInteger(sequence) || sequence < 0 || sequence > MAX_SAFE_SEQ)
+    throw new Error("信令序号无效");
+  const encrypted = await crypto.subtle.encrypt(
+    {
+      name: "AES-GCM",
+      iv: makeNonce(sequence),
+      additionalData: new TextEncoder().encode(aad),
+      tagLength: 128,
+    },
+    key,
+    new TextEncoder().encode(JSON.stringify(value)),
+  );
+  if (encrypted.byteLength > SIGNAL_MAX_BYTES) throw new Error("信令数据过大");
+  return encodeBase64Url(new Uint8Array(encrypted));
+}
+
+export async function openSignal(
+  key: CryptoKey,
+  sequence: number,
+  aad: string,
+  data: string,
+  expectedKind: "offer" | "answer",
+): Promise<string> {
+  if (!Number.isSafeInteger(sequence) || sequence < 0 || sequence > MAX_SAFE_SEQ)
+    throw new Error("信令序号无效");
+  const encrypted = decodeBase64Url(data);
+  if (encrypted.byteLength > SIGNAL_MAX_BYTES || encodeBase64Url(encrypted) !== data)
+    throw new Error("信令数据无效");
+  const plain = await crypto.subtle.decrypt(
+    {
+      name: "AES-GCM",
+      iv: makeNonce(sequence),
+      additionalData: new TextEncoder().encode(aad),
+      tagLength: 128,
+    },
+    key,
+    encrypted,
+  );
+  if (plain.byteLength > SIGNAL_MAX_BYTES) throw new Error("信令数据过大");
+  const value: unknown = JSON.parse(
+    new TextDecoder("utf-8", { fatal: true }).decode(plain),
+  );
+  if (
+    typeof value !== "object" || value === null || Array.isArray(value) ||
+    Object.keys(value).length !== 2 ||
+    !Object.hasOwn(value, "kind") || !Object.hasOwn(value, "sdp")
+  )
+    throw new Error("信令格式无效");
+  const record = value as Record<string, unknown>;
+  if (
+    record["kind"] !== expectedKind || typeof record["sdp"] !== "string" ||
+    !record["sdp"] || record["sdp"].length > SIGNAL_MAX_BYTES
+  )
+    throw new Error("信令内容无效");
+  return record["sdp"];
 }
 
 export async function deriveKeys(

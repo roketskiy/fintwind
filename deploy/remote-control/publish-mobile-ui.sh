@@ -14,13 +14,17 @@ release=$releases/$id
 case "$id" in *[!a-zA-Z0-9-]*|'') echo 'Invalid release identifier.' >&2; exit 1;; esac
 case "$expected" in *[!a-f0-9]*|'') echo 'Invalid site hash.' >&2; exit 1;; esac
 [ "${#expected}" -eq 64 ]
-[ -f /opt/fintwind-alma-relay/multiuser-v1 ]
 [ -f "$stage/mobile/index.html" ]
 [ -f "$stage/mobile/licenses/shadcn.txt" ]
 [ "$(sha256sum "$site" | cut -d ' ' -f 1)" = "$expected" ]
-systemctl is-active --quiet fintwind-alma-relay.service
+# The direct-connect signaling service replaces the legacy business relay. The
+# frontend release only needs signaling and Caddy healthy; it never restarts
+# either. STUN is a separate UDP service and is not gated here.
+systemctl is-active --quiet fintwind-signal.service
 systemctl is-active --quiet caddy.service
-relay_pid=$(systemctl show fintwind-alma-relay.service -p MainPID --value)
+signal_pid=$(systemctl show fintwind-signal.service -p MainPID --value)
+# Confirm the signaling process answers its local health endpoint directly.
+curl -fsS --max-time 5 http://127.0.0.1:8790/healthz > /dev/null
 (cd "$stage" && sha256sum -c SHA256SUMS)
 if [ -e "$current" ] && [ ! -L "$current" ]; then echo 'Refusing to replace a non-symlink frontend pointer.' >&2; exit 1; fi
 previous=
@@ -74,10 +78,13 @@ site_switched=1
 mv -Tf "$temporary_site" "$site"
 systemctl reload caddy.service
 systemctl is-active --quiet caddy.service
-[ "$(systemctl show fintwind-alma-relay.service -p MainPID --value)" = "$relay_pid" ]
-systemctl is-active --quiet fintwind-alma-relay.service
+# The release must not have restarted signaling. Its PID is unchanged and it
+# still answers health after the Caddy reload.
+[ "$(systemctl show fintwind-signal.service -p MainPID --value)" = "$signal_pid" ]
+systemctl is-active --quiet fintwind-signal.service
+curl -fsS --max-time 5 http://127.0.0.1:8790/healthz > /dev/null
 (cd "$current" && grep '  mobile/' "$stage/SHA256SUMS" | sed 's|  mobile/|  |' | sha256sum -c -)
 trap - EXIT HUP INT TERM
-printf 'Frontend release: %s\nPrevious pointer: %s\nBackup: %s\nRelay PID unchanged: %s\n' "$id" "$previous" "$release" "$relay_pid"
-systemctl show fintwind-alma-relay.service caddy.service -p Id -p ActiveState -p SubState -p MainPID
+printf 'Frontend release: %s\nPrevious pointer: %s\nBackup: %s\nSignal PID unchanged: %s\n' "$id" "$previous" "$release" "$signal_pid"
+systemctl show fintwind-signal.service caddy.service -p Id -p ActiveState -p SubState -p MainPID
 stat -c '%a %U %G %n' "$current/index.html" "$current/assets" "$site"

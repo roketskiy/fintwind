@@ -66,4 +66,4 @@ Assert-NativeSuccess 'Static release activation'
 Write-Output ('Release: ' + $id)
 Write-Output ('Archive SHA256: ' + $archiveHash)
 Write-Output ('Local manifest: ' + (Join-Path $release 'SHA256SUMS'))
-Write-Output 'No endpoint, page or feature test was run. The relay was not restarted.'
+Write-Output 'No endpoint, page or feature test was run. The signaling service was not restarted.'

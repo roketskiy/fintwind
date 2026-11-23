@@ -1,6 +1,6 @@
 mod crypto;
-mod enrollment;
-mod identity;
+mod session;
+mod signal;
 mod snapshot;
 mod transport;
 
@@ -10,7 +10,6 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
 };
 
 use anyhow::{Context, bail};
@@ -21,19 +20,22 @@ use uuid::Uuid;
 
 const EVENT_CAPACITY: usize = 32;
 const MAX_MUTATION_IDS: usize = 65_536;
+pub(crate) const SIGNAL_ORIGIN: &str = "https://fintwind-mobile.roketskiy.top:18761";
 
-/// Registration credentials remain private and are never formatted or logged.
+/// The signaling endpoint. Direct connections need no server-side identity:
+/// the pairing key protects the signaling exchange end to end.
 pub struct RelayConfig {
     relay_url: url::Url,
-    credentials: enrollment::CredentialCache,
 }
 
 impl RelayConfig {
-    /// Loads the user-selected relay config. Call only when remote control starts.
-    /// A missing file is the normal case: the fixed public relay is used, and an
-    /// existing file is validated but its legacy registration key is ignored.
+    /// Loads the user-selected signaling config. Call only when remote control
+    /// starts. A missing file is the normal case: the fixed public endpoint is
+    /// used. Legacy registration keys in older files are parsed and ignored.
     pub fn load_default() -> anyhow::Result<Self> {
         let path = dirs_path()?.join(".fintwind").join("remote-control.json");
+        let mut relay_url =
+            url::Url::parse(SIGNAL_ORIGIN).context("invalid built-in signaling URL")?;
         match std::fs::read(&path) {
             Ok(bytes) => {
                 if bytes.len() > 16 * 1024 {
@@ -42,17 +44,23 @@ impl RelayConfig {
                 let raw: RawConfig =
                     serde_json::from_slice(&bytes).context("invalid remote-control config")?;
                 if let Some(value) = raw.relay_url.as_deref() {
-                    let relay_url = url::Url::parse(value).context("invalid relay URL")?;
-                    if relay_url.scheme() != "https"
-                        || relay_url.host_str() != Some("fintwind-mobile.roketskiy.top")
-                        || relay_url.port().is_some()
-                        || !relay_url.username().is_empty()
-                        || relay_url.password().is_some()
-                        || relay_url.query().is_some()
-                        || relay_url.fragment().is_some()
-                        || !matches!(relay_url.path(), "" | "/")
+                    let configured = url::Url::parse(value).context("invalid relay URL")?;
+                    if configured.scheme() != "https"
+                        || configured.host_str().is_none()
+                        || !configured.username().is_empty()
+                        || configured.password().is_some()
+                        || configured.query().is_some()
+                        || configured.fragment().is_some()
+                        || !matches!(configured.path(), "" | "/")
                     {
                         bail!("remote-control config is not allowed");
+                    }
+                    if configured.host_str() == Some("fintwind-mobile.roketskiy.top")
+                        && configured.port().is_none()
+                    {
+                        relay_url = url::Url::parse(SIGNAL_ORIGIN)?;
+                    } else {
+                        relay_url = configured;
                     }
                 }
             }
@@ -63,37 +71,22 @@ impl RelayConfig {
                 );
             }
         }
-        Ok(Self {
-            relay_url: url::Url::parse(enrollment::RELAY_ORIGIN)
-                .context("invalid built-in relay URL")?,
-            credentials: enrollment::CredentialCache::new(),
-        })
+        Ok(Self { relay_url })
+    }
+
+    pub(crate) fn signal_url(&self) -> anyhow::Result<String> {
+        let mut url = self.relay_url.clone();
+        url.set_scheme("wss")
+            .map_err(|_| anyhow::anyhow!("invalid signaling URL"))?;
+        url.set_path("/signal/v2");
+        Ok(url.into())
+    }
+
+    pub(crate) fn stun_url(&self, port: Option<u16>) -> anyhow::Result<String> {
+        let host = self.relay_url.host_str().context("signaling host missing")?;
+        Ok(format!("stun:{host}:{}", port.unwrap_or(18762)))
     }
 }
-
-/// Fixed failure contexts safe to show. No raw error text or endpoint detail.
-#[derive(Debug)]
-pub(crate) enum RemoteFailure {
-    IdentityUnavailable,
-    Enrollment,
-    RateLimited { retry_after: Duration },
-    Revoked,
-    CredentialExpired,
-}
-
-impl std::fmt::Display for RemoteFailure {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::IdentityUnavailable => "relay installation identity is unavailable",
-            Self::Enrollment => "relay admission failed",
-            Self::RateLimited { .. } => "relay admission is rate limited",
-            Self::Revoked => "relay installation identity was rejected",
-            Self::CredentialExpired => "relay registration expired",
-        })
-    }
-}
-
-impl std::error::Error for RemoteFailure {}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -315,28 +308,81 @@ impl RemoteCommand {
 pub struct RemoteControl {
     pairing_url: String,
     cancelled: Arc<AtomicBool>,
+    wake: Arc<tokio::sync::Notify>,
 }
 
 impl RemoteControl {
     pub fn start(config: RelayConfig) -> anyhow::Result<(Self, channel::Receiver<RemoteEvent>)> {
+        Self::start_with_options(config, None, None)
+    }
+
+    /// Starts remote control with test-only transport overrides: an alternate
+    /// TCP connect address for the signaling WebSocket (TLS still authenticates
+    /// the configured domain) and an alternate STUN port. Production callers
+    /// use `start`, which passes neither.
+    pub fn start_with_options(
+        config: RelayConfig,
+        signal_connect_addr: Option<String>,
+        stun_port: Option<u16>,
+    ) -> anyhow::Result<(Self, channel::Receiver<RemoteEvent>)> {
         let route = crypto::random_32()?;
         let secret = crypto::random_32()?;
         let route_text = crypto::encode(&route);
         let secret_text = crypto::encode(&secret);
         let pairing_url = format!(
-            "https://fintwind-mobile.roketskiy.top/#v=1&route={route_text}&key={secret_text}"
+            "{}#v=2&route={route_text}&key={secret_text}",
+            config.relay_url.as_str().trim_end_matches('/')
         );
         let cancelled = Arc::new(AtomicBool::new(false));
+        let wake = Arc::new(tokio::sync::Notify::new());
+        let transport_wake = wake.clone();
         let (events_tx, events_rx) = channel::bounded(EVENT_CAPACITY);
         let stop_flag = cancelled.clone();
         std::thread::Builder::new()
             .name("fintwind-remote-transport".into())
-            .spawn(move || transport::run(config, route, secret, events_tx, stop_flag))
+            .spawn(move || {
+                // The transport runs on Tokio; the app consumes smol channels.
+                // A dedicated bridge thread keeps the two executors apart.
+                let (inner_tx, mut inner_rx) = tokio::sync::mpsc::channel(EVENT_CAPACITY);
+                let bridge_cancelled = stop_flag.clone();
+                let failure_tx = events_tx.clone();
+                let bridge_result = std::thread::Builder::new()
+                    .name("fintwind-remote-events".into())
+                    .spawn(move || {
+                        while let Some(mut event) = inner_rx.blocking_recv() {
+                            loop {
+                                if bridge_cancelled.load(Ordering::Acquire) {
+                                    return;
+                                }
+                                match events_tx.try_send(event) {
+                                    Ok(()) => break,
+                                    Err(smol::channel::TrySendError::Closed(_)) => return,
+                                    Err(smol::channel::TrySendError::Full(pending)) => {
+                                        event = pending;
+                                        std::thread::sleep(std::time::Duration::from_millis(20));
+                                    }
+                                }
+                            }
+                        }
+                    })
+                    .context("could not start remote event bridge");
+                match bridge_result {
+                    Ok(_bridge_thread) => {
+                        transport::run(config, route, secret, inner_tx, stop_flag, signal_connect_addr, stun_port, transport_wake);
+                    }
+                    Err(_error) => {
+                        let _ = failure_tx.try_send(RemoteEvent::Status(RemoteStatus::Failed(
+                            "无法启动远控传输".into(),
+                        )));
+                    }
+                }
+            })
             .context("could not start remote transport worker")?;
         Ok((
             Self {
                 pairing_url,
                 cancelled,
+                wake,
             },
             events_rx,
         ))
@@ -348,6 +394,7 @@ impl RemoteControl {
 
     pub fn stop(&self) {
         self.cancelled.store(true, Ordering::Release);
+        self.wake.notify_one();
     }
 }
 

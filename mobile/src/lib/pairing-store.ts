@@ -1,6 +1,6 @@
 import { decodeBase64Url, validToken } from "./remote-crypto";
 
-export interface SavedPairing { route: string; material: CryptoKey }
+export interface SavedPairing { version: 2; route: string; material: CryptoKey }
 const DATABASE = "fintwind-phone";
 const STORE = "pairing";
 let opening: Promise<IDBDatabase> | undefined;
@@ -39,6 +39,7 @@ export async function loadPairing(): Promise<SavedPairing | null> {
   const value: unknown = await transaction("readonly", (store) => store.get("current"));
   if (value == null) return null;
   const pair = value as Partial<SavedPairing>;
+  if (pair.version !== 2) throw new Error("配对版本已更新，请重新扫码。");
   if (!validToken(pair.route) || !(pair.material instanceof CryptoKey) || pair.material.extractable
     || pair.material.algorithm.name !== "HKDF" || !pair.material.usages.includes("deriveKey")) {
     throw new Error("保存的配对无效，请重新扫码。" );
@@ -51,7 +52,7 @@ export async function rememberPairing(route: string, key: string): Promise<Saved
   const bytes = decodeBase64Url(key);
   const material = await crypto.subtle.importKey("raw", new Uint8Array(bytes), "HKDF", false, ["deriveKey"]);
   bytes.fill(0);
-  const pair = { route, material };
+  const pair: SavedPairing = { version: 2, route, material };
   await transaction("readwrite", (store) => store.put(pair, "current"));
   return pair;
 }

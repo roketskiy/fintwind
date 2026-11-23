@@ -1,23 +1,28 @@
-# 远控协议说明（v1）
+# 远控协议说明（v2）
 
-本文定义 Fintwind 远控协议 1。它不是 Alma 的加密协议；中继基于开源项目 Alma
-Relay（yetone，MIT），只承载外层隧道帧。桌面接受 `/__fintwind_remote__`
-WebSocket 建连，拒绝一切 HTTP 请求与其他 WebSocket 路径。
+本文定义 Fintwind 远控直连协议 2。手机和桌面通过 WebRTC 可靠、有序数据通道交换
+业务消息。信令服务只交换建立连接所需的加密信息，STUN 协助发现网络地址。协议不
+配置 TURN，也不通过旧中继转发业务数据。
 
 ## 配对与加密
 
-每次开启生成两个独立 32 字节随机值：路由 token 标识隧道，配对密钥认证并加密
-手机连接。两者都不是 daemon token 或中继注册密钥。
+每次开启生成两个独立 32 字节随机值：路由 token 用于匹配信令双方，配对密钥认证并
+加密手机连接。两者都不是 daemon token。
 
-配对链接形如 `https://fintwind-mobile.roketskiy.top/#v=1&route=TOKEN&key=SECRET`，
+配对链接形如 `https://fintwind-mobile.roketskiy.top:18761/#v=2&route=TOKEN&key=SECRET`，
 值为无填充 base64url。手机加载后清除 fragment，把密钥导入不可导出的 HKDF
 CryptoKey；IndexedDB 保留密钥与路由以便同浏览器重开，同源脚本仍可用该密钥，
 不可导出不防 XSS。关闭桌面、停止远控或重新配对使旧激活失效；「忘记此电脑」移除
 浏览器授权，不影响其他浏览器。
 
-手机经 WSS 打开 `/c/TOKEN/__fintwind_remote__`，发送
-`{"type":"hello","version":1,"nonce":"BASE64URL"}`（32 字节 fresh nonce）；桌面回
-同样结构与自己的 fresh nonce，每条 WebSocket 都是新 nonce。
+双方通过 WSS `/signal/v2` 按路由 token 的 SHA-256 值匹配。手机为每次连接生成随机
+attempt，并用配对密钥加密 offer。桌面解密后返回加密 answer。双方只配置 STUN，
+完整的 SDP 和候选信息在加密信令内交换。信令断开不会关闭已经建立的数据通道。
+桌面在线时保持信令连接；信令服务按时间限制连接尝试频率，不以固定次数终止配对。
+桌面在本次远控开启期间保留已处理的连接标识，拒绝重放。
+
+数据通道建立后，手机发送 `{"type":"hello","version":2,"nonce":"BASE64URL"}`，
+桌面返回相同结构与自己的随机 nonce。双方使用新的 nonce 派生数据通道密钥。
 
 用 HKDF-SHA256 派生两个方向各 32 字节密钥：输入为配对密钥，盐为手机 nonce +
 桌面 nonce 拼接，info 为 `fintwind.remote.v1.client` / `fintwind.remote.v1.server`。
@@ -27,9 +32,13 @@ tag 追加在密文后；12 字节 nonce 为 4 个零字节 + 无符号 64 位�
 UTF-8 字符串 `fintwind.remote.v1`。每个方向从 0 开始严格递增；拒绝序号溢出与
 超出 JS 安全整数的值。
 
-桌面先发加密 `{"type":"ready"}`，手机解密验证后才发命令，桌面只执行解密成功的
-命令。认证或 framing 非法直接关闭虚拟 socket，不泄露细节。本 PSK 协议不提供
-前向保密。
+桌面和手机先在加密消息中确认角色、attempt 和双方 SDP 的 SHA-256 值，然后桌面发送
+加密 `ready`。双方在身份确认完成前不执行业务命令。SDP 中的证书指纹由受保护的
+信令绑定到本次连接。认证或消息分块非法时关闭数据通道。本配对密钥方案不为信令
+内容提供前向保密。
+
+数据通道消息按 UTF-8 字节分块传输。接收端按顺序重组，有大小和时间限制。断线时，
+手机保留结果未知的操作并在恢复后读取状态，不自动重发变更。
 
 ## 命令与响应
 
@@ -52,7 +61,8 @@ UTF-8 字符串 `fintwind.remote.v1`。每个方向从 0 开始严格递增；�
 
 只读请求可带顶层 `ifRevision`（此前响应的 64 位小写 SHA256 修订）。修订检查跑在
 授权与时效检查之后；无变化返回 `{notModified:true,revision}`。手机只在收到过修订
-后才发条件请求，与旧桌面兼容；其有界内存缓存按配对路由与资源隔离，不缓存变更结果。
+后才发条件请求，其有界内存缓存按配对路由与资源隔离，不缓存变更结果。旧版中继
+协议的桌面和网页需要更新后才能使用直连。
 
 响应为 `{"id":"UUID","ok":true,"data":...}` 或
 `{"id":"UUID","ok":false,"error":"MESSAGE"}`。变更成功指桌面受理，不等于 Agent
@@ -90,21 +100,18 @@ UTF-8 字符串 `fintwind.remote.v1`。每个方向从 0 开始严格递增；�
 
 ### 可选会话更新
 
-`sessionDeltas` 在既有加密连接上订阅更新，握手与 `ready` 不变。`watchSession`
+`sessionDeltas` 在已认证的数据通道上订阅更新。`watchSession`
 返回 `{accepted:true}`；新订阅替换旧订阅，禁用只影响匹配的 `watchId`，不接受
 `ifRevision`。首次推送为带 `revision` 的完整快照，后续为完整快照或
 `{baseRevision,revision,edits}` 增量（`set`/`append`/`truncate` 按序执行）。客户端
 校验 base 修订与重建后的完整会话；失败重读并重建订阅，再失败回退条件读取。桌面
 200ms 合并实体通知；投影有界，哈希/差分/序列化/加密跑在传输线程；无变化不推送。
-关闭 socket 或替换/禁用订阅即停。
+关闭数据通道或替换、禁用订阅即停。
 
 ## 桌面侧边界
 
-传输与密码状态由 `fintwind-remote` crate 内部持有，不对外暴露。对外接口覆盖：
-加载默认中继配置、启停远控、取配对链接、上报连接状态、分发桌面请求与会话订阅。
-注册使用 `~/.fintwind/remote-control-identity.bin` 中的安装身份：私钥签名
-challenge 换短期 JWT，只驻内存；Windows 用当前用户 DPAPI 保护密钥。损坏或吊销
-的身份永不自动替换。安装密钥与 JWT 不进配对链接、远控事件或日志。中继部署见
-仓库 `deploy/remote-control/` 目录。
+传输与密码状态由 `fintwind-remote` crate 内部持有，不对外暴露。对外接口覆盖启停
+远控、取配对链接、上报连接状态、分发桌面请求与会话订阅。信令与 STUN 部署见仓库
+`deploy/remote-control/` 目录。
 
 桌面回调绑定激活代次，停止后旧激活排队的请求不再执行；每个请求执行前重查 live 授权。

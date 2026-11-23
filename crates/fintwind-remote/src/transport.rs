@@ -1,896 +1,585 @@
 use std::{
     collections::HashSet,
-    io::{Read, Write},
-    net::{TcpStream, ToSocketAddrs},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::{Duration, Instant},
+    sync::{Arc, atomic::{AtomicBool, Ordering}},
+    time::Duration,
 };
 
 use anyhow::{Context, bail};
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use ring::digest;
-use serde_json::{Value, json};
-use smol::channel;
-use tungstenite::{
-    Message, client::IntoClientRequest, client_tls_with_config, protocol::WebSocketConfig,
-    stream::MaybeTlsStream,
-};
+use tokio::sync::{Mutex, Notify, mpsc, watch};
 use uuid::Uuid;
+use webrtc::{
+    data_channel::{DataChannel, DataChannelEvent},
+    peer_connection::{
+        MediaEngine, PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler,
+        RTCConfigurationBuilder, RTCIceGatheringState, RTCIceServer, RTCPeerConnectionState,
+        RTCSessionDescription, Registry, SettingEngineBuilder, register_default_interceptors,
+    },
+    runtime::TokioRuntime,
+};
 
 use crate::{
-    DesktopRequest, RelayConfig, RemoteCommand, RemoteEvent, RemoteFailure, RemoteStatus, crypto,
+    RelayConfig, RemoteEvent, RemoteStatus, crypto,
+    session::Session,
+    signal::{Incoming, Offer, Signal},
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const POLL_TIMEOUT: Duration = Duration::from_millis(200);
-// Only an active phone subscription needs to notice desktop output promptly.
-const WATCH_POLL_TIMEOUT: Duration = Duration::from_millis(50);
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(8);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+const NEGOTIATE_TIMEOUT: Duration = Duration::from_secs(30);
+const CHANNEL_TIMEOUT: Duration = Duration::from_secs(60);
+const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const TICK: Duration = Duration::from_millis(20);
 const INITIAL_RETRY: Duration = Duration::from_secs(1);
 const MAX_RETRY: Duration = Duration::from_secs(30);
-const MAX_FRAME: usize = 1024 * 1024;
-const MAX_RESPONSE: usize = 512 * 1024;
-const VIRTUAL_PATH: &str = "/__fintwind_remote__";
+const SEND_BUFFER_LIMIT: usize = 256 * 1024;
 
-type Socket = tungstenite::WebSocket<MaybeTlsStream<DeadlineStream>>;
-
-async fn timeout<F: std::future::Future>(
-    duration: Duration,
-    future: F,
-) -> std::io::Result<F::Output> {
-    smol::future::or(async move { Ok(future.await) }, async move {
-        smol::Timer::after(duration).await;
-        Err(std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            "operation timed out",
-        ))
-    })
-    .await
+#[derive(Clone)]
+struct ConnectionHandler {
+    channels: mpsc::Sender<Arc<dyn DataChannel>>,
+    gathered: watch::Sender<bool>,
+    states: mpsc::Sender<RTCPeerConnectionState>,
 }
 
-struct DeadlineStream {
-    stream: TcpStream,
-    handshake_deadline: Option<Instant>,
-    poll_timeout: Duration,
-}
-
-impl DeadlineStream {
-    fn timeout(&self, regular: Duration) -> std::io::Result<Duration> {
-        let remaining = self
-            .handshake_deadline
-            .map(|deadline| deadline.saturating_duration_since(Instant::now()))
-            .unwrap_or(regular);
-        if remaining.is_zero() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "network operation timed out",
-            ));
+#[async_trait::async_trait]
+impl PeerConnectionEventHandler for ConnectionHandler {
+    async fn on_data_channel(&self, channel: Arc<dyn DataChannel>) {
+        match channel.label().await {
+            Ok(label) if label == "fintwind.remote.v2" => {}
+            _ => {
+                let _ = channel.close().await;
+                return;
+            }
         }
-        Ok(remaining)
+        let _ = self.channels.try_send(channel);
+    }
+
+    async fn on_ice_gathering_state_change(&self, state: RTCIceGatheringState) {
+        if state == RTCIceGatheringState::Complete {
+            self.gathered.send_replace(true);
+        }
+    }
+
+    async fn on_connection_state_change(&self, state: RTCPeerConnectionState) {
+        let _ = self.states.try_send(state);
     }
 }
 
-impl Read for DeadlineStream {
-    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        self.stream
-            .set_read_timeout(Some(self.timeout(self.poll_timeout)?))?;
-        self.stream.read(buffer)
+struct Peer {
+    connection: Arc<dyn PeerConnection>,
+    channels: Option<mpsc::Receiver<Arc<dyn DataChannel>>>,
+    gathered: watch::Receiver<bool>,
+    states: Option<mpsc::Receiver<RTCPeerConnectionState>>,
+}
+
+impl Peer {
+    async fn new(stun_url: String) -> anyhow::Result<Self> {
+        let (channels_tx, channels) = mpsc::channel(1);
+        let (gathered_tx, gathered) = watch::channel(false);
+        let (states_tx, states) = mpsc::channel(8);
+        let mut media = MediaEngine::default();
+        media.register_default_codecs()?;
+        let registry = register_default_interceptors(Registry::new(), &mut media)?;
+        let connection = PeerConnectionBuilder::new()
+            .with_configuration(RTCConfigurationBuilder::new().with_ice_servers(vec![RTCIceServer {
+                urls: vec![stun_url],
+                ..Default::default()
+            }]).build())
+            .with_media_engine(media)
+            .with_interceptor_registry(registry)
+            .with_setting_engine(SettingEngineBuilder::new().build())
+            .with_handler(Arc::new(ConnectionHandler {
+                channels: channels_tx,
+                gathered: gathered_tx,
+                states: states_tx,
+            }))
+            .with_runtime(Arc::new(TokioRuntime))
+            .with_udp_addrs(vec!["0.0.0.0:0"])
+            .with_data_channel_send_buffer_limit(SEND_BUFFER_LIMIT)
+            .build().await.context("could not create direct connection")?;
+        Ok(Self {
+            connection: Arc::new(connection),
+            channels: Some(channels),
+            gathered,
+            states: Some(states),
+        })
+    }
+
+    async fn answer(&mut self, offer: &Offer) -> anyhow::Result<(String, String, String)> {
+        let offer_hash = crypto::sha256_hex(offer.sdp.as_bytes());
+        let description: RTCSessionDescription = serde_json::from_value(serde_json::json!({
+            "type": "offer", "sdp": offer.sdp,
+        }))?;
+        self.connection.set_remote_description(description).await?;
+        let answer = self.connection.create_answer(None).await?;
+        self.connection.set_local_description(answer).await?;
+        let mut gathered = self.gathered.clone();
+        while !*gathered.borrow_and_update() {
+            gathered.changed().await.context("ICE gathering stopped")?;
+        }
+        let answer = self.connection.local_description().await.context("answer unavailable")?;
+        Ok((answer.sdp.clone(), offer_hash, crypto::sha256_hex(answer.sdp.as_bytes())))
+    }
+
+    async fn close(&self) {
+        let _ = self.connection.close().await;
     }
 }
 
-impl Write for DeadlineStream {
-    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
-        self.stream
-            .set_write_timeout(Some(self.timeout(CONNECT_TIMEOUT)?))?;
-        self.stream.write(buffer)
-    }
+struct ActiveConnection {
+    connection: Arc<dyn PeerConnection>,
+    task: tokio::task::JoinHandle<anyhow::Result<()>>,
+}
 
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.stream
-            .set_write_timeout(Some(self.timeout(CONNECT_TIMEOUT)?))?;
-        self.stream.flush()
+impl ActiveConnection {
+    async fn close(self) -> anyhow::Result<()> {
+        let _ = self.connection.close().await;
+        self.task.await.context("remote session task stopped")?
     }
 }
 
+#[allow(clippy::large_enum_variant)]
+enum Link {
+    Offline,
+    Connecting(tokio::task::JoinHandle<anyhow::Result<Signal>>),
+    Ready {
+        signal: Option<Signal>,
+        #[allow(clippy::type_complexity)]
+        reading: Option<tokio::task::JoinHandle<anyhow::Result<(Signal, Option<Incoming>)>>>,
+    },
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run(
-    mut config: RelayConfig,
+    config: RelayConfig,
     route: [u8; 32],
     secret: [u8; 32],
-    events: channel::Sender<RemoteEvent>,
+    events: mpsc::Sender<RemoteEvent>,
     cancelled: Arc<AtomicBool>,
+    signal_connect_addr: Option<String>,
+    stun_port: Option<u16>,
+    wake: Arc<Notify>,
 ) {
-    let mut mutations = HashSet::new();
+    let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            let _ = events.blocking_send(RemoteEvent::Status(RemoteStatus::Failed(format!("无法启动远控传输：{error}"))));
+            return;
+        }
+    };
+    let route_hash = crypto::sha256_hex(crypto::encode(&route).as_bytes());
+    let mutations = Arc::new(Mutex::new(HashSet::<Uuid>::new()));
+    runtime.block_on(run_transport(config, route_hash, secret, events, cancelled, mutations, signal_connect_addr, stun_port, wake));
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_transport(
+    config: RelayConfig,
+    route_hash: String,
+    secret: [u8; 32],
+    events: mpsc::Sender<RemoteEvent>,
+    cancelled: Arc<AtomicBool>,
+    mutations: Arc<Mutex<HashSet<Uuid>>>,
+    signal_connect_addr: Option<String>,
+    stun_port: Option<u16>,
+    wake: Arc<Notify>,
+) {
+    let (session_events, mut session_receiver) = mpsc::channel(32);
+    let session = Session::new(secret, session_events, cancelled.clone(), mutations);
+    let mut accepted = HashSet::<[u8; 32]>::new();
+    let mut active: Option<ActiveConnection> = None;
+    let mut link = Link::Offline;
+    let mut retry_at = tokio::time::Instant::now();
     let mut retry_delay = INITIAL_RETRY;
+    let mut joined = false;
+    let mut reported = RemoteStatus::Connecting;
+    let mut terminal_error = None;
+    let mut cancelled_error = None;
+    let urls = match config.signal_url().and_then(|signal| config.stun_url(stun_port).map(|stun| (signal, stun))) {
+        Ok(urls) => urls,
+        Err(error) => {
+            publish(&events, &mut reported, RemoteStatus::Failed(safe_failure(&error))).await;
+            return;
+        }
+    };
+    publish(&events, &mut reported, RemoteStatus::Connecting).await;
     while !cancelled.load(Ordering::Acquire) {
-        send_status(&events, RemoteStatus::Connecting);
-        let result = connect_and_run(
-            &mut config,
-            &route,
-            &secret,
-            &events,
-            &cancelled,
-            &mut mutations,
-            &mut retry_delay,
-        );
-        let Err(error) = result else {
-            continue;
-        };
-        if error
-            .downcast_ref::<RemoteFailure>()
-            .is_some_and(|failure| matches!(failure, RemoteFailure::CredentialExpired))
-        {
-            config.credentials.invalidate();
+        while let Ok(event) = session_receiver.try_recv() {
+            if matches!(event, RemoteEvent::Status(RemoteStatus::Connected))
+                && active.is_some()
+            {
+                reported = RemoteStatus::Connected;
+            }
+            if events.send(event).await.is_err() {
+                cancelled.store(true, Ordering::Release);
+                break;
+            }
         }
         if cancelled.load(Ordering::Acquire) {
             break;
         }
-        send_status(&events, RemoteStatus::Failed(safe_failure_message(&error)));
-        let delay = retry_after(&error).unwrap_or(retry_delay);
-        sleep_until(delay, &cancelled);
-        retry_delay = (retry_delay * 2).min(MAX_RETRY);
-    }
-}
-
-fn retry_after(error: &anyhow::Error) -> Option<Duration> {
-    error
-        .chain()
-        .find_map(|cause| match cause.downcast_ref::<RemoteFailure>() {
-            Some(RemoteFailure::RateLimited { retry_after }) => Some(*retry_after),
-            _ => None,
-        })
-}
-
-fn sleep_until(delay: Duration, cancelled: &AtomicBool) {
-    let deadline = Instant::now() + delay;
-    while !cancelled.load(Ordering::Acquire) {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
+        if active.as_ref().is_some_and(|connection| connection.task.is_finished()) {
+            let connection = active.take().unwrap();
+            let result = connection.close().await;
+            while let Ok(event) = session_receiver.try_recv() {
+                if matches!(event, RemoteEvent::Status(RemoteStatus::Connected)) {
+                    reported = RemoteStatus::Connected;
+                }
+                if events.send(event).await.is_err() {
+                    cancelled.store(true, Ordering::Release);
+                    break;
+                }
+            }
+            match result {
+                Ok(()) => publish(&events, &mut reported, RemoteStatus::Waiting).await,
+                Err(error) => {
+                    if !cancelled.load(Ordering::Acquire) {
+                        publish(&events, &mut reported, RemoteStatus::Failed(safe_failure(&error))).await;
+                    }
+                }
+            }
+            if cancelled.load(Ordering::Acquire) {
+                break;
+            }
+        }
+        if cancelled.load(Ordering::Acquire) {
             break;
         }
-        std::thread::sleep(POLL_TIMEOUT.min(remaining));
+        match &mut link {
+            Link::Offline if tokio::time::Instant::now() >= retry_at => {
+                let url = urls.0.clone();
+                let hash = route_hash.clone();
+                let stop = cancelled.clone();
+                let connect_addr = signal_connect_addr.clone();
+                let completed = wake.clone();
+                let task = tokio::spawn(async move {
+                    let result = async move {
+                    let deadline = tokio::time::Instant::now() + CONNECT_TIMEOUT;
+                    let mut operation = Box::pin(async {
+                        let mut signal =
+                            Signal::connect(&url, hash, secret, connect_addr.as_deref()).await?;
+                        signal.join().await?;
+                        Ok(signal)
+                    });
+                    loop {
+                        if stop.load(Ordering::Acquire) { bail!("remote control stopped"); }
+                        tokio::select! {
+                            result = &mut operation => return result,
+                            _ = tokio::time::sleep_until(deadline) => bail!("signaling connection timed out"),
+                            _ = tokio::time::sleep(TICK) => {}
+                        }
+                    }
+                    }.await;
+                    completed.notify_one();
+                    result
+                });
+                link = Link::Connecting(task);
+            }
+            Link::Connecting(task) if task.is_finished() => {
+                let result = task.await.context("signaling task stopped").and_then(|result| result);
+                match result {
+                    Ok(signal) => {
+                        link = Link::Ready { signal: Some(signal), reading: None };
+                        retry_delay = INITIAL_RETRY;
+                        joined = false;
+                    }
+                    Err(error) => {
+                        link = Link::Offline;
+                        retry_at = tokio::time::Instant::now() + retry_delay;
+                        retry_delay = (retry_delay * 2).min(MAX_RETRY);
+                        publish(&events, &mut reported, RemoteStatus::Failed(safe_failure(&error))).await;
+                    }
+                }
+            }
+            Link::Ready { signal, reading } => {
+                if reading.is_none() {
+                    let Some(mut owned) = signal.take() else {
+                        terminal_error = Some(anyhow::anyhow!("signaling socket unavailable"));
+                        break;
+                    };
+                    let completed = wake.clone();
+                    let task = tokio::spawn(async move {
+                        let result = owned.next().await.map(|incoming| (owned, incoming));
+                        completed.notify_one();
+                        result
+                    });
+                    *reading = Some(task);
+                }
+                if reading.as_ref().is_some_and(|task| task.is_finished()) {
+                    let task = reading.take().unwrap();
+                    let result = task.await.context("signaling read task stopped").and_then(|result| result);
+                    match result {
+                        Ok((returned_signal, incoming)) => {
+                            *signal = Some(returned_signal);
+                            match incoming {
+                                Some(Incoming::Joined) => {
+                                    joined = true;
+                                    if active.is_none() { publish(&events, &mut reported, RemoteStatus::Waiting).await; }
+                                }
+                                Some(Incoming::PeerOnline(online)) => {
+                                    if joined && online && active.is_none() { publish(&events, &mut reported, RemoteStatus::Waiting).await; }
+                                }
+                                Some(Incoming::Offer(offer)) => {
+                                    if accepted.contains(&offer.attempt) { continue; }
+                                    accepted.insert(offer.attempt);
+                                    if let Some(previous) = active.take() {
+                                        let _ = previous.close().await;
+                                    }
+                                    let Some(open_signal) = signal.as_mut() else {
+                                        terminal_error = Some(anyhow::anyhow!("signaling socket unavailable"));
+                                        break;
+                                    };
+                                    match start_peer(open_signal, &urls.1, offer, session.clone(), cancelled.clone(), wake.clone()).await {
+                                        Ok(connection) => {
+                                            active = Some(connection);
+                                            publish(&events, &mut reported, RemoteStatus::Connecting).await;
+                                        }
+                                        Err(error) => {
+                                            if cancelled.load(Ordering::Acquire) {
+                                                cancelled_error = Some(error);
+                                            } else {
+                                                publish(&events, &mut reported, RemoteStatus::Failed(safe_failure(&error))).await;
+                                            }
+                                            if cancelled.load(Ordering::Acquire) { break; }
+                                        }
+                                    }
+                                }
+                                None => {}
+                            }
+                        }
+                        Err(error) => {
+                            link = Link::Offline;
+                            retry_at = tokio::time::Instant::now() + retry_delay;
+                            retry_delay = (retry_delay * 2).min(MAX_RETRY);
+                            if active.is_none() { publish(&events, &mut reported, RemoteStatus::Failed(safe_failure(&error))).await; }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        if matches!(&link, Link::Ready { signal: Some(_), reading: None }) {
+            continue;
+        }
+        tokio::select! {
+            _ = wake.notified() => {},
+            event = session_receiver.recv() => {
+                if let Some(event) = event {
+                    if matches!(event, RemoteEvent::Status(RemoteStatus::Connected)) && active.is_some() {
+                        reported = RemoteStatus::Connected;
+                    }
+                    if events.send(event).await.is_err() {
+                        cancelled.store(true, Ordering::Release);
+                    }
+                }
+            },
+            _ = async {
+                if matches!(link, Link::Offline) {
+                    tokio::time::sleep_until(retry_at).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {},
+        }
+    }
+    if let Some(connection) = active.take() { let _ = connection.close().await; }
+    while let Ok(event) = session_receiver.try_recv() {
+        if events.send(event).await.is_err() { break; }
+    }
+    match link {
+        Link::Connecting(task) => task.abort(),
+        Link::Ready { signal, reading } => {
+            if let Some(task) = reading { task.abort(); }
+            if let Some(mut signal) = signal { signal.close().await; }
+        }
+        Link::Offline => {}
+    }
+    drop(session);
+    while let Some(event) = session_receiver.recv().await {
+        if events.send(event).await.is_err() { break; }
+    }
+    if let Some(error) = terminal_error.or(cancelled_error) {
+        publish(&events, &mut reported, RemoteStatus::Failed(safe_failure(&error))).await;
     }
 }
 
-fn safe_failure_message(error: &anyhow::Error) -> String {
-    for cause in error.chain() {
-        if let Some(failure) = cause.downcast_ref::<RemoteFailure>() {
-            return match failure {
-                RemoteFailure::IdentityUnavailable => "远控安装身份不可用".into(),
-                RemoteFailure::Enrollment => "远控注册失败".into(),
-                RemoteFailure::RateLimited { .. } => "远控注册过于频繁，请稍后再试".into(),
-                RemoteFailure::Revoked => "远控安装身份已被拒绝".into(),
-                RemoteFailure::CredentialExpired => "远控登记已过期，正在重新注册".into(),
-            };
+async fn start_peer(
+    signal: &mut Signal,
+    stun_url: &str,
+    mut offer: Offer,
+    session: Arc<Session>,
+    cancelled: Arc<AtomicBool>,
+    wake: Arc<Notify>,
+) -> anyhow::Result<ActiveConnection> {
+    let mut peer = Peer::new(stun_url.to_owned()).await?;
+    if cancelled.load(Ordering::Acquire) {
+        peer.close().await;
+        bail!("remote control stopped");
+    }
+    let answer = match await_cancelled(&cancelled, NEGOTIATE_TIMEOUT, peer.answer(&offer)).await {
+        Ok(Some(answer)) => answer,
+        Ok(None) => { peer.close().await; bail!("remote control stopped"); }
+        Err(error) => { peer.close().await; return Err(error); }
+    };
+    let sent = match await_cancelled(&cancelled, CONNECT_TIMEOUT, signal.send_answer(&mut offer, &answer.0)).await {
+        Ok(result) => result,
+        Err(error) => { peer.close().await; return Err(error); }
+    };
+    if !matches!(sent, Some(())) {
+        peer.close().await;
+        bail!("signaling answer failed");
+    }
+    let channels = peer.channels.take().context("channel receiver unavailable")?;
+    let states = peer.states.take().context("state receiver unavailable")?;
+    let connection = peer.connection.clone();
+    let session_peer = connection.clone();
+    let attempt_text = offer.attempt_text;
+    let task = tokio::spawn(async move {
+        let result = run_session(session, channels, states, session_peer, cancelled, attempt_text, answer.1, answer.2).await;
+        wake.notify_one();
+        result
+    });
+    Ok(ActiveConnection { connection, task })
+}
+
+async fn await_cancelled<T>(
+    cancelled: &AtomicBool,
+    timeout: Duration,
+    operation: impl std::future::Future<Output = anyhow::Result<T>>,
+) -> anyhow::Result<Option<T>> {
+    let mut operation = Box::pin(operation);
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if cancelled.load(Ordering::Acquire) { return Ok(None); }
+        tokio::select! {
+            result = &mut operation => return result.map(Some),
+            _ = tokio::time::sleep_until(deadline) => bail!("remote operation timed out"),
+            _ = tokio::time::sleep(TICK) => {}
         }
     }
-    for cause in error.chain() {
-        if let Some(tungstenite::Error::Http(response)) = cause.downcast_ref::<tungstenite::Error>()
-        {
-            let status = response.status().as_u16();
-            if status == 401 || status == 403 {
-                return "远控注册被拒绝".into();
-            }
-            if status != 0 {
-                return format!("远控握手失败（HTTP {status}）");
-            }
-            return "远控握手失败".into();
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_session(
+    session: Arc<Session>,
+    mut channels: mpsc::Receiver<Arc<dyn DataChannel>>,
+    mut states: mpsc::Receiver<RTCPeerConnectionState>,
+    peer: Arc<dyn PeerConnection>,
+    cancelled: Arc<AtomicBool>,
+    attempt_text: String,
+    offer_hash: String,
+    answer_hash: String,
+) -> anyhow::Result<()> {
+    let deadline = tokio::time::Instant::now() + CHANNEL_TIMEOUT;
+    let channel = loop {
+        if cancelled.load(Ordering::Acquire) { return Ok(()); }
+        tokio::select! {
+            channel = channels.recv() => match channel {
+                Some(channel) => break channel,
+                None => bail!("data channel unavailable"),
+            },
+            _ = tokio::time::sleep_until(deadline) => bail!("data channel timed out"),
+            _ = tokio::time::sleep(TICK) => {}
         }
-        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
-            match io.kind() {
-                std::io::ErrorKind::TimedOut => return "远控连接超时".into(),
-                std::io::ErrorKind::ConnectionRefused
-                | std::io::ErrorKind::ConnectionReset
-                | std::io::ErrorKind::ConnectionAborted
-                | std::io::ErrorKind::NotConnected => return "远控连接被拒绝".into(),
-                std::io::ErrorKind::AddrNotAvailable | std::io::ErrorKind::NetworkUnreachable => {
-                    return "远控网络不可达".into();
-                }
+    };
+    let mut opening = Box::pin(async {
+        loop {
+            match channel.poll().await {
+                Some(DataChannelEvent::OnOpen) => return Ok(()),
+                Some(DataChannelEvent::OnClose) | None => bail!("data channel closed before opening"),
                 _ => {}
             }
         }
-    }
-    for cause in error.chain() {
-        let text = cause.to_string();
-        if text.contains("relay address lookup") {
-            return "远控域名解析失败".into();
-        }
-        if text.contains("relay connection timed out") {
-            return "远控连接超时".into();
-        }
-        if text.contains("relay handshake failed") {
-            return "远控安全握手失败".into();
-        }
-        if text.contains("relay registration refused") {
-            return "远控注册被拒绝".into();
-        }
-        if text.contains("invalid relay frame")
-            || text.contains("unexpected relay frame")
-            || text.contains("relay frame is too large")
-            || text.contains("unsupported relay frame")
-            || text.contains("missing virtual socket id")
-            || text.contains("invalid virtual socket request")
-        {
-            return "远控协议异常".into();
-        }
-    }
-    "远控服务暂不可用".into()
-}
-
-fn connect_and_run(
-    config: &mut RelayConfig,
-    route: &[u8; 32],
-    secret: &[u8; 32],
-    events: &channel::Sender<RemoteEvent>,
-    cancelled: &AtomicBool,
-    mutations: &mut HashSet<Uuid>,
-    retry_delay: &mut Duration,
-) -> anyhow::Result<()> {
-    // Registration now needs a short-lived admission token. Acquire it before
-    // any network work so a refused admission costs no connection attempt.
-    let token = config.credentials.token()?.to_owned();
-    let host = config.relay_url.host_str().context("relay host missing")?;
-    let deadline = Instant::now() + CONNECT_TIMEOUT;
-    let addresses = (host, 443)
-        .to_socket_addrs()
-        .context("relay address lookup failed")?;
-    let mut stream = None;
-    for address in addresses {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            break;
-        }
-        if let Ok(connected) = TcpStream::connect_timeout(&address, remaining) {
-            stream = Some(connected);
-            break;
-        }
-    }
-    let stream = stream.context("relay connection timed out")?;
-    let route_text = crypto::encode(route);
-    let route_hash = digest::digest(&digest::SHA256, route_text.as_bytes());
-    let token_hash = route_hash
-        .as_ref()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>();
-    let request = format!("wss://{host}/agent?th={token_hash}")
-        .into_client_request()
-        .context("invalid relay request")?;
-    let mut ws_config = WebSocketConfig::default();
-    ws_config.max_frame_size = Some(MAX_FRAME);
-    ws_config.max_message_size = Some(MAX_FRAME);
-    let stream = DeadlineStream {
-        stream,
-        handshake_deadline: Some(Instant::now() + CONNECT_TIMEOUT),
-        poll_timeout: POLL_TIMEOUT,
-    };
-    let (mut socket, _) = client_tls_with_config(request, stream, Some(ws_config), None)
-        .context("relay handshake failed")?;
-    match socket.get_mut() {
-        MaybeTlsStream::Rustls(stream) => {
-            stream.sock.handshake_deadline = None;
-        }
-        _ => bail!("relay TLS stream was not created"),
-    }
-    send_json(
-        &mut socket,
-        &json!({"t":"register","tokenHash":token_hash,"name":"Fintwind","proto":1,"key":token}),
-    )?;
-    let registration = recv_json_until(&mut socket, Instant::now() + CONNECT_TIMEOUT, cancelled)?;
-    if registration.get("t").and_then(Value::as_str) != Some("registered") {
-        // The relay sends an error frame before closing on a rejected token.
-        // Re-enroll on the next attempt instead of retrying the same token.
-        config.credentials.invalidate();
-        bail!("relay registration refused");
-    }
-    *retry_delay = INITIAL_RETRY;
-    send_status(events, RemoteStatus::Waiting);
-    loop {
-        if cancelled.load(Ordering::Acquire) {
-            let _ = socket.close(None);
-            return Ok(());
-        }
-        match read_message(&mut socket, POLL_TIMEOUT)? {
-            Some(Message::Text(text)) => {
-                if text.len() > MAX_FRAME {
-                    bail!("relay frame is too large");
+    });
+    let mut disconnected_since = None;
+    let opened = loop {
+        if cancelled.load(Ordering::Acquire) { let _ = channel.close().await; return Ok(()); }
+        let mut state_failure = None;
+        while let Ok(state) = states.try_recv() {
+            match state {
+                RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed => {
+                    state_failure = Some(anyhow::anyhow!("direct connection failed before opening"));
+                    break;
                 }
-                let frame: Value =
-                    serde_json::from_str(text.as_str()).context("invalid relay frame")?;
-                match frame.get("t").and_then(Value::as_str) {
-                    Some("wopen") => {
-                        let id = frame
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .context("missing virtual socket id")?;
-                        if id.is_empty()
-                            || id.len() > 255
-                            || !has_exact_keys(&frame, &["t", "id", "path"])
-                        {
-                            bail!("invalid virtual socket request");
+                RTCPeerConnectionState::Disconnected => { disconnected_since.get_or_insert_with(tokio::time::Instant::now); }
+                RTCPeerConnectionState::Connected => disconnected_since = None,
+                _ => {}
+            }
+        }
+        if let Some(error) = state_failure {
+            break Err(error);
+        }
+        if disconnected_since.is_some_and(|since| since.elapsed() >= DISCONNECT_TIMEOUT) {
+            break Err(anyhow::anyhow!("direct connection remained disconnected"));
+        }
+        tokio::select! {
+            result = &mut opening => break result,
+            _ = tokio::time::sleep_until(deadline) => break Err(anyhow::anyhow!("data channel open timed out")),
+            _ = tokio::time::sleep(TICK) => {}
+        }
+    };
+    if let Err(error) = opened {
+        let _ = channel.close().await;
+        return Err(error);
+    }
+    drop(opening);
+    let health_channel = channel.clone();
+    let health = tokio::spawn(async move {
+        let mut disconnected_since = None;
+        loop {
+            match states.recv().await {
+                Some(RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed) => {
+                    let _ = health_channel.close().await; let _ = peer.close().await; break;
+                }
+                Some(RTCPeerConnectionState::Disconnected) => {
+                    let since = *disconnected_since.get_or_insert_with(tokio::time::Instant::now);
+                    tokio::select! {
+                        _ = tokio::time::sleep_until(since + DISCONNECT_TIMEOUT) => {
+                            let _ = health_channel.close().await; let _ = peer.close().await; break;
                         }
-                        if frame.get("path").and_then(Value::as_str) != Some(VIRTUAL_PATH) {
-                            send_json(
-                                &mut socket,
-                                &json!({"t":"werr","id":id,"message":"Unsupported socket path"}),
-                            )?;
-                            continue;
-                        }
-                        match serve_phone(&mut socket, id, secret, events, cancelled, mutations) {
-                            Ok(()) => {}
-                            Err(error) => {
-                                if error
-                                    .downcast_ref::<RemoteFailure>()
-                                    .is_some_and(|failure| {
-                                        matches!(failure, RemoteFailure::CredentialExpired)
-                                    })
-                                {
-                                    config.credentials.invalidate();
-                                    return Err(error);
+                        state = states.recv() => {
+                            match state {
+                                Some(RTCPeerConnectionState::Connected) => disconnected_since = None,
+                                Some(RTCPeerConnectionState::Failed) | Some(RTCPeerConnectionState::Closed) | None => {
+                                    let _ = health_channel.close().await;
+                                    let _ = peer.close().await;
+                                    break;
                                 }
-                                send_json(&mut socket, &json!({"t":"wclose","id":id,"code":1008}))?;
+                                _ => {}
                             }
                         }
-                        send_status(events, RemoteStatus::Waiting);
                     }
-                    Some("hreq") => {
-                        reject_http_request(&mut socket, &frame)?;
-                    }
-                    Some("hcancel" | "push" | "pushed") => bail!("unsupported relay frame"),
-                    _ => bail!("unexpected relay frame"),
                 }
+                Some(RTCPeerConnectionState::Connected) => disconnected_since = None,
+                Some(_) => {}
+                None => break,
             }
-            Some(Message::Close(frame)) => {
-                if frame.is_some_and(|frame| u16::from(frame.code) == 4401) {
-                    config.credentials.invalidate();
-                    return Err(RemoteFailure::CredentialExpired.into());
-                }
-                bail!("relay connection closed");
-            }
-            Some(_) => bail!("unexpected relay frame"),
-            None => {}
         }
+    });
+    let result = session.run(channel, attempt_text, offer_hash, answer_hash).await;
+    health.abort();
+    result
+}
+
+async fn publish(events: &mpsc::Sender<RemoteEvent>, reported: &mut RemoteStatus, status: RemoteStatus) {
+    if *reported != status && events.send(RemoteEvent::Status(status.clone())).await.is_ok() {
+        *reported = status;
     }
 }
 
-struct DeferredResponse {
-    id: Uuid,
-    receiver: channel::Receiver<Result<Value, String>>,
-    deadline: Instant,
-    read_only: bool,
-    if_revision: Option<String>,
-}
-
-struct SessionWatch {
-    id: Uuid,
-    snapshots: channel::Receiver<Result<Value, String>>,
-    previous: Option<Value>,
-}
-
-impl SessionWatch {
-    fn send_pending(
-        &mut self,
-        socket: &mut Socket,
-        socket_id: &str,
-        outbound: &mut crypto::Direction,
-    ) -> anyhow::Result<()> {
-        let value = match self.snapshots.try_recv() {
-            Ok(Ok(value)) => value,
-            Ok(Err(error)) => {
-                send_sealed(
-                    socket,
-                    socket_id,
-                    outbound,
-                    &json!({"type":"sessionUpdate", "watchId": self.id, "error": error.chars().take(512).collect::<String>()}),
-                )?;
-                return Ok(());
-            }
-            Err(_) => return Ok(()),
-        };
-        let next = crate::snapshot::conditional_response(value, None);
-        if self.previous.as_ref() == Some(&next) {
-            return Ok(());
-        }
-        let full = json!({"type":"sessionUpdate", "watchId": self.id, "snapshot": next});
-        let update = if let Some(previous) = &self.previous {
-            let edits = crate::snapshot::delta(previous, &next);
-            let delta = json!({"type":"sessionUpdate", "watchId": self.id,
-                "baseRevision": previous["revision"], "revision": next["revision"], "edits": edits});
-            if serde_json::to_vec(&delta)?.len() < serde_json::to_vec(&full)?.len() {
-                delta
-            } else {
-                full
-            }
-        } else {
-            full
-        };
-        send_sealed(socket, socket_id, outbound, &update)?;
-        self.previous = Some(next);
-        Ok(())
-    }
-}
-
-fn serve_phone(
-    socket: &mut Socket,
-    socket_id: &str,
-    secret: &[u8; 32],
-    events: &channel::Sender<RemoteEvent>,
-    cancelled: &AtomicBool,
-    mutations: &mut HashSet<Uuid>,
-) -> anyhow::Result<()> {
-    send_json(socket, &json!({"t":"wopened","id":socket_id}))?;
-    let deadline = Instant::now() + HANDSHAKE_TIMEOUT;
-    let hello_text = recv_tunnel_text(socket, socket_id, deadline, cancelled)?;
-    let hello: Value = serde_json::from_str(&hello_text).context("invalid phone hello")?;
-    if !has_exact_keys(&hello, &["type", "version", "nonce"])
-        || hello.get("type").and_then(Value::as_str) != Some("hello")
-        || hello.get("version").and_then(Value::as_u64) != Some(1)
-    {
-        bail!("invalid phone handshake");
-    }
-    let phone_nonce = decode_nonce(
-        hello
-            .get("nonce")
-            .and_then(Value::as_str)
-            .context("missing nonce")?,
-    )?;
-    let desktop_nonce = crypto::random_32()?;
-    send_tunnel_text(
-        socket,
-        socket_id,
-        &json!({"type":"hello","version":1,"nonce":crypto::encode(&desktop_nonce)}).to_string(),
-    )?;
-    let (mut outbound, mut inbound) = crypto::directions(secret, &phone_nonce, &desktop_nonce)?;
-    send_sealed(socket, socket_id, &mut outbound, &json!({"type":"ready"}))?;
-    let mut authenticated = false;
-    let mut deferred: Vec<DeferredResponse> = Vec::new();
-    let mut watch: Option<SessionWatch> = None;
-    loop {
-        if cancelled.load(Ordering::Acquire) {
-            let _ = send_json(socket, &json!({"t":"wclose","id":socket_id,"code":1000}));
-            return Ok(());
-        }
-        if let Some(watch) = &mut watch {
-            watch.send_pending(socket, socket_id, &mut outbound)?;
-        }
-        let mut index = 0;
-        while index < deferred.len() {
-            let answer = match deferred[index].receiver.try_recv() {
-                Ok(answer) => Some(answer),
-                Err(channel::TryRecvError::Closed) => {
-                    Some(Err("Desktop request handler stopped".into()))
-                }
-                Err(channel::TryRecvError::Empty) if Instant::now() >= deferred[index].deadline => {
-                    Some(Err("操作结果待确认，请勿重复提交。".into()))
-                }
-                Err(channel::TryRecvError::Empty) => None,
+fn safe_failure(error: &anyhow::Error) -> String {
+    for cause in error.chain() {
+        if let Some(error) = cause.downcast_ref::<std::io::Error>() {
+            return match error.kind() {
+                std::io::ErrorKind::TimedOut => "远控连接超时".into(),
+                std::io::ErrorKind::ConnectionRefused => "远控服务拒绝连接".into(),
+                std::io::ErrorKind::NetworkUnreachable => "远控网络不可达".into(),
+                _ => "远控连接失败".into(),
             };
-            if let Some(answer) = answer {
-                let item = deferred.swap_remove(index);
-                let answer = if item.read_only {
-                    answer.map(|value| {
-                        crate::snapshot::conditional_response(value, item.if_revision.as_deref())
-                    })
-                } else {
-                    answer
-                };
-                reply(socket, socket_id, &mut outbound, item.id, answer)?;
-            } else {
-                index += 1;
-            }
         }
-        match read_message(socket, if watch.is_some() { WATCH_POLL_TIMEOUT } else { POLL_TIMEOUT })? {
-            Some(Message::Text(text)) => {
-                if text.len() > MAX_FRAME {
-                    bail!("phone frame is too large");
-                }
-                let relay_frame: Value =
-                    serde_json::from_str(text.as_str()).context("invalid relay frame")?;
-                if relay_frame.get("t").and_then(Value::as_str) == Some("hreq") {
-                    reject_http_request(socket, &relay_frame)?;
-                    continue;
-                }
-                if relay_frame.get("t").and_then(Value::as_str) == Some("wopen") {
-                    let other_id = relay_frame
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .context("missing virtual socket id")?;
-                    if other_id.is_empty() || other_id.len() > 255 {
-                        bail!("invalid virtual socket id");
-                    }
-                    if other_id != socket_id {
-                        send_json(
-                            socket,
-                            &json!({"t":"werr","id":other_id,"message":"A phone is already connected"}),
-                        )?;
-                        continue;
-                    }
-                    bail!("duplicate virtual socket open");
-                }
-                if relay_frame.get("id").and_then(Value::as_str) != Some(socket_id) {
-                    bail!("unexpected virtual socket frame");
-                }
-                match relay_frame.get("t").and_then(Value::as_str) {
-                    Some("wclose") => return Ok(()),
-                    Some("wmsg") if has_exact_keys(&relay_frame, &["t", "id", "s"]) => {}
-                    _ => bail!("unexpected virtual socket frame"),
-                }
-                let phone_text = relay_frame
-                    .get("s")
-                    .and_then(Value::as_str)
-                    .context("missing virtual socket text")?;
-                let envelope: Value =
-                    serde_json::from_str(phone_text).context("invalid phone envelope")?;
-                if !has_exact_keys(&envelope, &["type", "seq", "data"])
-                    || envelope.get("type").and_then(Value::as_str) != Some("sealed")
-                {
-                    bail!("invalid phone envelope");
-                }
-                let seq = envelope
-                    .get("seq")
-                    .and_then(Value::as_u64)
-                    .context("invalid sequence")?;
-                let encoded = envelope
-                    .get("data")
-                    .and_then(Value::as_str)
-                    .context("missing ciphertext")?;
-                let ciphertext = URL_SAFE_NO_PAD
-                    .decode(encoded)
-                    .context("invalid ciphertext")?;
-                if crypto::encode(&ciphertext) != encoded {
-                    bail!("invalid ciphertext encoding");
-                }
-                let plain = inbound.open(seq, &ciphertext)?;
-                if !authenticated {
-                    authenticated = true;
-                    send_status(events, RemoteStatus::Connected);
-                }
-                if plain.len() > MAX_FRAME {
-                    bail!("decrypted frame is too large");
-                }
-                let request: IncomingRequest =
-                    serde_json::from_slice(&plain).context("invalid remote request")?;
-                if !request.command.within_limits() {
-                    reply(
-                        socket,
-                        socket_id,
-                        &mut outbound,
-                        request.id,
-                        Err("Invalid request".into()),
-                    )?;
-                    continue;
-                }
-                // Opt-in only: old clients never receive unsolicited updates.
-                if let RemoteCommand::WatchSession {
-                    session_id,
-                    watch_id,
-                    enabled,
-                } = &request.command
-                {
-                    if request.if_revision.is_some() {
-                        reply(
-                            socket,
-                            socket_id,
-                            &mut outbound,
-                            request.id,
-                            Err("Subscriptions do not accept snapshot versions".into()),
-                        )?;
-                        continue;
-                    }
-                    if *enabled {
-                        let (snapshots, receiver) = channel::bounded(1);
-                        let event = RemoteEvent::WatchSession {
-                            session_id: *session_id,
-                            snapshots,
-                        };
-                        smol::block_on(timeout(Duration::from_secs(15), events.send(event)))
-                            .context("desktop request queue timed out")?
-                            .context("desktop request handler stopped")?;
-                        watch = Some(SessionWatch {
-                            id: *watch_id,
-                            snapshots: receiver,
-                            previous: None,
-                        });
-                    } else if watch.as_ref().is_some_and(|watch| watch.id == *watch_id) {
-                        watch = None;
-                    }
-                    reply(
-                        socket,
-                        socket_id,
-                        &mut outbound,
-                        request.id,
-                        Ok(json!({"accepted":true})),
-                    )?;
-                    continue;
-                }
-                let read_only = !request.command.is_mutation();
-                let allow_deferred = matches!(
-                    &request.command,
-                    RemoteCommand::GetComposer { .. }
-                        | RemoteCommand::SteerPrompt { .. }
-                        | RemoteCommand::UploadChunk { complete: true, .. }
-                );
-                if allow_deferred && deferred.len() >= 8 {
-                    reply(
-                        socket,
-                        socket_id,
-                        &mut outbound,
-                        request.id,
-                        Err("正在处理其他请求，请稍后重试。".into()),
-                    )?;
-                    continue;
-                }
-                if request.if_revision.as_deref().is_some_and(|revision| {
-                    !read_only || !crate::snapshot::valid_revision(revision)
-                }) {
-                    reply(
-                        socket,
-                        socket_id,
-                        &mut outbound,
-                        request.id,
-                        Err("Invalid snapshot version".into()),
-                    )?;
-                    continue;
-                }
-                if request.command.is_mutation() && !crate::reserve_mutation(mutations, request.id)
-                {
-                    reply(
-                        socket,
-                        socket_id,
-                        &mut outbound,
-                        request.id,
-                        Err("Request was already handled or the activation is full".into()),
-                    )?;
-                    continue;
-                }
-                let (response_tx, response_rx) = channel::bounded(1);
-                let event = RemoteEvent::Request(DesktopRequest {
-                    id: request.id,
-                    command: request.command,
-                    respond: response_tx,
-                });
-                smol::block_on(timeout(Duration::from_secs(15), events.send(event)))
-                    .context("desktop request queue timed out")?
-                    .context("desktop request handler stopped")?;
-                let deadline = Instant::now() + REQUEST_TIMEOUT;
-                if allow_deferred {
-                    deferred.push(DeferredResponse {
-                        id: request.id,
-                        receiver: response_rx,
-                        deadline,
-                        read_only,
-                        if_revision: request.if_revision,
-                    });
-                    continue;
-                }
-                let answer = loop {
-                    if cancelled.load(Ordering::Acquire) {
-                        return Ok(());
-                    }
-                    if Instant::now() >= deadline {
-                        break Err("操作结果待确认，请勿重复提交。".to_string());
-                    }
-                    match smol::block_on(timeout(POLL_TIMEOUT, response_rx.recv())) {
-                        Ok(Ok(Ok(value))) => break Ok(value),
-                        Ok(Ok(Err(message))) => break Err(message),
-                        Ok(Err(_)) => break Err("The desktop request handler stopped".to_string()),
-                        Err(_) => {}
-                    }
-                };
-                let answer = if read_only {
-                    answer.map(|value| {
-                        crate::snapshot::conditional_response(value, request.if_revision.as_deref())
-                    })
-                } else {
-                    answer
-                };
-                reply(socket, socket_id, &mut outbound, request.id, answer)?;
-            }
-            Some(Message::Close(frame)) => {
-                if frame.is_some_and(|frame| u16::from(frame.code) == 4401) {
-                    return Err(RemoteFailure::CredentialExpired.into());
-                }
-                bail!("relay connection closed");
-            }
-            Some(_) => bail!("invalid phone frame"),
-            None => {}
+        let text = cause.to_string();
+        if text.contains("signaling") { return "信令连接失败，正在重试".into(); }
+        if text.contains("ICE") || text.contains("direct connection") || text.contains("data channel") {
+            return "无法建立直连，请切换网络后重试".into();
         }
     }
-}
-
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct IncomingRequest {
-    id: Uuid,
-    command: RemoteCommand,
-    #[serde(default)]
-    if_revision: Option<String>,
-}
-
-fn decode_nonce(value: &str) -> anyhow::Result<[u8; 32]> {
-    let bytes = URL_SAFE_NO_PAD.decode(value).context("invalid nonce")?;
-    let nonce: [u8; 32] = bytes
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("invalid nonce length"))?;
-    if crypto::encode(&nonce) != value {
-        bail!("invalid nonce encoding");
-    }
-    Ok(nonce)
-}
-
-fn has_exact_keys(value: &Value, expected: &[&str]) -> bool {
-    value.as_object().is_some_and(|object| {
-        object.len() == expected.len() && expected.iter().all(|key| object.contains_key(*key))
-    })
-}
-
-fn reply(
-    socket: &mut Socket,
-    socket_id: &str,
-    outbound: &mut crypto::Direction,
-    id: Uuid,
-    answer: Result<Value, String>,
-) -> anyhow::Result<()> {
-    let response = match answer {
-        Ok(value)
-            if serde_json::to_vec(&value)
-                .map(|bytes| bytes.len() <= MAX_RESPONSE)
-                .unwrap_or(false) =>
-        {
-            json!({"id":id,"ok":true,"data":value})
-        }
-        Ok(_) => json!({"id":id,"ok":false,"error":"Response exceeds the allowed size"}),
-        Err(message) => {
-            json!({"id":id,"ok":false,"error":message.chars().take(256).collect::<String>()})
-        }
-    };
-    send_sealed(socket, socket_id, outbound, &response)
-}
-
-fn send_sealed(
-    socket: &mut Socket,
-    socket_id: &str,
-    direction: &mut crypto::Direction,
-    value: &Value,
-) -> anyhow::Result<()> {
-    let bytes = serde_json::to_vec(value)?;
-    if bytes.len() > MAX_RESPONSE {
-        bail!("outgoing payload exceeds the allowed size");
-    }
-    let (seq, encrypted) = direction.seal(&bytes)?;
-    send_tunnel_text(
-        socket,
-        socket_id,
-        &json!({"type":"sealed","seq":seq,"data":URL_SAFE_NO_PAD.encode(encrypted)}).to_string(),
-    )
-}
-
-fn send_tunnel_text(socket: &mut Socket, socket_id: &str, text: &str) -> anyhow::Result<()> {
-    send_json(socket, &json!({"t":"wmsg","id":socket_id,"s":text}))
-}
-
-fn send_json(socket: &mut Socket, value: &Value) -> anyhow::Result<()> {
-    let text = serde_json::to_string(value)?;
-    if text.len() > MAX_FRAME {
-        bail!("outgoing relay frame is too large");
-    }
-    socket
-        .send(Message::Text(text.into()))
-        .context("relay write failed")?;
-    Ok(())
-}
-
-fn reject_http_request(socket: &mut Socket, frame: &Value) -> anyhow::Result<()> {
-    let id = frame
-        .get("id")
-        .and_then(Value::as_str)
-        .context("missing HTTP request id")?;
-    if id.is_empty() || id.len() > 255 {
-        bail!("invalid HTTP request id");
-    }
-    send_json(
-        socket,
-        &json!({"t":"hres","id":id,"status":403,"headers":{"content-length":"0"}}),
-    )?;
-    send_json(socket, &json!({"t":"hend","id":id}))
-}
-
-fn recv_json_until(
-    socket: &mut Socket,
-    deadline: Instant,
-    cancelled: &AtomicBool,
-) -> anyhow::Result<Value> {
-    loop {
-        if cancelled.load(Ordering::Acquire) {
-            bail!("remote control stopped");
-        }
-        if Instant::now() >= deadline {
-            bail!("relay registration timed out");
-        }
-        match read_message(socket, POLL_TIMEOUT)? {
-            Some(Message::Text(text)) => {
-                if text.len() > MAX_FRAME {
-                    bail!("relay frame is too large");
-                }
-                return serde_json::from_str(text.as_str()).context("invalid relay frame");
-            }
-            Some(Message::Close(frame)) => {
-                if frame.is_some_and(|frame| u16::from(frame.code) == 4401) {
-                    return Err(RemoteFailure::CredentialExpired.into());
-                }
-                bail!("relay registration refused");
-            }
-            Some(_) => bail!("invalid registration frame"),
-            None => {}
-        }
-    }
-}
-
-fn recv_tunnel_text(
-    socket: &mut Socket,
-    socket_id: &str,
-    deadline: Instant,
-    cancelled: &AtomicBool,
-) -> anyhow::Result<String> {
-    loop {
-        if cancelled.load(Ordering::Acquire) {
-            bail!("remote control stopped");
-        }
-        if Instant::now() >= deadline {
-            bail!("phone handshake timed out");
-        }
-        let Some(Message::Text(text)) = read_message(socket, POLL_TIMEOUT)? else {
-            continue;
-        };
-        if text.len() > MAX_FRAME {
-            bail!("phone frame is too large");
-        }
-        let frame: Value =
-            serde_json::from_str(text.as_str()).context("invalid virtual socket frame")?;
-        if frame.get("t").and_then(Value::as_str) != Some("wmsg")
-            || frame.get("id").and_then(Value::as_str) != Some(socket_id)
-            || !has_exact_keys(&frame, &["t", "id", "s"])
-        {
-            bail!("unexpected virtual socket frame");
-        }
-        return Ok(frame
-            .get("s")
-            .and_then(Value::as_str)
-            .context("missing virtual socket text")?
-            .to_owned());
-    }
-}
-
-fn read_message(socket: &mut Socket, poll_timeout: Duration) -> anyhow::Result<Option<Message>> {
-    match socket.get_mut() {
-        MaybeTlsStream::Rustls(stream) => stream.sock.poll_timeout = poll_timeout,
-        MaybeTlsStream::Plain(stream) => stream.poll_timeout = poll_timeout,
-        _ => {}
-    }
-    match socket.read() {
-        Ok(Message::Ping(_) | Message::Pong(_)) => {
-            socket.flush()?;
-            Ok(None)
-        }
-        Ok(message) => Ok(Some(message)),
-        Err(tungstenite::Error::Io(error))
-            if matches!(
-                error.kind(),
-                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-            ) =>
-        {
-            Ok(None)
-        }
-        Err(error) => Err(error.into()),
-    }
-}
-
-fn send_status(events: &channel::Sender<RemoteEvent>, status: RemoteStatus) {
-    let _ = smol::block_on(timeout(
-        Duration::from_millis(100),
-        events.send(RemoteEvent::Status(status)),
-    ));
+    "远控连接已断开".into()
 }

@@ -1,4 +1,11 @@
-{$FINTWIND_MOBILE_DOMAIN} {
+{
+    auto_https disable_redirects
+    servers {
+        protocols h1 h2
+    }
+}
+
+{$FINTWIND_MOBILE_DOMAIN}:18761 {
     encode zstd gzip
     log {
         output discard
@@ -12,13 +19,18 @@
     }
     @uncached not path /assets/*
     header @uncached Cache-Control "no-store"
-    @relay path /agent /c/* /v1/admission/*
-    handle @relay {
-        reverse_proxy 127.0.0.1:8789 {
+    # Direct-connect signaling (protocol v2). Same origin as the mobile page, so
+    # the page's connect-src 'self' wss://{$FINTWIND_MOBILE_DOMAIN} covers it.
+    @signal path /signal/v2 /healthz
+    handle @signal {
+        reverse_proxy 127.0.0.1:8790 {
             header_up X-Forwarded-For {http.request.remote.host}
             flush_interval -1
         }
     }
+    # The legacy business relay (/agent, /c/*, /v1/admission/*) is retired. Those
+    # paths now fall through to the static file_server and return 404; no business
+    # data is forwarded. STUN is a separate UDP service, not proxied here.
     handle {
         root * /var/www/fintwind-mobile
         @assets path /assets/*

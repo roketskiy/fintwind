@@ -1,0 +1,26 @@
+{
+    "name": "fintwind-signal",
+    "version": "2.0.0",
+    "description": "Fintwind direct-connect WebRTC signaling service. Forwards only opaque, pairing-key-protected signaling ciphertext; no business relay, TURN or HTTP forwarding.",
+    "license": "GPL-3.0-only",
+    "type": "module",
+    "bin": {
+        "fintwind-signal": "./index.mjs"
+    },
+    "main": "index.mjs",
+    "files": [
+        "index.mjs",
+        "protocol.mjs",
+        "room.mjs",
+        "limits.mjs"
+    ],
+    "scripts": {
+        "start": "node index.mjs"
+    },
+    "engines": {
+        "node": ">=20"
+    },
+    "dependencies": {
+        "ws": "^8.18.3"
+    }
+}

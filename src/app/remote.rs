@@ -598,6 +598,68 @@ impl Fintwind {
                     fintwind_remote::RemoteEvent::Request(request) => {
                         let _ = this.update(cx, |_, cx| {
                         cx.spawn(async move |this, cx| {
+                        if let fintwind_remote::RemoteCommand::SearchFiles { session_id, query } = &request.command {
+                            let context = this.update(cx, |app, _| {
+                                if app.remote_generation != generation { return Err("远控已关闭。".to_owned()); }
+                                let index = app.remote_session_index(*session_id)?;
+                                let directory = app.workspace_path_for_session(&app.state.sessions[index]).ok_or("工作区不可用。")?.to_path_buf();
+                                let (cached, token) = match app.mention_files.read(&directory) {
+                                    crate::query::Query::Ready(files) => (Some(files), None),
+                                    crate::query::Query::Missing(token) => (None, Some(token)),
+                                    crate::query::Query::Pending => (None, None),
+                                };
+                                Ok((app.daemon.clone(), directory, cached, token))
+                            }).unwrap_or_else(|_| Err("桌面窗口已关闭。".to_owned()));
+                            let response = match context {
+                                Err(error) => Err(error),
+                                Ok((daemon, directory, cached, token)) => {
+                                    let location = directory.clone();
+                                    let query = query.clone();
+                                    let should_cache = token.is_some();
+                                    let result = cx.background_executor().spawn(async move {
+                                        let scanned = if cached.is_none() {
+                                            Some(match fintwind_client::WorkspaceClient::new(daemon.client()).request(
+                                                fintwind_client::WorkspaceOperation::ListProjectFiles { root: location, cap: crate::composer_complete::FILE_INDEX_CAP }
+                                            ) {
+                                                Ok(fintwind_client::WorkspaceResult::ProjectFiles { entries }) => entries,
+                                                _ => return Err("无法加载工作区文件。"),
+                                            })
+                                        } else {
+                                            None
+                                        };
+                                        let files = scanned.as_ref().or_else(|| cached.as_ref().and_then(|files| files.as_ref().as_ref())).ok_or("无法加载工作区文件。")?;
+                                        let matches = crate::composer_complete::filter_files(files, &query, &mut crate::composer_complete::matcher())
+                                            .into_iter().filter(|entry| entry.item.path.len() <= 1024)
+                                            .map(|entry| entry.item.path).collect::<Vec<_>>();
+                                        Ok((if should_cache { scanned } else { None }, matches))
+                                    }).await;
+                                    this.update(cx, |app, cx| {
+                                        let matches = match result {
+                                            Ok((scanned, matches)) => {
+                                                if let Some(token) = token
+                                                    && app.mention_files.fulfill(token, scanned)
+                                                    && app.selected_workspace_path() == Some(directory.as_path())
+                                                {
+                                                    app.refresh_composer_sources(cx);
+                                                    cx.notify();
+                                                }
+                                                Ok(matches)
+                                            }
+                                            Err(error) => {
+                                                if let Some(token) = token { app.mention_files.abandon(token); }
+                                                Err(error)
+                                            }
+                                        };
+                                        if app.remote_generation != generation { return Err("远控已关闭。".to_owned()); }
+                                        let index = app.remote_session_index(*session_id)?;
+                                        if app.workspace_path_for_session(&app.state.sessions[index]) != Some(directory.as_path()) { return Err("工作区已改变。".into()); }
+                                        matches.map(|files| json!({"files": files})).map_err(str::to_owned)
+                                    }).unwrap_or_else(|_| Err("桌面窗口已关闭。".into()))
+                                }
+                            };
+                            let _ = request.respond.send(response).await;
+                            return;
+                        }
                         if let fintwind_remote::RemoteCommand::GetComposer { session_id } = &request.command {
                             let context = this.update(cx, |app, _| {
                                 if app.remote_generation != generation { return Err("远控已关闭。".to_owned()); }
@@ -863,6 +925,7 @@ impl Fintwind {
             fintwind_remote::RemoteCommand::GetComposer { .. } => {
                 Err("请重新打开会话选项。".into())
             }
+            fintwind_remote::RemoteCommand::SearchFiles { .. } => Err("请重新搜索文件。".into()),
             fintwind_remote::RemoteCommand::SteerPrompt { .. } => {
                 Err("引导必须等待运行中的会话确认。".into())
             }

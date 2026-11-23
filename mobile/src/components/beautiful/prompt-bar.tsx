@@ -26,6 +26,7 @@ interface Props {
   activeCommand?: string;
   attachments: ReactNode;
   onDraft: (draft: string) => void;
+  onCaret: (position: number) => void;
   onPaste: ClipboardEventHandler<HTMLTextAreaElement>;
   onKeyDown: KeyboardEventHandler<HTMLTextAreaElement>;
   onAttach: () => void;
@@ -42,7 +43,8 @@ export const PromptBar = forwardRef<HTMLTextAreaElement, Props>(function PromptB
     <textarea ref={ref} id="message-input" className="bui-prompt-input" rows={1}
       value={props.draft} placeholder={props.placeholder} maxLength={32768}
       disabled={props.inputDisabled} onPaste={props.onPaste} onKeyDown={props.onKeyDown}
-      onChange={(event) => props.onDraft(event.target.value)} role="combobox"
+      onChange={(event) => { props.onCaret(event.target.selectionStart); props.onDraft(event.target.value); }}
+      onSelect={(event) => props.onCaret(event.currentTarget.selectionStart)} role="combobox"
       aria-autocomplete="list" aria-expanded={props.commandsOpen}
       aria-controls={props.commandsOpen ? "slash-commands" : undefined}
       aria-activedescendant={props.activeCommand} />

@@ -3,8 +3,6 @@ import { useEffect, useId, useRef, useState, type ClipboardEvent, type KeyboardE
 import {
   CloseIcon,
   PaperclipIcon,
-  TerminalIcon,
-  SparkleIcon,
 } from "@/components/icons";
 import { GlideMenu } from "@/components/beautiful/primitives";
 import { Popover, PopoverContent, PopoverTitle } from "@/components/ui/popover";
@@ -79,6 +77,8 @@ export function Composer({
   const textarea = useRef<HTMLTextAreaElement>(null);
   const [highlight, setHighlight] = useState(0);
   const [dismissed, setDismissed] = useState<string | null>(null);
+  const [caret, setCaret] = useState(0);
+  const [fileResults, setFileResults] = useState<{ query: string; files: string[]; error?: string } | null>(null);
   const active = useRef(true);
   const filesRef = useRef(files);
   filesRef.current = files;
@@ -93,12 +93,45 @@ export function Composer({
   const commands = composerCommands(session, previewOptions ?? options);
   const matches = commands.filter((command) => command.name.toLowerCase().includes(query ?? ""));
   const commandOpen = query !== null && dismissed !== draft && !panel && !locked;
+  const mentionMatch = /(?:^|\s)@([^\s@]*)$/.exec(draft.slice(0, caret));
+  const mentionQuery = mentionMatch?.[1] ?? null;
+  const mentionOpen = mentionQuery !== null && dismissed !== draft && !panel && !locked && query === null;
+  const fileMatches = fileResults?.query === mentionQuery ? fileResults.files : [];
+  const menuOpen = commandOpen || mentionOpen;
 
   useEffect(() => { setHighlight(0); }, [draft]);
   useEffect(() => {
-    if (!commandOpen) return;
+    if (!menuOpen) return;
     document.getElementById(`slash-option-${highlight}`)?.scrollIntoView({ block: "nearest" });
-  }, [highlight, commandOpen]);
+  }, [highlight, menuOpen]);
+
+  useEffect(() => {
+    if (!mentionOpen || mentionQuery === null) return;
+    let current = true;
+    const timer = window.setTimeout(() => {
+      if (previewOptions) {
+        const files = ["src/app.tsx", "src/components/conversation.tsx", "README.md"];
+        setFileResults({ query: mentionQuery, files: files.filter((file) => file.toLowerCase().includes(mentionQuery.toLowerCase())) });
+        return;
+      }
+      void remoteClient.command("searchFiles", { sessionId: session.id, query: mentionQuery })
+        .then(({ files }) => { if (current) setFileResults({ query: mentionQuery, files }); })
+        .catch((error: unknown) => { if (current) setFileResults({ query: mentionQuery, files: [], error: errorMessage(error instanceof Error ? error.message : "无法搜索文件。") }); });
+    }, 200);
+    return () => { current = false; window.clearTimeout(timer); };
+  }, [mentionOpen, mentionQuery, session.id, previewOptions]);
+
+  function chooseFile(file: string) {
+    if (mentionQuery === null) return;
+    const start = caret - mentionQuery.length - 1;
+    const insert = `@${file} `;
+    const value = draft.slice(0, start) + insert + draft.slice(caret);
+    const nextCaret = start + insert.length;
+    onDraft(value);
+    setDismissed(value);
+    setCaret(nextCaret);
+    requestAnimationFrame(() => { textarea.current?.focus(); textarea.current?.setSelectionRange(nextCaret, nextCaret); });
+  }
 
   function chooseCommand(command: ComposerCommand) {
     onDraft(command.value);
@@ -109,12 +142,14 @@ export function Composer({
 
   function keyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.nativeEvent.isComposing) return;
-    if (commandOpen && ["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(event.key)) {
+    if (menuOpen && ["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(event.key)) {
       if (event.key === "Escape") { event.preventDefault(); setDismissed(draft); return; }
-      if (!matches.length) return;
+      const count = commandOpen ? matches.length : fileMatches.length;
+      if (!count) return;
       event.preventDefault();
-      if (event.key === "ArrowDown" || event.key === "ArrowUp") setHighlight((value) => (value + (event.key === "ArrowDown" ? 1 : -1) + matches.length) % matches.length);
-      else chooseCommand(matches[Math.min(highlight, matches.length - 1)]);
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") setHighlight((value) => (value + (event.key === "ArrowDown" ? 1 : -1) + count) % count);
+      else if (commandOpen) chooseCommand(matches[Math.min(highlight, count - 1)]);
+      else chooseFile(fileMatches[Math.min(highlight, count - 1)]);
     } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
       event.preventDefault(); void send();
     }
@@ -281,20 +316,26 @@ export function Composer({
   return (
     <Popover open={panel !== null} onOpenChange={(open) => { if (!open) setPanel(null); }}>
     <div className="composer-region">
-      {commandOpen && (
+      {menuOpen && (
         <div className="slash-palette">
-          <div className="palette-heading"><TerminalIcon /><span>命令</span><kbd>esc</kbd></div>
+          <div className="palette-heading"><span>{commandOpen ? "命令" : "文件"}</span><kbd>esc</kbd></div>
           <GlideMenu className="slash-results">
-            <div id="slash-commands" role="listbox" aria-label="斜杠命令">
-              {matches.map((command, index) => <Button type="button" variant="row" key={command.name}
+            <div id="slash-commands" role="listbox" aria-label={commandOpen ? "斜杠命令" : "文件"}>
+              {commandOpen && matches.map((command, index) => <Button type="button" variant="row" key={command.name}
                 id={`slash-option-${index}`} role="option" aria-selected={index === Math.min(highlight, matches.length - 1)}
                 tabIndex={-1} data-menu-row data-highlighted={index === Math.min(highlight, matches.length - 1) || undefined}
                 onPointerDown={(event) => event.preventDefault()} onClick={() => chooseCommand(command)}>
-                <span className="command-symbol">{command.name.startsWith("goal") ? <SparkleIcon /> : <TerminalIcon />}</span>
                 <span className="command-copy"><strong>/{command.name}</strong><small>{command.description}</small></span>
                 <span aria-hidden="true">↵</span>
               </Button>)}
-              {!matches.length && !optionsLoading && <p className="palette-empty">没有匹配的命令</p>}
+              {mentionOpen && fileMatches.map((file, index) => <Button type="button" variant="row" key={file}
+                id={`slash-option-${index}`} role="option" aria-selected={index === Math.min(highlight, fileMatches.length - 1)}
+                tabIndex={-1} data-menu-row data-highlighted={index === Math.min(highlight, fileMatches.length - 1) || undefined}
+                onPointerDown={(event) => event.preventDefault()} onClick={() => chooseFile(file)}>
+                <span className="command-copy"><strong>{file}</strong></span>
+              </Button>)}
+              {commandOpen && !matches.length && !optionsLoading && <p className="palette-empty">没有匹配的命令</p>}
+              {mentionOpen && fileResults?.query === mentionQuery && !fileMatches.length && <p className="palette-empty">{fileResults.error || "没有匹配的文件"}</p>}
             </div>
           </GlideMenu>
         </div>
@@ -318,8 +359,9 @@ export function Composer({
         sending={showSendSpinner && !visibleProgress} running={running} stopDisabled={stopDisabled ?? locked} attachmentsSupported={attachmentsSupported}
         configurable={configurable} modelName={session.modelName}
         mode={session.interactionMode === "plan" ? "Plan" : "Build"} effort={session.reasoningEffort || "默认思考"}
-        commandsOpen={commandOpen}
-        activeCommand={commandOpen && matches.length ? `slash-option-${Math.min(highlight, matches.length - 1)}` : undefined}
+        commandsOpen={menuOpen}
+        activeCommand={menuOpen && (commandOpen ? matches.length : fileMatches.length) ? `slash-option-${Math.min(highlight, (commandOpen ? matches.length : fileMatches.length) - 1)}` : undefined}
+        onCaret={setCaret}
         onDraft={(value) => { setDismissed(null); setDeliveryError(null); onDraft(value); }} onPaste={paste} onKeyDown={keyDown}
         onAttach={() => input.current?.click()}
         onModel={() => setPanel("model")} onOptions={() => setPanel("options")}

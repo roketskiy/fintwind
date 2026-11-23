@@ -371,6 +371,7 @@ export class RemoteClient {
     type: CommandType,
     fields: { projectId?: string; sessionId?: string },
   ): string {
+    if (type === "searchFiles") return "";
     if (mutationScope(type, fields)) return "";
     return JSON.stringify([
       this.route,

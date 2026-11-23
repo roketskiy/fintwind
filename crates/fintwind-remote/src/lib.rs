@@ -153,6 +153,10 @@ pub enum RemoteCommand {
     GetComposer {
         session_id: Uuid,
     },
+    SearchFiles {
+        session_id: Uuid,
+        query: String,
+    },
     ConfigureSession {
         session_id: Uuid,
         model: Option<String>,
@@ -215,6 +219,7 @@ impl RemoteCommand {
                 | Self::GetSession { .. }
                 | Self::WatchSession { .. }
                 | Self::GetComposer { .. }
+                | Self::SearchFiles { .. }
         )
     }
 
@@ -233,6 +238,7 @@ impl RemoteCommand {
             Self::GetSession { session_id }
             | Self::GetComposer { session_id }
             | Self::Stop { session_id } => !session_id.is_nil(),
+            Self::SearchFiles { session_id, query } => !session_id.is_nil() && query.len() <= 1024,
             Self::ConfigureSession {
                 session_id,
                 model,

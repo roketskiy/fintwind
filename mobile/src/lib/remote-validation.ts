@@ -78,6 +78,7 @@ export function mutationScope(
     type === "listSessions" ||
     type === "getSession" ||
     type === "getComposer" ||
+    type === "searchFiles" ||
     type === "watchSession"
   )
     return "";
@@ -111,6 +112,10 @@ export function checkFieldBounds(
     case "getComposer":
     case "stop":
       id(fields["sessionId"]);
+      return;
+    case "searchFiles":
+      id(fields["sessionId"]);
+      if (typeof fields["query"] !== "string" || textBytes(fields["query"]) > 1024) throw bad();
       return;
     case "configureSession":
       id(fields["sessionId"]);
@@ -474,6 +479,8 @@ export function parseResult(type: CommandType, data: unknown): unknown {
           };
         }),
       };
+    case "searchFiles":
+      return { files: reqArr(data["files"], 64, (file) => reqStr(file, 1024)) };
     case "watchSession":
     case "configureSession":
     case "steerPrompt":

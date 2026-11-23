@@ -68,8 +68,11 @@ export function useRemote() {
   const [error, setError] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [configuring, setConfiguring] = useState(false);
   const [stopping, setStopping] = useState(false);
   const generation = useRef(0);
+  const watchVersion = useRef(0);
+  const configurationVersion = useRef(0);
   const operation = useRef<CommandType | null>(null);
   const stopOperation = useRef(false);
   const currentSelection = useRef(selection);
@@ -180,6 +183,7 @@ export function useRemote() {
           if (!document.hidden && !streamUnavailable && detail.features.includes("sessionDeltas")) {
             unwatch = remoteClient.watchSession(selection.sessionId, (updated) => {
               if (!active || epoch !== generation.current || document.hidden) return;
+              watchVersion.current++;
               refreshInterval = sessionInterval(updated);
               setData((value) => ({ ...value, detail: updated }));
               setError(null);
@@ -319,10 +323,13 @@ export function useRemote() {
   const mutate = useCallback(
     async <K extends CommandType>(type: K, fields: CommandMap[K]["fields"], onFailure?: (message: string) => void) => {
       const stop = type === "stop";
+      const configure = type === "configureSession";
+      const configuration = configure ? fields as CommandMap["configureSession"]["fields"] : null;
       if (operation.current && !stop) return null;
       if (stopOperation.current) return null;
+      const version = configure ? ++configurationVersion.current : 0;
       if (stop) { stopOperation.current = true; setStopping(true); }
-      else { operation.current = type; setBusy(true); }
+      else { operation.current = type; if (configure) setConfiguring(true); else setBusy(true); }
       setOperationError(null);
       try {
         const result = await remoteClient.command(type, fields);
@@ -335,9 +342,31 @@ export function useRemote() {
       } finally {
         // A timeout still needs a fresh read to resolve operation identities;
         // unsolicited pushes are not proof of a post-operation snapshot.
-        setRefreshVersion((value) => value + 1);
+        if (configuration) {
+          const epoch = generation.current;
+          const watch = watchVersion.current;
+          void remoteClient.command("getSession", { sessionId: configuration.sessionId }).then((detail) => {
+            if (epoch !== generation.current || version !== configurationVersion.current || watch !== watchVersion.current) return;
+            setData((value) => {
+              const current = value.detail;
+              if (!current || current.id !== detail.id) return value;
+              if (current.model === detail.model && current.modelName === detail.modelName &&
+                current.interactionMode === detail.interactionMode && current.runtimeMode === detail.runtimeMode &&
+                current.reasoningEffort === detail.reasoningEffort) return value;
+              return { ...value, detail: { ...current, model: detail.model, modelName: detail.modelName,
+                interactionMode: detail.interactionMode, runtimeMode: detail.runtimeMode, reasoningEffort: detail.reasoningEffort } };
+            });
+            setError(null);
+          }).catch((cause: unknown) => {
+            if (epoch === generation.current && version === configurationVersion.current && currentSelection.current.sessionId === configuration.sessionId) {
+              setError(cause instanceof Error ? cause.message : "无法刷新会话。");
+              // Fall back to the normal retry loop if confirmation fails.
+              setRefreshVersion((value) => value + 1);
+            }
+          });
+        } else setRefreshVersion((value) => value + 1);
         if (stop) { stopOperation.current = false; setStopping(false); }
-        else { operation.current = null; setBusy(false); }
+        else { operation.current = null; if (configure) setConfiguring(false); else setBusy(false); }
       }
     },
     [],
@@ -362,6 +391,7 @@ export function useRemote() {
     error: operationError || error || client.error,
     readError: !operationError && Boolean(error),
     busy,
+    configuring,
     stopping,
     selectWorkspace,
     openSession,

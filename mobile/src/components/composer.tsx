@@ -296,11 +296,10 @@ export function Composer({
   async function configure(
     fields: Omit<CommandMap["configureSession"]["fields"], "sessionId">,
   ) {
-    const result = await mutate("configureSession", {
+    await mutate("configureSession", {
       sessionId: session.id,
       ...fields,
     });
-    if (result && active.current) setPanel(null);
   }
 
   const catalog = previewOptions ?? options;

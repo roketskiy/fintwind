@@ -270,7 +270,7 @@ export function RemoteView({ app, previewOptions }: { app: ReturnType<typeof use
   const detail = app.detail;
   const sessionPending = app.pendingScopes.includes(`session:${app.sessionId}`);
   const projectPending = app.pendingScopes.includes(`project:${app.projectId}`);
-  const disabled = !connected || app.busy || sessionPending;
+  const disabled = !connected || app.busy || app.configuring || sessionPending;
   const currentSummary = app.sessions.find((item) => item.id === app.sessionId);
   const waitingForSessions = app.page === "sessions" && app.loading && !app.sessions.length;
   const waitingForConversation = app.page === "conversation" && app.loading && !detail;
@@ -530,7 +530,7 @@ export function RemoteView({ app, previewOptions }: { app: ReturnType<typeof use
             <Conversation
               key={detail.id}
               session={detail}
-              disabled={!connected || sessionPending}
+              disabled={!connected || app.configuring || sessionPending}
               busy={app.busy}
               onError={app.setError}
               onPermission={(optionId) => {
@@ -552,7 +552,7 @@ export function RemoteView({ app, previewOptions }: { app: ReturnType<typeof use
               }}
             />
             <div className="composer-status">
-              {sessionPending && <p className="composer-notice" role="status">操作结果待确认，请勿重复提交。</p>}
+              {sessionPending && !app.configuring && <p className="composer-notice" role="status">操作结果待确认，请勿重复提交。</p>}
               {detail.canSend === false && !sessionPending && <p className="composer-notice">
                 {detail.desktopRequired ? "请在电脑上继续处理。" : "会话内容正在加载。"}
               </p>}

@@ -232,7 +232,7 @@ export function Composer({
       locked ||
       sending.current ||
       !session.canSend ||
-      (running && !canSteer) ||
+      (running && !canSteer && !draft.trimStart().startsWith("/")) ||
       session.desktopRequired ||
       (!draft.trim() && !files.length)
     )
@@ -354,7 +354,7 @@ export function Composer({
       <PromptBar ref={textarea}
         draft={draft} placeholder={running ? "引导当前回复…" : "发送消息…"}
         inputDisabled={uploading || busy} locked={locked}
-        canSend={!locked && session.canSend && (!running || canSteer) && !session.desktopRequired && (!!draft.trim() || !!files.length)}
+        canSend={!locked && session.canSend && (!running || canSteer || draft.trimStart().startsWith("/")) && !session.desktopRequired && (!!draft.trim() || !!files.length)}
         sending={showSendSpinner && !visibleProgress} running={running} stopDisabled={stopDisabled ?? locked} attachmentsSupported={attachmentsSupported}
         configurable={configurable} modelName={session.modelName}
         mode={session.interactionMode === "plan" ? "Plan" : "Build"} effort={session.reasoningEffort || "默认思考"}

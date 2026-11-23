@@ -763,7 +763,47 @@ impl Fintwind {
                             let _ = request.respond.send(response).await;
                             return;
                         }
+                        if let fintwind_remote::RemoteCommand::SendPrompt { session_id, text, attachment_ids }
+                            | fintwind_remote::RemoteCommand::SteerPrompt { session_id, text, attachment_ids } = &request.command
+                            && Self::is_reload_submission(text)
+                        {
+                            let context = this.update(cx, |app, _| {
+                                if app.remote_generation != generation { return Err("远控已关闭。".to_owned()); }
+                                let index = app.remote_session_index(*session_id)?;
+                                if !attachment_ids.is_empty() { return Err("此命令不能附带文件。".to_owned()); }
+                                let session = &app.state.sessions[index];
+                                if session.provider != "opencode" { return Err("此会话不支持重新加载 OpenCode。".to_owned()); }
+                                let binary = app.native_binary_path().ok_or("OpenCode 不可用。")?;
+                                let directory = app.workspace_path_for_session(session).ok_or("工作区不可用。")?.to_path_buf();
+                                Ok((app.daemon.clone(), binary, directory))
+                            }).unwrap_or_else(|_| Err("桌面窗口已关闭。".into()));
+                            let response = match context {
+                                Err(error) => Err(error),
+                                Ok((daemon, binary, directory)) => cx.background_executor().spawn(async move {
+                                    fintwind_client::persistence::StateStore::remote(daemon)
+                                        .reload_opencode_server(binary, directory)
+                                        .map(|()| json!({"accepted": true}))
+                                        .map_err(|error| format!("重新加载失败：{error}"))
+                                }).await,
+                            };
+                            let _ = request.respond.send(response).await;
+                            return;
+                        }
                         if let fintwind_remote::RemoteCommand::SteerPrompt { session_id, text, attachment_ids } = &request.command {
+                            if text.trim_start().starts_with('/') {
+                                let response = this.update(cx, |app, cx| {
+                                    if app.remote_generation != generation { return Err("远控已关闭。".to_owned()); }
+                                    let attachments = app.remote_uploads.resolve(*session_id, attachment_ids)?;
+                                    let result = app.dispatch_remote_command(
+                                        fintwind_remote::RemoteCommand::SendPrompt { session_id: *session_id, text: text.clone(), attachment_ids: attachment_ids.clone() },
+                                        attachments, None, cx,
+                                    );
+                                    if result.is_ok() { for id in attachment_ids { app.remote_uploads.0.remove(id); } }
+                                    result
+                                }).unwrap_or_else(|_| Err("桌面窗口已关闭。".to_owned()));
+                                let _ = request.respond.send(response).await;
+                                return;
+                            }
                             let response = this.update(cx, |app, cx| {
                                 if app.remote_generation != generation { return Err("远控已关闭。".to_owned()); }
                                 let index = app.remote_session_index(*session_id)?;
@@ -1062,6 +1102,15 @@ impl Fintwind {
                 }
                 let prompt = text.trim();
                 let end = prompt.find(char::is_whitespace).unwrap_or(prompt.len());
+                if super::btw::question(prompt).is_some() {
+                    return Err("移动端暂不支持 /btw，请在电脑上使用。".into());
+                }
+                if Self::is_compact_submission(prompt) {
+                    if !attachments.is_empty() { return Err("此命令不能附带文件。".into()); }
+                    if !self.runtimes.contains_key(&session_id) { return Err("当前会话无法压缩上下文。".into()); }
+                    self.request_context_compaction(session_id, cx);
+                    return Ok(json!({"accepted": true}));
+                }
                 if prompt[..end].eq_ignore_ascii_case("/goal") {
                     if self.state.sessions[index].provider != "opencode" { return Err("此会话不支持 Goal。".into()); }
                     let raw = prompt[end..].trim();
@@ -1080,6 +1129,9 @@ impl Fintwind {
                     self.control_goal(session_id, action, cx);
                     self.save();
                     return Ok(json!({"accepted": true}));
+                }
+                if prompt.starts_with('/') && self.state.sessions[index].is_busy() {
+                    return Err("会话运行中无法执行此命令，请等待回复完成后重试。".into());
                 }
                 self.submit_submission_for_session(
                     session_id,

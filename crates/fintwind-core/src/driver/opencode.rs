@@ -624,8 +624,8 @@ fn slash_invocation(text: &str) -> Option<(&str, &str)> {
 /// The command names the server's own registry carries — `opencode.json`
 /// entries and everything plugins registered; the markdown ones Fintwind
 /// discovered itself are listed there too, but those never reach a submit
-/// unexpanded. `None` on any failure: the submission then stays a plain
-/// prompt and the typed text is preserved.
+/// unexpanded. `None` on failure so callers can report that commands could
+/// not be resolved rather than silently sending them as ordinary text.
 fn server_command_names(server: &OpenCodeServer, directory: &str) -> Option<HashSet<String>> {
     let query = url::Url::parse_with_params(
         "http://localhost/api/command",
@@ -1493,16 +1493,11 @@ impl OpenCodeDriver {
                             // route — a plain prompt would deliver the typed
                             // text literally. Locally expanded templates never
                             // reach this branch (the composer already expanded
-                            // them), and an unknown name falls through as the
-                            // prompt it may well be.
-                            let invocation =
-                                slash_invocation(&text).and_then(|(name, arguments)| {
-                                    let names =
-                                        server_command_names(&worker_server, &worker_location)?;
-                                    names
-                                        .contains(name)
-                                        .then(|| (name.to_owned(), arguments.to_owned()))
-                                });
+                            // them). Unknown names and registry failures are
+                            // reported instead of being sent as plain text.
+                            let invocation = slash_invocation(&text).map(|(name, arguments)| {
+                                (name.to_owned(), arguments.to_owned())
+                            });
                             let path = format!(
                                 "/api/session/{}/prompt",
                                 encode_path_segment(&worker_session)
@@ -1514,9 +1509,18 @@ impl OpenCodeDriver {
                                 &files,
                                 worker_task_id.as_deref(),
                             );
-                            let invalid_input = bodies.is_err();
+                            let mut invalid_input = bodies.is_err();
                             let posted = bodies.and_then(|(mut current, legacy)| {
                                 if let Some((name, arguments)) = invocation {
+                                    let names = server_command_names(&worker_server, &worker_location)
+                                        .ok_or_else(|| {
+                                            invalid_input = true;
+                                            anyhow!("无法获取 OpenCode 命令列表，请重试。")
+                                        })?;
+                                    if !names.contains(&name) {
+                                        invalid_input = true;
+                                        anyhow::bail!("未找到命令 /{name}。");
+                                    }
                                     current.as_object_mut().unwrap().remove("metadata");
                                     current["name"] = json!(name);
                                     current["text"] = json!(arguments);

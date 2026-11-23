@@ -22,6 +22,7 @@ export interface RemoteMessage {
   streaming?: boolean;
   createdAt?: number;
   elapsedSeconds?: number;
+  turnStats?: { agent: string; mode: "build" | "plan" | null; rest: string | null };
   type?: "message";
   id: string;
   role: "user" | "assistant";
@@ -78,6 +79,7 @@ export interface TodoSnapshot {
   truncated: boolean;
 }
 export interface SessionDetail {
+  runningTurn?: { id: string; elapsedSeconds: number } | null;
   failureReason?: string | null;
   usage?: {
     contextTokens: number | null;

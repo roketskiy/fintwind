@@ -1194,6 +1194,7 @@ impl Fintwind {
     fn remote_session_projection(&self, index: usize, ordered_only: bool) -> Value {
         let session = &self.state.sessions[index];
         let timing = remote_message_timing(session);
+        let footer_stats = remote_turn_stats(self, session);
         let mut remaining = 60 * 1024;
         let mut messages = Vec::new();
         let visible = session
@@ -1235,6 +1236,7 @@ impl Fintwind {
                 "text": text,
                 "createdAt": timing.get(&message.id).and_then(|(at, _)| (*at > 0).then_some(*at)),
                 "elapsedSeconds": timing.get(&message.id).and_then(|(_, elapsed)| *elapsed),
+                "turnStats": footer_stats.get(&message.id),
             }));
         }
         messages.reverse();
@@ -1330,7 +1332,7 @@ impl Fintwind {
                     })).collect::<Vec<_>>(),
                 })).collect::<Vec<_>>(),
             }));
-        let (entries, entries_truncated) = remote_transcript_entries(session, &timing);
+        let (entries, entries_truncated) = remote_transcript_entries(session, &timing, &footer_stats);
         let mut features = vec!["orderedTranscript", "composerOptions", "attachments", "sessionDeltas", "turnMetadata", "todoList", "workspaceChanges", "sessionPermissions", "steering", "contextUsage"];
         if session.provider == "opencode" { features.push("goals"); }
         let mut snapshot = json!({
@@ -1338,6 +1340,9 @@ impl Fintwind {
             "projectId": session.project_id,
             "title": bounded_text(session.display_title(), 1024),
             "status": serde_json::to_value(session.status).unwrap_or(Value::Null),
+            "runningTurn": session.turns.last()
+                .filter(|turn| turn.status == crate::model::TurnStatus::Running && turn.started_at > 0)
+                .map(|turn| json!({"id": turn.id, "elapsedSeconds": unix_time().saturating_sub(turn.started_at)})),
             "messages": messages,
             "truncated": truncated || entries_truncated,
             "permission": permission,
@@ -1545,6 +1550,27 @@ fn remote_message_timing(session: &AgentSession) -> HashMap<Uuid, (u64, Option<u
     timing
 }
 
+fn remote_turn_stats(app: &Fintwind, session: &AgentSession) -> HashMap<Uuid, Value> {
+    let turns = session.turns.iter().map(|turn| (turn.id, turn)).collect::<HashMap<_, _>>();
+    let mut seen = std::collections::HashSet::new();
+    let mut result = HashMap::new();
+    for message in session.messages.iter().rev().take(REMOTE_MESSAGE_LIMIT) {
+        if message.role != MessageRole::Assistant { continue; }
+        let Some(turn_id) = message.turn_id else { continue; };
+        if !seen.insert(turn_id) || message.streaming { continue; }
+        let Some(turn) = turns.get(&turn_id) else { continue; };
+        if turn.status == crate::model::TurnStatus::Running { continue; }
+        if let Some(stats) = super::transcript::assistant_turn_stats_for_turn(app, session, turn) {
+            result.insert(message.id, json!({
+                "agent": bounded_text(&stats.agent, 256),
+                "mode": stats.agent_mode,
+                "rest": stats.rest.as_deref().map(|rest| bounded_text(rest, 1024)),
+            }));
+        }
+    }
+    result
+}
+
 fn remote_usage_snapshot(usage: Option<&crate::model::ContextUsage>, configured_window: Option<u64>) -> Value {
     // Copy only the five in-memory counters, not request composition or history.
     // Keep the desktop's configured-window override and unknown/zero semantics.
@@ -1578,7 +1604,7 @@ fn remote_todo_snapshot(session: &AgentSession) -> Option<Value> {
         "total": snapshot.items.len(), "truncated": truncated}))
 }
 
-fn remote_transcript_entries(session: &AgentSession, timing: &HashMap<Uuid, (u64, Option<u64>)>) -> (Vec<Value>, bool) {
+fn remote_transcript_entries(session: &AgentSession, timing: &HashMap<Uuid, (u64, Option<u64>)>, footer_stats: &HashMap<Uuid, Value>) -> (Vec<Value>, bool) {
     enum Entry<'a> {
         Message(&'a crate::model::Message),
         Activity(&'a ActivityItem, Option<Uuid>),
@@ -1633,7 +1659,7 @@ fn remote_transcript_entries(session: &AgentSession, timing: &HashMap<Uuid, (u64
                     "turnId": message.turn_id, "turnRunning": turn.map(|turn| turn.status == crate::model::TurnStatus::Running),
                     "responseComplete": response_complete,
                     "createdAt": timing.get(&message.id).and_then(|(at, _)| (*at > 0).then_some(*at)),
-                    "elapsedSeconds": timing.get(&message.id).and_then(|(_, elapsed)| *elapsed), "streaming": message.streaming,
+                    "elapsedSeconds": timing.get(&message.id).and_then(|(_, elapsed)| *elapsed), "turnStats": footer_stats.get(&message.id), "streaming": message.streaming,
                     "attachments": message.attachments.iter().take(8).map(|file| json!({"name": bounded_text(&file.name, 128), "isImage": file.is_image})).collect::<Vec<_>>()})
             }
             Entry::Activity(activity, turn_id) => {

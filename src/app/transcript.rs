@@ -803,9 +803,17 @@ fn assistant_turn_stats(
     let message = &session.messages[message_index];
     let turn = message
         .turn_id
-        .and_then(|turn_id| session.turns.iter().find(|turn| turn.id == turn_id));
-    let stats = turn.and_then(|turn| turn.stats.as_ref());
-    if turn.is_none() || (stats.is_none() && turn.is_some_and(|turn| turn.completed_at.is_none())) {
+        .and_then(|turn_id| session.turns.iter().find(|turn| turn.id == turn_id))?;
+    assistant_turn_stats_for_turn(app, session, turn)
+}
+
+pub(super) fn assistant_turn_stats_for_turn(
+    app: &Fintwind,
+    session: &AgentSession,
+    turn: &crate::model::AgentTurn,
+) -> Option<AssistantTurnStats> {
+    let stats = turn.stats.as_ref();
+    if stats.is_none() && turn.completed_at.is_none() {
         return None;
     }
     let captured_agent = stats.and_then(|stats| stats.agent.as_deref());
@@ -828,12 +836,10 @@ fn assistant_turn_stats(
                 None => model,
             }
         });
-    let duration_ms = turn.and_then(|turn| {
-        turn.completed_at.map(|completed| {
-            completed
-                .saturating_sub(turn.started_at)
-                .saturating_mul(1_000)
-        })
+    let duration_ms = turn.completed_at.map(|completed| {
+        completed
+            .saturating_sub(turn.started_at)
+            .saturating_mul(1_000)
     });
     let (output_tokens, stream_ms) = stats
         .filter(|stats| stats.stream_verified)

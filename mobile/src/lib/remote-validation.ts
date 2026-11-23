@@ -211,6 +211,12 @@ export function parseRemoteMessage(value: unknown): RemoteMessage {
   if (!isRecord(value)) throw new Error("响应格式无效");
   const role = value["role"];
   if (role !== "user" && role !== "assistant") throw new Error("响应格式无效");
+  const stats = value["turnStats"];
+  let turnStats: RemoteMessage["turnStats"];
+  if (stats != null) {
+    if (!isRecord(stats) || (stats["mode"] !== null && stats["mode"] !== "build" && stats["mode"] !== "plan")) throw new Error("响应格式无效");
+    turnStats = { agent: optStr(stats["agent"], 256), mode: stats["mode"], rest: stats["rest"] === null ? null : optStr(stats["rest"], 1024) };
+  }
   return {
     id: reqStr(value["id"], 256),
     role,
@@ -220,6 +226,7 @@ export function parseRemoteMessage(value: unknown): RemoteMessage {
     ...(value["streaming"] === undefined ? {} : { streaming: reqBool(value["streaming"]) }),
     ...(value["createdAt"] == null || value["createdAt"] === 0 ? {} : { createdAt: timestamp(value["createdAt"]) }),
     ...(value["elapsedSeconds"] == null ? {} : { elapsedSeconds: timestamp(value["elapsedSeconds"]) }),
+    ...(turnStats ? { turnStats } : {}),
     attachments:
       value["attachments"] === undefined
         ? []
@@ -383,6 +390,11 @@ export function parseResult(type: CommandType, data: unknown): unknown {
         ...(data["canSteer"] === undefined ? {} : { canSteer: reqBool(data["canSteer"]) }),
       };
       const revision = parseRevision(data["revision"]);
+      if (data["runningTurn"] != null) {
+        const turn = data["runningTurn"];
+        if (!isRecord(turn)) throw new Error("响应格式无效");
+        detail.runningTurn = { id: reqStr(turn["id"], 256), elapsedSeconds: timestamp(turn["elapsedSeconds"]) };
+      }
       if (data["failureReason"] !== undefined) detail.failureReason = data["failureReason"] === null ? null : reqStr(data["failureReason"], 4096, 0);
       if (data["usage"] !== undefined) {
         const usage = data["usage"];

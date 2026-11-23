@@ -169,7 +169,7 @@ function transcriptTurns(groups: TranscriptGroup[]) {
 function TurnTranscript({ turn, settled, renderGroup }: {
   turn: ReturnType<typeof transcriptTurns>[number];
   settled: boolean;
-  renderGroup: (group: TranscriptGroup, index: number, nested?: boolean) => React.ReactNode;
+  renderGroup: (group: TranscriptGroup, index: number, nested?: boolean, hideElapsed?: boolean) => React.ReactNode;
 }) {
   const { end: readingAboveLatest } = useMessageScrollerScrollable();
   const [deferCollapse, setDeferCollapse] = React.useState(!settled);
@@ -185,15 +185,19 @@ function TurnTranscript({ turn, settled, renderGroup }: {
   const history = prompt ? preceding.slice(1) : preceding;
   const answer = turn.groups.at(-1)!;
   const disclose = settled && history.length > 0 && !(deferCollapse && readingAboveLatest);
+  const seconds = answer.group.message?.elapsedSeconds;
+  const elapsed = typeof seconds === "number" && seconds >= 0 ? formatElapsed(seconds) : null;
   return <>
     {prompt && renderGroup(prompt.group, prompt.index)}
     {disclose ? (
       <MessageScrollerItem key={turn.id} messageId={turn.id} data-transcript-kind="turn-history">
         <Collapsible className="bui-turn-history" open={expanded} onOpenChange={setExpanded}>
-          <CollapsibleTrigger className="bui-branch-trigger">
-            <ChevronRightIcon className="bui-branch-chevron" />
-            <span>本轮过程</span>
-          </CollapsibleTrigger>
+          <div className="bui-turn-history-divider">
+            <CollapsibleTrigger className="bui-branch-trigger bui-turn-history-trigger" aria-label={`${elapsed ? `${elapsed}，` : ""}${expanded ? "收起" : "展开"}本轮过程`}>
+              <ChevronRightIcon className="bui-branch-chevron" />
+              <span>{elapsed ?? "本轮过程"}</span>
+            </CollapsibleTrigger>
+          </div>
           <CollapsibleContent>
             <div className="bui-turn-history-content">
               {history.map(({ group, index }) => renderGroup(group, index, true))}
@@ -202,7 +206,7 @@ function TurnTranscript({ turn, settled, renderGroup }: {
         </Collapsible>
       </MessageScrollerItem>
     ) : history.map(({ group, index }) => renderGroup(group, index))}
-    {renderGroup(answer.group, answer.index)}
+    {renderGroup(answer.group, answer.index, false, disclose && elapsed !== null)}
   </>;
 }
 
@@ -243,6 +247,26 @@ function formatElapsed(totalSeconds: number) {
     return seconds > 0 ? `用时 ${minutes}分${seconds}秒` : `用时 ${minutes}分`;
   }
   return `用时 ${seconds}秒`;
+}
+
+function WorkingIndicator({ turn }: { turn: SessionDetail["runningTurn"] }) {
+  const [elapsed, setElapsed] = React.useState(turn?.elapsedSeconds);
+  React.useEffect(() => {
+    if (!turn) {
+      setElapsed(undefined);
+      return;
+    }
+    const started = performance.now();
+    const update = () => setElapsed(turn.elapsedSeconds + Math.floor((performance.now() - started) / 1000));
+    update();
+    const timer = window.setInterval(update, 1000);
+    return () => window.clearInterval(timer);
+  }, [turn?.id, turn?.elapsedSeconds]);
+  return <span className="bui-working-indicator">
+    <PixelLoader compact label="正在处理" />
+    <span aria-hidden="true">正在处理</span>
+    {elapsed !== undefined && <span>{formatElapsed(elapsed)}</span>}
+  </span>;
 }
 
 function MessageCopyButton({
@@ -290,10 +314,12 @@ const MessageRow = React.memo(
   function MessageRow({
     message,
     responseComplete,
+    hideElapsed,
     onError,
   }: {
     message: RemoteMessage;
     responseComplete: boolean;
+    hideElapsed: boolean;
     onError: (message: string) => void;
   }) {
     // Real turn metadata projected by desktop (RemoteMessage.createdAt unix
@@ -303,11 +329,12 @@ const MessageRow = React.memo(
         ? formatClock(message.createdAt)
         : null;
     const elapsed =
-      message.role === "assistant" &&
+      !hideElapsed && message.role === "assistant" &&
       typeof message.elapsedSeconds === "number" &&
       message.elapsedSeconds >= 0
         ? formatElapsed(message.elapsedSeconds)
         : null;
+    const stats = message.turnStats;
 
     if (message.role === "user") {
       return (
@@ -342,7 +369,7 @@ const MessageRow = React.memo(
       );
     }
 
-    const showFooter = responseComplete && Boolean(message.text || clock || elapsed);
+    const showFooter = responseComplete && Boolean(message.text || clock || elapsed || stats);
     return (
       <Message align="start" className="assistant-message">
         <MessageContent>
@@ -354,16 +381,19 @@ const MessageRow = React.memo(
           </Bubble>
           {showFooter ? (
             <MessageFooter className="bui-msg-footer">
+              {stats ? (
+                <span className="bui-response-stats" title={[stats.agent, stats.rest].filter(Boolean).join(" · ")}>
+                  <span className="bui-response-agent" data-mode={stats.mode ?? undefined}>{stats.agent}</span>
+                  {stats.rest && <span className="bui-response-rest"> · {stats.rest}</span>}
+                </span>
+              ) : elapsed ? <span className="bui-response-stats">{elapsed}</span> : null}
+              {message.text ? (
+                <MessageCopyButton text={message.text} onError={onError} />
+              ) : null}
               {clock ? (
                 <time dateTime={clock.iso} className="bui-msg-time">
                   {clock.label}
                 </time>
-              ) : null}
-              {elapsed ? (
-                <span className="bui-msg-time">{elapsed}</span>
-              ) : null}
-              {message.text ? (
-                <MessageCopyButton text={message.text} onError={onError} />
               ) : null}
             </MessageFooter>
           ) : null}
@@ -379,11 +409,15 @@ const MessageRow = React.memo(
     return (
       previous.onError === next.onError &&
       previous.responseComplete === next.responseComplete &&
+      previous.hideElapsed === next.hideElapsed &&
       a.id === b.id &&
       a.role === b.role &&
       a.text === b.text &&
       a.createdAt === b.createdAt &&
       a.elapsedSeconds === b.elapsedSeconds &&
+      a.turnStats?.agent === b.turnStats?.agent &&
+      a.turnStats?.mode === b.turnStats?.mode &&
+      a.turnStats?.rest === b.turnStats?.rest &&
       aa.length === ba.length &&
       aa.every(
         (file, index) =>
@@ -437,14 +471,14 @@ export function Conversation({
     }
   }
   const turns = transcriptTurns(groups);
-  const renderGroup = (group: TranscriptGroup, index: number, nested = false) => {
+  const renderGroup = (group: TranscriptGroup, index: number, nested = false, hideElapsed = false) => {
     const message = group.message;
     const activity = group.activities?.[0];
     const segmentRunning = activity?.turnRunning ?? (turnActive && index > currentTurnStart);
     const lastSegmentReply = activity?.turnId ? lastReplyByTurn.get(activity.turnId) ?? -1 : lastReply;
     const intermediate = Boolean(message?.role === "assistant" && !responseFooters.has(message.id) && index < groups.length - 1);
     const kind = group.activities ? "activity" : message?.role === "user" ? "prompt" : intermediate ? "progress" : "answer";
-    const content = message ? <MessageRow message={message} responseComplete={responseFooters.has(message.id)} onError={onError} />
+    const content = message ? <MessageRow message={message} responseComplete={responseFooters.has(message.id)} hideElapsed={hideElapsed} onError={onError} />
       : <ActivityBranch activities={group.activities ?? []} turnActive={segmentRunning && index > lastSegmentReply} />;
     // A closed turn registers one measured scroller item, never nested items.
     return nested ? <div key={group.id} data-message-id={group.id} data-transcript-kind={kind}>{content}</div>
@@ -550,7 +584,7 @@ export function Conversation({
                   messageId="system:working"
                 >
                   <Marker>
-                    <MarkerContent><PixelLoader compact label="正在处理" /></MarkerContent>
+                    <MarkerContent><WorkingIndicator turn={session.runningTurn} /></MarkerContent>
                   </Marker>
                 </MessageScrollerItem>
               ) : null}

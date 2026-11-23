@@ -30,7 +30,7 @@ const detail: SessionDetail = {
     { id: "r1", type: "activity", kind: "reasoning", title: "", target: "", text: "先保留真实业务状态，再统一输入框、菜单和目标卡片的层级。日间与夜间使用相同的语义配色。", complete: true, failed: false, truncated: false },
     { id: "t1", type: "activity", kind: "tool", title: "读取组件", target: "", text: "", complete: true, failed: false, truncated: false },
     { id: "t2", type: "activity", kind: "tool", title: "更新样式", target: "", text: "", complete: true, failed: false, truncated: false },
-    { id: "a1", role: "assistant", createdAt: 1793635349, elapsedSeconds: 149, text: params.get("scene") === "code"
+    { id: "a1", role: "assistant", createdAt: 1793635349, elapsedSeconds: 149, turnStats: { agent: "Build", mode: "build", rest: "GPT-6.1 Terra · max · 2m 29s · 42.0 tok/s" }, text: params.get("scene") === "code"
       ? ['```ts', '// Keep markup as text.', 'const greet = (name: string) => `Hello, ${name}`;', 'console.log(greet("<img src=x onerror=alert(1)>"));', '```', '', '```json', '{ "enabled": true, "count": 42, "name": "Fintwind" }', '```', '', '```fintwind-unknown', '<script>not executable</script>', 'plain & unchanged', '```'].join('\n')
       : "已整理为两个清晰的层级：\n\n- **输入区域**：消息、附件与发送。\n- **会话选项**：模型、模式和思考强度。\n\n输入 `/` 可以筛选命令。Goal 显示真实状态和轮次，不使用虚构的完成百分比。\n\n```css\n.prompt-card {\n  border-radius: 14px;\n  background: var(--card);\n}\n```" },
   ],
@@ -44,6 +44,7 @@ function Preview() {
   const showing = { ...detail, ...selection, modelName: options.models.find((item) => item.id === selection.model)?.name ?? selection.model,
     entries: params.get("busy") === "1" ? detail.entries?.map((entry) => entry.id === "t2" && entry.type === "activity" ? { ...entry, complete: false } : entry) : detail.entries,
     goal: approval ? null : goal, status: approval ? "waiting" as const : params.get("busy") === "1" ? "working" as const : detail.status,
+    ...(params.get("busy") === "1" ? { runningTurn: { id: "visual-turn", elapsedSeconds: 149 } } : {}),
     ...(approval ? { questions: { requestId: "visual-question", questions: params.get("scene") === "approval" ? [
     { id: "q1", header: "确认", question: "请在安装版 Fintwind 中重新选中当前聊天并保持该聊天打开。确认后我会再次尝试访问公开网页。", multiSelect: false, options: [
       { label: "已选中，继续", description: "当前聊天已重新选中，可以继续。" },

@@ -111,10 +111,13 @@ detection and data locations.
   access mode (Ask, Auto-accept edits, Full access). Queue or steer a follow-up
   while the agent works; queued messages live inside the composer card in a
   collapsible section and reorder by dragging. Choose the default send behavior
-  in General settings. Question cards can be skipped, collapsed, or expanded.
-  Use OpenCode's native revert and restore for eligible Git-backed turns. `/btw`
-  asks a one-off side question from the session's settled context without
-  disturbing the task in progress.
+  in General settings. Question cards can be skipped, collapsed, or expanded;
+  questions and permission requests from subagents are forwarded to the session
+  as well, labeled with the asking agent. The composer completes `/` commands
+  and `@` files and skills, browsable by recent use and category. Use OpenCode's
+  native revert and restore for eligible Git-backed turns. `/btw` asks a one-off
+  side question from the session's settled context without disturbing the task
+  in progress.
 - **Turn recovery.** Recover missed replies and completion events from OpenCode's
   stored history. History reads accept responses up to 64 MiB and reduce page
   sizes when image or tool payloads make a page too large. Interrupted sessions
@@ -128,6 +131,17 @@ detection and data locations.
 - **Repeated-output protection.** A task is stopped automatically when model
   replies, or tool calls and their results, repeat identically 10 times in a row.
   On by default; can be turned off in General settings.
+- **Prompt privacy.** On by default. Credentials and email addresses detected
+  in request content are replaced with references before anything is sent to
+  the model; detected content is highlighted in your messages in the composer
+  and transcript so you can review it before sending. Replies, reasoning, tool
+  results, compaction summaries, and restored history display the original
+  values again, and references can be reused across turns; tool arguments
+  receive the originals at execution time (except shell, Code Mode, and
+  subagent tasks). Turn it off in **Settings → General → Context management**.
+  Detection rules are adapted from Gitleaks and CredSweeper; see the
+  [Gitleaks](docs/licenses/gitleaks.txt) and
+  [CredSweeper](docs/licenses/credsweeper.txt) licenses.
 - **Readable agent activity.** View streaming replies, reasoning, tool calls,
   subagent activity, and nested Code Mode calls with OpenCode's tool names. The
   background work panel lists background processes and subagents with steering
@@ -141,8 +155,9 @@ detection and data locations.
   Read Git history in a fixed-lane branch graph with branch and tag labels.
   A card-style commit box supports Ctrl+Enter, with commit, pull, push, and more
   actions in a split button; a failed branch switch keeps its state and offers
-  retry. Attach files from the composer or by dropping them onto the
-  conversation; images and PDFs are sent inline to OpenCode.
+  retry. Commit details can show a single commit's changes read-only, measured
+  like the history panel. Attach files from the composer or by dropping them
+  onto the conversation; images and PDFs are sent inline to OpenCode.
 - **Terminal.** Work in a built-in terminal alongside the session.
 - **Usage and subscriptions.** The usage page combines overview KPIs, a usage
   flow diagram (model shares feeding the total composition of cache reads, input,
@@ -278,7 +293,9 @@ App-managed projects, tasks, and attachments are stored in local SQLite and
 files; OpenCode owns its native session data, and SSH remote session data is
 owned by OpenCode on the server. **Local storage does not mean offline
 inference:** prompts and relevant content are sent to the model providers and
-tools you configure in OpenCode.
+tools you configure in OpenCode. Before sending, prompt privacy replaces
+detected credentials and email addresses (on by default, can be turned off);
+see the feature list.
 
 This is an independent [GPL-3.0-only](LICENSE) fork of
 [waku](https://github.com/egoist/waku) by [EGOIST](https://github.com/egoist),

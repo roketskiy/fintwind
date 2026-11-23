@@ -18,9 +18,34 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+### 新功能
+
+- 提示词脱敏：默认开启。检测请求内容中的凭据与邮箱，在发给模型前替换为引用；输入框与会话历史中的用户消息高亮检测到的内容，发送前可查看。模型回复、思考、工具结果、压缩摘要与恢复的历史按原值还原显示，引用可跨轮复用；工具执行时参数还原为原值（shell、Code Mode 与子智能体任务除外）。「设置 → 通用 → 上下文管理」可关闭。凭据检测规则改编自 Gitleaks 与 CredSweeper，许可见 [docs/licenses/gitleaks.txt](docs/licenses/gitleaks.txt) 与 [docs/licenses/credsweeper.txt](docs/licenses/credsweeper.txt)（[e3db19f6](https://github.com/roketskiy/fintwind/commit/e3db19f600cdd3ea59ccd4e21ac28bb88dd5b0df)、[d1adaae3](https://github.com/roketskiy/fintwind/commit/d1adaae3626b3b75148b949412593b3309c0dc49)、[095bbc82](https://github.com/roketskiy/fintwind/commit/095bbc821cdc045c63cf9a8b1ca37c999d11b2fc)、[4117dc16](https://github.com/roketskiy/fintwind/commit/4117dc16db5deae12022ec0de8cc66c6e3e97865)）。
+- 提交历史支持查看单个提交的更改：提交详情面板新增查看更改入口，审阅页以只读 diff 展示该提交相对第一父提交的更改，根提交对空树、合并提交按第一父，与历史面板统计口径一致（[cf4055bc](https://github.com/roketskiy/fintwind/commit/cf4055bc6ef55120401fd8f68fed0f189cb84241)）。
+
+### 改进
+
+- 输入框 `/` 与 `@` 补全卡片分「最近 / 命令 / 技能 / 文件」分区浏览，空查询时可用 ←→ 切换分区、↑↓ 选择、Enter/Tab 添加、Esc 关闭，显示加载与空状态；输入邮箱不再误触发文件补全（[0ac0800a](https://github.com/roketskiy/fintwind/commit/0ac0800a4836cfdba2982f2de75f5022f8502000)、[b505ef00](https://github.com/roketskiy/fintwind/commit/b505ef0062d05748af10a5eefacde2b31bc06d44)、[a01c8e2b](https://github.com/roketskiy/fintwind/commit/a01c8e2b0885a13315d5b36f6db694c215f953c1)）。
+- 回复尾标在模型名称后显示本次使用的思考程度（[1698b7b4](https://github.com/roketskiy/fintwind/commit/1698b7b479a6ad7fc8e832df97a114acf50a7a85)）。
+- 侧边栏会话卡片去掉供应商标识头像；运行中的会话改在第二行行首显示强调色光环，后接时间与分支，无时间与分支的新会话也能显示运行中（[da00f188](https://github.com/roketskiy/fintwind/commit/da00f1888c9253bee92b450d9f40bf1df272f727)）。
+- 活动卡片展开与收起加入 200 毫秒缓动动画（[a116262d](https://github.com/roketskiy/fintwind/commit/a116262d9cb8f009681bbe4185da110d5017afad)、[efe384ea](https://github.com/roketskiy/fintwind/commit/efe384ea2275ddabc8f281cdbe628e5f64fd22aa)）。
+- 后台工作面板中未运行的子智能体折叠行改用次级文字色，不再比区块标题更醒目（[dd3eeafc](https://github.com/roketskiy/fintwind/commit/dd3eeafcc4a43ede7bb1fc4bb25174335a27b40c)）。
+
+### 修复
+
+- 子智能体的提问与权限请求现在转发到会话中处理，卡片显示发起的代理身份，多个请求按序排队（[09f53e9d](https://github.com/roketskiy/fintwind/commit/09f53e9df3a83d09b8a3b14e4d45b5cf7bb40a98)）。
+- 修复压缩摘要与后台回复的分组：压缩摘要正确折叠进对应回合，后台任务完成后的自动续跑作为新回复展示，不再并入上一条回答（[3bf41a2f](https://github.com/roketskiy/fintwind/commit/3bf41a2f5b72e9e608c2a81b3fb681bdb4aba844)）。
+- 修复会话胶囊打开的提交卡片；输入框的右键菜单不再被卡片遮住（[c1d693b4](https://github.com/roketskiy/fintwind/commit/c1d693b4e96a8e7f5de85700276f296140d31fbb)）。
+- 修复审阅区提交按钮与 SSH 管理页搜索框的文字显示问题（[a4827b6a](https://github.com/roketskiy/fintwind/commit/a4827b6afb25ce761fc0e6658d60e9bf5b8d00fd)）。
+- 去掉设置页下滑时出现的边框线（[f302ed6c](https://github.com/roketskiy/fintwind/commit/f302ed6c3c2d5a4917dabc1e8a4d0e88123d9c27)）。
+
 ### 移除
 
-- 移除内置浏览器及其浏览器工具。网页链接与登录仍通过系统浏览器打开。
+- 移除内置浏览器及其浏览器工具。网页链接与登录仍通过系统浏览器打开；「设置 → 通用 → 功能」新增「OpenCode 官方浏览器工具」入口，可访问官方 Browse 产品页——以 MCP 服务器加浏览器扩展的方式让 Agent 使用你真实的浏览器（[186c3230](https://github.com/roketskiy/fintwind/commit/186c323072e6ef1a0e0c1e7d1aa6fd2dd95c9396)、[97a5274f](https://github.com/roketskiy/fintwind/commit/97a5274f9ae527c17f1cea749276a5142981859d)）。
+
+### 兼容性
+
+继续使用 OpenCode 2（`@opencode/cli`）作为后端，不适用于 OpenCode 1.x，本版支持到 OpenCode 2.3.2。
 
 ## [0.3.2]
 

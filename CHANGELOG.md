@@ -18,6 +18,20 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.3.3]
+
+```
++----------------- [ 0.3.3 ] ------------------+
+| opencode 2  支持到 2.3.2                     |
+|                                              |
+| +  added    提示词脱敏、单提交更改查看       |
+| ~  changed  补全卡片、回复尾标、会话卡片等   |
+| *  fixed    子智能体问答、压缩分组等         |
+| -  removed  内置浏览器                       |
+|                                              |
++----------------------------------------------+
+```
+
 ### 新功能
 
 - 提示词脱敏：默认开启。检测请求内容中的凭据与邮箱，在发给模型前替换为引用；输入框与会话历史中的用户消息高亮检测到的内容，发送前可查看。模型回复、思考、工具结果、压缩摘要与恢复的历史按原值还原显示，引用可跨轮复用；工具执行时参数还原为原值（shell、Code Mode 与子智能体任务除外）。「设置 → 通用 → 上下文管理」可关闭。凭据检测规则改编自 Gitleaks 与 CredSweeper，许可见 [docs/licenses/gitleaks.txt](docs/licenses/gitleaks.txt) 与 [docs/licenses/credsweeper.txt](docs/licenses/credsweeper.txt)（[e3db19f6](https://github.com/roketskiy/fintwind/commit/e3db19f600cdd3ea59ccd4e21ac28bb88dd5b0df)、[d1adaae3](https://github.com/roketskiy/fintwind/commit/d1adaae3626b3b75148b949412593b3309c0dc49)、[095bbc82](https://github.com/roketskiy/fintwind/commit/095bbc821cdc045c63cf9a8b1ca37c999d11b2fc)、[4117dc16](https://github.com/roketskiy/fintwind/commit/4117dc16db5deae12022ec0de8cc66c6e3e97865)）。

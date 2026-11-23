@@ -1,10 +1,8 @@
 use super::*;
 use crate::ui::loading::{LoadingDelay, LoadingPhase};
 use crate::ui::menu::{popover_covering_trigger, toggle_popover};
-use ely_gpui_component::buttons::{Button, ButtonVariant};
 use ely_gpui_component::motion::Spinner;
-use ely_gpui_component::primitives::IconName;
-use ely_gpui_component::theme::{ControlSize, IconSize};
+use ely_gpui_component::theme::IconSize;
 use ely_gpui_component::typography::tabular;
 use fintwind_protocol::pull_request::{
     PullRequest, PullRequestChecks, PullRequestSnapshot, PullRequestState, PullRequestUnavailable,
@@ -510,22 +508,50 @@ impl Fintwind {
             let focus = self
                 .transcript_control_focus("capsule-inactive-agents", cx)
                 .tab_stop(true);
-            let disclosure = Button::new(
-                "capsule-inactive-agents",
-                tr!("background.inactive_agents", count = inactive_count),
-            )
-            .variant(ButtonVariant::Ghost)
-            .size(ControlSize::Sm)
-            .icon(if inactive_open {
-                IconName::ChevronDown
-            } else {
-                IconName::ChevronRight
-            })
-            .focus_handle(&focus)
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.task_capsule_inactive_agents = (!inactive_open).then_some(session_id);
-                cx.notify();
-            }));
+            // In the section's own muted register: the collapsed list is the
+            // quietest thing in the panel, so it sits below the rows it hides.
+            let disclosure = div()
+                .id("capsule-inactive-agents")
+                .track_focus(&focus)
+                .tab_index(0)
+                .h(px(28.0))
+                .w_full()
+                .px(px(8.0))
+                .rounded(px(7.0))
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .cursor_default()
+                .hover(|style| style.bg(theme.overlay))
+                .focus_visible(|style| style.border_1().border_color(theme.accent))
+                .child(icon(
+                    if inactive_open {
+                        "icons/chevron-down.svg"
+                    } else {
+                        "icons/chevron-right.svg"
+                    },
+                    14.0,
+                    theme.text_tertiary,
+                ))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(ui_px(13.0))
+                        .text_color(theme.text_secondary)
+                        .child(tr!("background.inactive_agents", count = inactive_count)),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.task_capsule_inactive_agents = (!inactive_open).then_some(session_id);
+                    cx.notify();
+                }))
+                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                        this.task_capsule_inactive_agents = (!inactive_open).then_some(session_id);
+                        cx.notify();
+                        cx.stop_propagation();
+                    }
+                }));
             subagents = subagents
                 .child(div().child(disclosure))
                 .when(inactive_open, |section| {

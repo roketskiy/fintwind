@@ -944,6 +944,23 @@ impl Fintwind {
                     .child(settings_separator(theme))
                     .child(
                         settings_row(
+                            "icons/globe.svg",
+                            tr!("settings.opencode_browser"),
+                            None,
+                            theme,
+                        )
+                        .child(
+                            Button::new("opencode-browser-visit", tr!("settings.opencode_browser_visit"))
+                                .variant(ButtonVariant::Secondary)
+                                .size(ControlSize::Sm)
+                                .on_click(cx.listener(|_, _, _, cx| {
+                                    cx.open_url("https://opencode.ai/product/browse");
+                                })),
+                        ),
+                    )
+                    .child(settings_separator(theme))
+                    .child(
+                        settings_row(
                             "icons/clock.svg",
                             tr!("settings.scheduled_tools"),
                             Some(tr!("settings.scheduled_tools_description")),

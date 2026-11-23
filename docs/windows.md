@@ -71,6 +71,7 @@ executables in place — see the next section.
 | Attachments and blobs | `%LOCALAPPDATA%\Fintwind\blobs` |
 | Settings | `%USERPROFILE%\.fintwind\app.json` |
 | Daemon settings | `%USERPROFILE%\.fintwind\settings.json` |
+| Prompt privacy key | `%USERPROFILE%\.fintwind\prompt-privacy.key` |
 | Default general workspace for new sessions without a project | `%LOCALAPPDATA%\Fintwind\projects` |
 
 Unpacking a new release over the old directory leaves all of it untouched.

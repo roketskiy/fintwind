@@ -38,9 +38,6 @@ pub(super) struct SidebarGroup {
 /// sidebar list. Keep the gap inside the list row so measured and
 /// estimated heights stay identical for off-screen sessions.
 const SIDEBAR_SESSION_CARD_HEIGHT: f32 = 52.0;
-const SESSION_AVATAR_SIZE: f32 = 36.0;
-const SESSION_AVATAR_INNER: f32 = 26.0;
-const SESSION_AVATAR_ICON: f32 = 14.0;
 const SIDEBAR_SESSION_ROW_GAP: f32 = 2.0;
 const SIDEBAR_SESSION_ROW_HEIGHT: f32 = SIDEBAR_SESSION_CARD_HEIGHT + SIDEBAR_SESSION_ROW_GAP;
 const SIDEBAR_ACTION_ROW_HEIGHT: f32 = 32.0;
@@ -1567,9 +1564,6 @@ impl Fintwind {
             title_text,
             stored_branch,
             workspace_path,
-            model_id,
-            model_name,
-            provider,
             latest_error,
         ) = {
             let Some(session) = self
@@ -1591,8 +1585,6 @@ impl Fintwind {
                         .map(std::path::Path::to_path_buf),
                 ),
             };
-            let model_id = self.model_for_session(session).map(str::to_owned);
-            let model_name = self.model_display_name(model_id.as_deref());
             // The newest recorded error, so the row's failure icon can say why
             // without the reader having to open the session.
             let latest_error = session
@@ -1611,9 +1603,6 @@ impl Fintwind {
                 localized_session_title(session),
                 stored_branch,
                 workspace_path,
-                model_id,
-                model_name,
-                session.provider.clone(),
                 latest_error,
             )
         };
@@ -1676,17 +1665,6 @@ impl Fintwind {
                 .child(SharedString::from(title_text))
                 .into_any_element()
         };
-        let avatar = session_model_avatar(
-            model_mark(
-                model_id.as_deref().unwrap_or(""),
-                &model_name,
-                &provider,
-                theme.is_dark,
-            ),
-            provider_color(&theme, &provider),
-            working,
-            &theme,
-        );
         let metadata_time = time_label.map(|label| {
             div()
                 .flex_none()
@@ -1726,13 +1704,17 @@ impl Fintwind {
                     None => failure_icon,
                 })
             });
-        let has_meta = metadata_time.is_some() || branch.is_some();
+        let has_meta = working || metadata_time.is_some() || branch.is_some();
         let meta_row = div()
             .w_full()
             .min_w_0()
             .flex()
             .items_center()
             .gap(px(8.0))
+            // A live turn leads the second row with the accent halo.
+            .when(working, |element| {
+                element.child(div().flex_none().child(spin_halo(theme.accent, 12.0)))
+            })
             .when_some(metadata_time, |element, time| element.child(time))
             .when_some(branch, |element, branch| {
                 element.child(
@@ -1774,7 +1756,6 @@ impl Fintwind {
             })
             .hover(|element| element.bg(theme.sidebar_item_background))
             .active(|element| element.bg(theme.overlay_strong))
-            .child(avatar)
             .child(
                 div()
                     .flex_1()
@@ -2089,42 +2070,6 @@ impl Fintwind {
                     }),
             )
     }
-}
-
-fn session_model_avatar(
-    mark: ModelMark,
-    icon_color: Hsla,
-    working: bool,
-    theme: &Theme,
-) -> AnyElement {
-    div()
-        .size(px(SESSION_AVATAR_SIZE))
-        .flex_none()
-        .relative()
-        .flex()
-        .items_center()
-        .justify_center()
-        .when(working, |element| {
-            element.child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .child(spin_halo(theme.accent, SESSION_AVATAR_SIZE)),
-            )
-        })
-        .child(
-            div()
-                .size(px(SESSION_AVATAR_INNER))
-                .rounded_full()
-                .bg(theme.raised)
-                .border_1()
-                .border_color(theme.border_strong)
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(model_mark_element(mark, SESSION_AVATAR_ICON, icon_color)),
-        )
-        .into_any_element()
 }
 
 pub(super) fn localized_session_title(session: &AgentSession) -> String {

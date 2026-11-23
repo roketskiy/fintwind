@@ -639,6 +639,7 @@ diagram.zoom_out: 縮小
 diagram.reset_zoom: 1:1 に戻す
 diagram.close_preview: プレビューを閉じる
 common.copy_expression: 数式をコピー
+common.copy_link: リンクをコピー
 quote.add_title: 参照を追加
 quote.add_file: ファイルを参照…
 quote.add_file_prompt: 参照するファイルを選択

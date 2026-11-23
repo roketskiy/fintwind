@@ -21,9 +21,9 @@ use super::selection::{
 use super::veil::{RowVeil, apply_veil};
 use crate::prompt_privacy::{self, History};
 use crate::theme::Theme;
-use crate::ui::menu::ContextMenuHandle;
 #[cfg(test)]
 use crate::ui::menu::context_menu;
+use crate::ui::menu::{ContextMenuHandle, MenuItem};
 use crate::ui::tooltip::Tooltip;
 
 mod diagram_source;
@@ -761,7 +761,7 @@ impl<'a> Ctx<'a> {
         self
     }
 
-    /// Contribute formula actions to an existing message menu.
+    /// Contribute inline actions to an existing message menu.
     pub fn with_context_menu(mut self, menu: ContextMenuHandle) -> Self {
         self.math_menu = Some(menu);
         self
@@ -865,6 +865,7 @@ fn text_element_with_selection(
     key: TextKey,
     selection: TranscriptSelection,
     link_handler: Option<LinkHandler>,
+    context_menu: Option<ContextMenuHandle>,
     code_wash: Hsla,
     selection_wash: Hsla,
     reference_color: Hsla,
@@ -878,10 +879,17 @@ fn text_element_with_selection(
         styled.into_any_element()
     } else {
         let (ranges, urls): (Vec<_>, Vec<_>) = flat.links.iter().cloned().unzip();
+        let tooltip_links = flat.links.clone();
         let link_handler = link_handler.clone();
         let selection = selection.clone();
         let id = SharedString::from(format!("{}-t{}", key.row, key.index));
         InteractiveText::new(id, styled)
+            .tooltip(move |index, window, cx| {
+                tooltip_links
+                    .iter()
+                    .find(|(range, _)| range.contains(&index))
+                    .map(|(_, url)| Tooltip::new(url.clone()).build(window, cx))
+            })
             .on_click(ranges, move |clicked, window, cx| {
                 if !selection.selection.borrow().is_empty() {
                     return;
@@ -948,6 +956,9 @@ fn text_element_with_selection(
 
     let links = flat.links.clone();
     let active_link = flat.active_link.clone();
+    let pointer_links = flat.links.clone();
+    let pointer_layout = layout.clone();
+    let pointer_menu = context_menu.clone();
     div()
         .id(SharedString::from(format!(
             "links-{}-{}",
@@ -955,11 +966,31 @@ fn text_element_with_selection(
         )))
         .when(!links.is_empty(), |element| {
             element
+                .on_mouse_down(MouseButton::Right, move |event, _, _| {
+                    if let Some(menu) = &pointer_menu
+                        && let Ok(index) = pointer_layout.index_for_position(event.position)
+                        && let Some((_, url)) = pointer_links
+                            .iter()
+                            .find(|(range, _)| range.contains(&index))
+                    {
+                        menu.set_context_items(vec![copy_link_item(url.clone())]);
+                    }
+                })
                 .tab_group()
                 .tab_index(0)
                 .focus_visible(|style| style.bg(selection_wash))
                 .on_key_down(move |event, window, cx| {
                     let current = active_link.get().min(links.len() - 1);
+                    if (event.keystroke.key == "contextmenu"
+                        || (event.keystroke.key == "f10" && event.keystroke.modifiers.shift))
+                        && let Some(menu) = &context_menu
+                    {
+                        menu.set_context_items(vec![copy_link_item(links[current].1.clone())]);
+                        menu.open_context_menu(window, cx);
+                        cx.stop_propagation();
+                        window.prevent_default();
+                        return;
+                    }
                     match event.keystroke.key.as_str() {
                         "right" | "down" => active_link.set((current + 1) % links.len()),
                         "left" | "up" => active_link.set((current + links.len() - 1) % links.len()),
@@ -993,6 +1024,12 @@ fn text_element_with_selection(
         .into_any_element()
 }
 
+fn copy_link_item(url: String) -> MenuItem {
+    MenuItem::new(tr!("common.copy_link"), move |_, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));
+    })
+}
+
 fn text_element(flat: &Rc<FlatText>, key: TextKey, ctx: &Ctx) -> AnyElement {
     if ctx.math_enabled && flat.math.is_some() {
         return math_text::element(flat.clone(), key, ctx);
@@ -1016,6 +1053,7 @@ fn text_element(flat: &Rc<FlatText>, key: TextKey, ctx: &Ctx) -> AnyElement {
         key,
         ctx.selection.clone(),
         ctx.link_handler.clone(),
+        ctx.math_menu.clone(),
         ctx.palette.code_wash,
         ctx.palette.selection,
         ctx.palette.accent,
@@ -1042,6 +1080,7 @@ pub fn selectable_flat_text(
         flat.runs.clone(),
         key,
         selection,
+        None,
         None,
         code_wash,
         selection_wash,

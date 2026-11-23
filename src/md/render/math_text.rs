@@ -44,6 +44,7 @@ pub struct MathData {
     spans: Vec<MathSpan>,
     cache: RefCell<LayoutCache>,
     active_link: Rc<Cell<Option<usize>>>,
+    hovered_link: Rc<Cell<Option<usize>>>,
     scroll: Rc<RefCell<FormulaScroll>>,
 }
 
@@ -53,6 +54,7 @@ impl MathData {
             spans,
             cache: RefCell::new(LayoutCache::default()),
             active_link: Rc::new(Cell::new(None)),
+            hovered_link: Rc::new(Cell::new(None)),
             scroll: Rc::new(RefCell::new(FormulaScroll::default())),
         }
     }
@@ -366,6 +368,7 @@ pub(super) fn element(flat: Rc<FlatText>, key: TextKey, ctx: &Ctx) -> AnyElement
     let keyboard_geometry = geometry.clone();
     let has_links = !flat.links.is_empty();
     let mut wrapper = div()
+        .id(SharedString::from(format!("math-{}-{}", key.row, key.index)))
         .relative()
         .w_full()
         .min_w_0()
@@ -390,6 +393,27 @@ pub(super) fn element(flat: Rc<FlatText>, key: TextKey, ctx: &Ctx) -> AnyElement
         // Keep link activation in source coordinates, exactly like selection.
         // A focused paragraph cycles its links with arrows and opens with Enter.
         let focused_link = flat.math.as_ref().unwrap().active_link.clone();
+        let hovered_link = flat.math.as_ref().unwrap().hovered_link.clone();
+        let hover_state = hovered_link.clone();
+        let hover_links = flat.links.clone();
+        let hover_geometry = geometry.clone();
+        wrapper = wrapper.on_mouse_move(move |event, window, _| {
+            let hovered = link_at(&hover_geometry, &hover_links, event.position);
+            if hover_state.replace(hovered) != hovered {
+                window.refresh();
+            }
+        });
+        let hover_state = hovered_link.clone();
+        wrapper = wrapper.on_hover(move |hovered, window, _| {
+            if !hovered && hover_state.take().is_some() {
+                window.refresh();
+            }
+        });
+        if let Some(index) = hovered_link.get()
+            && let Some((_, url)) = flat.links.get(index)
+        {
+            wrapper = wrapper.tooltip(Tooltip::text(url.clone()));
+        }
         let links = flat.links.clone();
         let handler = ctx.link_handler.clone();
         let hit = geometry.clone();
@@ -452,8 +476,11 @@ pub(super) fn element(flat: Rc<FlatText>, key: TextKey, ctx: &Ctx) -> AnyElement
         let data = flat.math.as_ref().unwrap().clone();
         let hit = geometry.clone();
         let menu = menu.clone();
+        let links = flat.links.clone();
         wrapper = wrapper.on_mouse_down(MouseButton::Right, move |event, _, _| {
-            if let Some(index) = hit.formula_at(event.position) {
+            if let Some(index) = link_at(&hit, &links, event.position) {
+                menu.set_context_items(vec![copy_link_item(links[index].1.clone())]);
+            } else if let Some(index) = hit.formula_at(event.position) {
                 menu.set_context_items(vec![copy_expression_item(
                     data.spans[index].latex.clone(),
                     tr!("common.copy_expression"),
@@ -465,6 +492,8 @@ pub(super) fn element(flat: Rc<FlatText>, key: TextKey, ctx: &Ctx) -> AnyElement
         let data = flat.math.as_ref().unwrap().clone();
         let hit = geometry.clone();
         let menu = ctx.math_menu.as_ref().unwrap().clone();
+        let links = flat.links.clone();
+        let focused_link = data.active_link.clone();
         wrapper = wrapper.on_key_down(move |event, window, cx| {
             if event.keystroke.key != "contextmenu"
                 && !(event.keystroke.key == "f10" && event.keystroke.modifiers.shift)
@@ -472,6 +501,17 @@ pub(super) fn element(flat: Rc<FlatText>, key: TextKey, ctx: &Ctx) -> AnyElement
                 return;
             }
             let indexes = hit.formula_indexes();
+            if let Some(index) = focused_link
+                .get()
+                .or_else(|| indexes.is_empty().then_some(0))
+                && let Some((_, url)) = links.get(index)
+            {
+                menu.set_context_items(vec![copy_link_item(url.clone())]);
+                menu.open_context_menu(window, cx);
+                cx.stop_propagation();
+                window.prevent_default();
+                return;
+            }
             if indexes.is_empty() {
                 return;
             }
@@ -505,10 +545,6 @@ pub(super) fn element(flat: Rc<FlatText>, key: TextKey, ctx: &Ctx) -> AnyElement
         block_break: ctx.take_block_break(),
     };
     wrapper
-        .id(SharedString::from(format!(
-            "math-{}-{}",
-            key.row, key.index
-        )))
         .tab_group()
         .tab_index(0)
         .when(has_links, |element| {
@@ -523,6 +559,19 @@ pub(super) fn element(flat: Rc<FlatText>, key: TextKey, ctx: &Ctx) -> AnyElement
         })
         .child(body)
         .into_any_element()
+}
+
+fn link_at(
+    geometry: &Geometry,
+    links: &[(Range<usize>, String)],
+    position: Point<Pixels>,
+) -> Option<usize> {
+    links.iter().position(|(range, _)| {
+        geometry
+            .range_rects(range)
+            .iter()
+            .any(|rect| rect.contains(&position))
+    })
 }
 
 fn copy_expression_item(latex: Arc<str>, label: String) -> MenuItem {

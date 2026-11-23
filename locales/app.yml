@@ -1518,6 +1518,8 @@ diagram.close_preview:
   en: Close Preview
 common.copy_expression:
   en: Copy Expression
+common.copy_link:
+  en: Copy Link
 quote.add_title:
   en: Add reference
 quote.add_file:

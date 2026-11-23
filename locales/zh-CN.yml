@@ -732,6 +732,7 @@ diagram.zoom_out: 缩小
 diagram.reset_zoom: 还原 1:1
 diagram.close_preview: 关闭预览
 common.copy_expression: 复制公式
+common.copy_link: 复制链接
 quote.add_title: 添加引用
 quote.add_file: 引用文件…
 quote.add_file_prompt: 选择要引用的文件

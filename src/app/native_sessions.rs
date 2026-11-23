@@ -902,7 +902,10 @@ impl Fintwind {
                         .filter(|_| current.first_token_ms.is_none());
                     // Keep the step IDs and the final-step model/agent if an
                     // older server omitted that metadata in stored rows.
-                    current.model = stats.model.or(current.model.take());
+                    if stats.model.is_some() {
+                        current.model = stats.model;
+                        current.reasoning_effort = stats.reasoning_effort;
+                    }
                     current.agent = stats.agent.or(current.agent.take());
                     current.output_tokens = stats.output_tokens;
                     current.stream_ms = stats.stream_ms;

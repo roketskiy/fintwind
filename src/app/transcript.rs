@@ -821,7 +821,13 @@ fn assistant_turn_stats(
     };
     let model_display = stats
         .and_then(|stats| stats.model.as_deref())
-        .map(|key| app.model_display_name(Some(key)));
+        .map(|key| {
+            let model = app.model_display_name(Some(key));
+            match stats.and_then(|stats| stats.reasoning_effort.as_deref()) {
+                Some(effort) => format!("{model} · {effort}"),
+                None => model,
+            }
+        });
     let duration_ms = turn.and_then(|turn| {
         turn.completed_at.map(|completed| {
             completed
@@ -1199,6 +1205,7 @@ pub(super) fn transcript_rows_fingerprint_with_retry(
             hash = mix(hash, stats.stream_ms);
             hash = mix_label(hash, stats.agent.as_deref());
             hash = mix_label(hash, stats.model.as_deref());
+            hash = mix_label(hash, stats.reasoning_effort.as_deref());
         }
         hash = mix(
             hash,

@@ -485,6 +485,7 @@ pub(crate) fn fetch_turn_stats(
         };
         if step.model.is_some() {
             stats.model = step.model;
+            stats.reasoning_effort = step.reasoning_effort;
         }
         if step.agent.is_some() {
             stats.agent = step.agent;
@@ -2295,6 +2296,7 @@ fn translate_native_rows(
                     let stats = turn.stats.get_or_insert_with(TurnStats::default);
                     if step.model.is_some() {
                         stats.model = step.model;
+                        stats.reasoning_effort = step.reasoning_effort;
                     }
                     if step.agent.is_some() {
                         stats.agent = step.agent;
@@ -2433,6 +2435,11 @@ fn translate_rows(rows: &[Value]) -> NativeTranscript {
 /// `time.created` it measures this step's first-token latency. A row that
 /// reports nothing measurable folds in as `None`.
 fn turn_stats_step(row: &Value) -> Option<TurnStats> {
+    let reasoning_effort = row
+        .pointer("/model/variant")
+        .and_then(Value::as_str)
+        .filter(|variant| !variant.trim().is_empty())
+        .map(str::to_owned);
     let model = row.get("model").and_then(|model| {
         let provider = model.get("providerID").and_then(Value::as_str)?;
         let id = model.get("id").and_then(Value::as_str)?;
@@ -2475,6 +2482,7 @@ fn turn_stats_step(row: &Value) -> Option<TurnStats> {
     (model.is_some() || agent.is_some() || output > 0 || stream_ms > 0 || first_token_ms.is_some())
         .then_some(TurnStats {
             model,
+            reasoning_effort,
             agent,
             output_tokens: output,
             stream_ms,

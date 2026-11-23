@@ -10,7 +10,6 @@ actions!(fintwind_sidebar, [CancelSessionRename]);
 
 const SESSION_RENAME_PARENT_CONTEXT: &str = "SessionRename";
 const SESSION_RENAME_FIELD_CONTEXT: &str = "SessionRename > ComposerInput";
-const MOBILE_CONTROL_ENTRY_ENABLED: bool = false;
 
 /// Keep Escape inside the focused inline editor so it cancels the rename,
 /// rather than falling through to the window-wide Stop action.
@@ -304,9 +303,7 @@ impl Fintwind {
                     .when_some(self.latest_available.as_ref(), |footer, update| {
                         footer.child(self.render_mode_rail_update(update, cx))
                     })
-                    .when(MOBILE_CONTROL_ENTRY_ENABLED, |footer| {
-                        footer.child(self.render_remote_rail_entry(cx))
-                    })
+                    .child(self.render_remote_rail_entry(cx))
                     .child(self.render_help_rail_entry(cx))
                     .child(self.render_mode_rail_entry(
                         "rail-settings",

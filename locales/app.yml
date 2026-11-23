@@ -660,6 +660,10 @@ settings.todo_list_description:
   en: Off by default. When on, agents can keep a task list with todowrite and show it above the composer
 settings.todo_list_failed:
   en: "Could not update the OpenCode todo setting: %{error}"
+settings.opencode_browser:
+  en: OpenCode Browser
+settings.opencode_browser_visit:
+  en: Visit
 settings.scheduled_tools:
   en: Scheduled task MCP
 settings.scheduled_tools_description:

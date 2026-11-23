@@ -306,6 +306,8 @@ providers.protocol_inherit: 继承提供商
 settings.todo_list: 待办列表
 settings.todo_list_description: 默认关闭。开启后 Agent 可用 todowrite 维护任务清单，并显示在输入框上方
 settings.todo_list_failed: 无法更新 OpenCode 的 Todo 设置：%{error}
+settings.opencode_browser: OpenCode 官方浏览器工具
+settings.opencode_browser_visit: 访问
 settings.scheduled_tools: 定时任务 MCP
 settings.scheduled_tools_description: 允许 Agent 创建定时任务。需 OpenCode 2.1.4+，开启后自动连接实验性 MCP 接口
 settings.mermaid_visualization: Mermaid 可视化提示词

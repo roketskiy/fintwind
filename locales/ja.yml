@@ -204,6 +204,8 @@ settings.prompt_privacy_description: 検出した認証情報とメールアド�
 settings.todo_list: Todo リスト
 settings.todo_list_description: 既定でオフ。オンにすると、エージェントは todowrite でタスクリストを管理でき、入力欄の上に表示されます
 settings.todo_list_failed: "OpenCode の Todo 設定を更新できませんでした: %{error}"
+settings.opencode_browser: OpenCode 公式ブラウザツール
+settings.opencode_browser_visit: 開く
 settings.scheduled_tools: 定期タスク MCP
 settings.scheduled_tools_description: エージェントによる定期タスクの作成を許可します。OpenCode 2.1.4 以降が必要で、有効にすると実験的な MCP 接続を自動で開始します
 settings.mermaid_visualization: Mermaid 可視化プロンプト

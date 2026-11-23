@@ -2708,6 +2708,9 @@ impl Fintwind {
         let next_turn_count = session.turns.len() + 1;
         let project_id = session.project_id;
         let workspace = session.workspace.clone();
+        let command_directory = self.workspace_path_for_session(session).map(std::path::Path::to_path_buf);
+        let command_key = command_directory.as_ref().map(|path| (session.provider.clone(), path.clone()));
+        let command_index = command_key.as_ref().and_then(|key| self.slash_commands.peek(key));
         let driver_start = (!self.runtimes.contains_key(&session_id)).then(|| {
             let provisional_cwd = self
                 .workspace_path_for_session(session)
@@ -2788,11 +2791,6 @@ impl Fintwind {
             return;
         };
         let provider_prompt = submission.provider_prompt();
-        let provider_prompt = crate::composer_complete::expanded_submission(
-            &provider_prompt,
-            &self.slash_command_index,
-        )
-        .unwrap_or(provider_prompt);
         let record = fintwind_protocol::submission::SubmissionRecord::new(
             session_id,
             turn_id,
@@ -2848,13 +2846,34 @@ impl Fintwind {
                 .background_executor()
                 .spawn(async move {
                     let result = (|| {
+                    let mut record = record;
+                    let mut persisted_session = persisted_session;
+                    if record.prompt.starts_with('/') {
+                        let commands = match command_index {
+                            Some(commands) => commands.as_ref().clone(),
+                            None => match command_directory {
+                                Some(project_root) => match workspace_client.request(fintwind_client::WorkspaceOperation::DiscoverSlashCommands {
+                                    project_root, binary: None,
+                                })? {
+                                    fintwind_client::WorkspaceResult::SlashCommands { commands } => commands,
+                                    _ => anyhow::bail!("无法加载会话的命令列表"),
+                                },
+                                None => Vec::new(),
+                            },
+                        };
+                        if let Some(expanded) = crate::composer_complete::expanded_submission(&record.prompt, &commands) {
+                            record.prompt = expanded;
+                            persisted_session.bind_active_prompt_transport(&record.prompt);
+                        }
+                    }
+                    let provider_prompt = record.prompt.clone();
                     let response = daemon_client.request(session_id, Uuid::nil(), fintwind_client::Command::AcceptSubmission {
                         project: project.clone(), session: Box::new(persisted_session), submission: Box::new(record),
                     })?;
                     if !matches!(response, fintwind_client::ResponsePayload::SubmissionSaved { receipt } if receipt.id == turn_id && receipt.state == fintwind_protocol::submission::SubmissionState::Preparing) {
                         anyhow::bail!(tr!("errors.submission_not_preparing"));
                     }
-                    prepare_submission(
+                    let prepared = prepare_submission(
                         workspace_client,
                         project,
                         workspace,
@@ -2862,7 +2881,8 @@ impl Fintwind {
                         session_id,
                         &preparation_prompt,
                         next_turn_count,
-                    )
+                    )?;
+                    Ok((prepared, provider_prompt))
                     })();
                     if result.is_err() {
                         let _ = daemon_client.request(session_id, Uuid::nil(), fintwind_client::Command::AbandonSubmission { submission_id: turn_id });
@@ -2871,6 +2891,14 @@ impl Fintwind {
                 })
                 .await;
             let _ = fintwind.update(cx, move |fintwind, cx| {
+                let prepared = prepared.map(|(prepared, provider_prompt)| {
+                    if let Some(session) = fintwind.state.session_mut(session_id)
+                        && session.active_turn_id() == Some(turn_id)
+                    {
+                        session.bind_active_prompt_transport(&provider_prompt);
+                    }
+                    prepared
+                });
                 fintwind.finish_submission_preparation(session_id, turn_id, submission, prepared, cx);
             });
         })

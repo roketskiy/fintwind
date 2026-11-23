@@ -666,17 +666,18 @@ impl Fintwind {
                                 let index = app.remote_session_index(*session_id)?;
                                 let directory = app.workspace_path_for_session(&app.state.sessions[index]).ok_or("工作区不可用。")?.to_path_buf();
                                 let cached = (app.provider_probe_directory.as_ref() == Some(&directory)).then(|| app.provider_probe().cloned()).flatten();
-                                Ok((app.daemon.clone(), directory, cached, app.provider_binary_generation))
+                                Ok((app.daemon.clone(), directory, cached, app.provider_binary_generation, app.state.sessions[index].provider.clone()))
                             }).unwrap_or_else(|_| Err("桌面窗口已关闭。".into()));
                             let response = match context {
                                 Err(error) => Err(error),
-                                Ok((daemon, directory, cached, binary_generation)) => {
+                                Ok((daemon, directory, cached, binary_generation, provider)) => {
                                     let probe = match cached {
                                         Some(probe) => Ok(probe),
-                                        None => {
-                                            let location = directory.clone();
-                                            cx.background_executor().spawn(async move {
-                                                match daemon.client().request(Uuid::nil(), Uuid::nil(), fintwind_client::Command::ProbeProvider {
+                                         None => {
+                                             let location = directory.clone();
+                                             let client = daemon.client();
+                                             cx.background_executor().spawn(async move {
+                                                 match client.request(Uuid::nil(), Uuid::nil(), fintwind_client::Command::ProbeProvider {
                                                     binary_override: None, directory: Some(location), discover_models: true, probe_version: false,
                                                 }) {
                                                     Ok(fintwind_client::ResponsePayload::ProviderProbe { probe, .. }) => Ok(probe),
@@ -688,16 +689,29 @@ impl Fintwind {
                                     match probe {
                                         Err(error) => Err(error),
                                         Ok(probe) => {
+                                            let location = directory.clone();
+                                            let workspace = fintwind_client::WorkspaceClient::new(daemon.client());
+                                            let commands = cx.background_executor().spawn(async move {
+                                                match workspace.request(fintwind_client::WorkspaceOperation::DiscoverSlashCommands { project_root: location, binary: None }) {
+                                                    Ok(fintwind_client::WorkspaceResult::SlashCommands { commands }) => Ok(commands),
+                                                    _ => Err("无法加载此工作区的命令。".to_owned()),
+                                                }
+                                            }).await;
+                                            let commands = match commands {
+                                                Ok(commands) => commands,
+                                                Err(error) => { let _ = request.respond.send(Err(error)).await; return; }
+                                            };
                                             this.update(cx, |app, _| {
                                                 if app.remote_generation != generation { return Err("远控已关闭。".to_owned()); }
                                                 if app.provider_binary_generation != binary_generation { return Err("模型目录已更新，请重试。".into()); }
                                                 let index = app.remote_session_index(*session_id)?;
                                                 if app.workspace_path_for_session(&app.state.sessions[index]) != Some(directory.as_path()) { return Err("工作区已改变。".into()); }
+                                                if app.state.sessions[index].provider != provider { return Err("会话提供商已改变。".into()); }
                                                 if app.remote_model_catalogs.len() >= 8 && !app.remote_model_catalogs.contains_key(&directory) { app.remote_model_catalogs.clear(); }
                                                 app.remote_model_catalogs.insert(directory.clone(), (Instant::now(), probe.clone()));
                                                 if app.remote_composer_catalogs.len() >= 8 { app.remote_composer_catalogs.clear(); }
                                                 app.remote_composer_catalogs.insert(*session_id, (directory.clone(), probe.clone(), Instant::now(), app.provider_binary_generation));
-                                                Ok(app.remote_composer_snapshot(index, &probe))
+                                                Ok(app.remote_composer_snapshot(index, &probe, &commands))
                                             }).unwrap_or_else(|_| Err("桌面窗口已关闭。".into()))
                                         }
                                     }
@@ -1389,7 +1403,7 @@ impl Fintwind {
         snapshot
     }
 
-    fn remote_composer_snapshot(&self, index: usize, probe: &ProviderProbe) -> Value {
+    fn remote_composer_snapshot(&self, index: usize, probe: &ProviderProbe, discovered: &[fintwind_protocol::composer::SlashCommand]) -> Value {
         let session = &self.state.sessions[index];
         let mut budget = 192 * 1024usize;
         let models = probe.models.iter().filter(|model| !model.id.is_empty() && model.id.len() <= 512)
@@ -1403,11 +1417,21 @@ impl Fintwind {
                 budget -= size;
                 true
             }).collect::<Vec<_>>();
+        let mut command_budget = 240 * 1024usize;
+        let commands = crate::composer_complete::merge_reported_commands(discovered, &session.available_commands)
+            .iter().filter(|command| !command.name.is_empty() && command.name.len() <= 128).take(512)
+            .map(|command| json!({"name": command.name, "description": bounded_text(&command.description, 256)}))
+            .take_while(|value| {
+                let size = serde_json::to_vec(value).map_or(command_budget + 1, |bytes| bytes.len() + 1);
+                if size > command_budget { return false; }
+                command_budget -= size;
+                true
+            }).collect::<Vec<_>>();
         json!({
             "models": models, "canConfigure": session.detail_loaded && session.can_choose_model(),
             "favoriteModelIds": self.state.favorite_models.iter().filter(|favorite| models.iter().any(|model| model["id"].as_str() == Some(favorite.model.as_str())))
                 .take(1024).map(|favorite| favorite.model.as_str()).collect::<Vec<_>>(),
-            "commands": session.available_commands.iter().take(64).map(|command| json!({"name": bounded_text(&command.name, 128), "description": bounded_text(&command.description, 256)})).collect::<Vec<_>>()
+            "commands": commands
         })
     }
 

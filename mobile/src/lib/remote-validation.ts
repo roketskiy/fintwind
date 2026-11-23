@@ -483,7 +483,7 @@ export function parseResult(type: CommandType, data: unknown): unknown {
             }),
           };
         }),
-        commands: reqArr(data["commands"], 64, (entry) => {
+        commands: reqArr(data["commands"], 512, (entry) => {
           if (!isRecord(entry)) throw new Error("响应格式无效");
           return {
             name: reqStr(entry["name"], 128),

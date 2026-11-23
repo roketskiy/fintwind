@@ -141,9 +141,11 @@ function transcriptGroups(entries: TranscriptEntry[]) {
   for (const entry of entries) {
     if (entry.type !== "activity")
       groups.push({ id: `message:${entry.id}`, message: entry });
+    else if (entry.kind === "compactionStandalone")
+      groups.push({ id: `compaction:${entry.id}`, activities: [entry] });
     else {
       const previous = groups.at(-1);
-      if (previous?.activities && previous.activities[0]?.turnId === entry.turnId) previous.activities.push(entry);
+      if (previous?.activities && previous.activities[0]?.kind !== "compactionStandalone" && previous.activities[0]?.turnId === entry.turnId) previous.activities.push(entry);
       else groups.push({ id: previous ? `activity:after:${previous.id}` : "activity:start", activities: [entry] });
     }
   }
@@ -157,13 +159,20 @@ function transcriptTurns(groups: TranscriptGroup[]) {
     const previous = turns.at(-1);
     // Provider turn IDs keep steering prompts in their original turn. Older
     // desktops can only delimit turns by the next user message.
-    if (previous && (turnId ? previous.turnId === turnId : !previous.turnId && group.message?.role !== "user")) {
+    if (previous && group.activities?.[0]?.kind !== "compactionStandalone" && previous.groups.at(-1)?.group.activities?.[0]?.kind !== "compactionStandalone" && (turnId ? previous.turnId === turnId : !previous.turnId && group.message?.role !== "user")) {
       previous.groups.push({ group, index });
     } else {
       turns.push({ id: `turn:${turnId ?? group.id}`, turnId, groups: [{ group, index }] });
     }
   });
   return turns;
+}
+
+function lastAssistantIndex(groups: { group: TranscriptGroup }[]) {
+  for (let index = groups.length - 1; index >= 0; index--) {
+    if (groups[index]?.group.message?.role === "assistant") return index;
+  }
+  return -1;
 }
 
 function TurnTranscript({ turn, settled, renderGroup }: {
@@ -178,12 +187,13 @@ function TurnTranscript({ turn, settled, renderGroup }: {
     if (!settled) setDeferCollapse(true);
     else if (!readingAboveLatest) setDeferCollapse(false);
   }, [settled, readingAboveLatest]);
-  const preceding = turn.groups.slice(0, -1);
+  const answerIndex = settled ? lastAssistantIndex(turn.groups) : turn.groups.length - 1;
+  const answer = turn.groups[answerIndex < 0 ? turn.groups.length - 1 : answerIndex]!;
+  const preceding = turn.groups.filter((_, index) => index !== (answerIndex < 0 ? turn.groups.length - 1 : answerIndex));
   // The opening user message is never process content. Later user messages
   // with the same provider turn ID are steering and may share the disclosure.
   const prompt = preceding[0]?.group.message?.role === "user" ? preceding[0] : undefined;
   const history = prompt ? preceding.slice(1) : preceding;
-  const answer = turn.groups.at(-1)!;
   const disclose = settled && history.length > 0 && !(deferCollapse && readingAboveLatest);
   const seconds = answer.group.message?.elapsedSeconds;
   const elapsed = typeof seconds === "number" && seconds >= 0 ? formatElapsed(seconds) : null;
@@ -474,6 +484,11 @@ export function Conversation({
   const renderGroup = (group: TranscriptGroup, index: number, nested = false, hideElapsed = false) => {
     const message = group.message;
     const activity = group.activities?.[0];
+    if (activity?.kind === "compactionStandalone") {
+      const content = <div className="bui-turn-history-divider bui-compaction-divider" role="status"><span>{activity.title}</span></div>;
+      return nested ? <div key={group.id} data-transcript-kind="compaction">{content}</div>
+        : <MessageScrollerItem key={group.id} messageId={group.id} data-transcript-kind="compaction">{content}</MessageScrollerItem>;
+    }
     const segmentRunning = activity?.turnRunning ?? (turnActive && index > currentTurnStart);
     const lastSegmentReply = activity?.turnId ? lastReplyByTurn.get(activity.turnId) ?? -1 : lastReply;
     const intermediate = Boolean(message?.role === "assistant" && !responseFooters.has(message.id) && index < groups.length - 1);
@@ -530,7 +545,7 @@ export function Conversation({
 
               {turns.map((turn) => {
                 const last = turn.groups.at(-1)!;
-                const message = last.group.message;
+                const message = turn.groups[lastAssistantIndex(turn.groups)]?.group.message;
                 const settled = Boolean(message?.role === "assistant" && responseFooters.has(message.id)
                   && !turn.groups.some(({ group }) => (group.message ?? group.activities?.[0])?.turnRunning === true)
                   && (message.turnRunning === false || !turnActive || last.index < currentTurnStart));

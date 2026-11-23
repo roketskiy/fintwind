@@ -25,6 +25,7 @@ import {
 import type { RemoteActivity } from "@/lib/types";
 
 const KIND_ICONS: Readonly<Record<string, typeof WrenchIcon>> = {
+  compaction: PackageIcon,
   command: TerminalIcon,
   fileChange: PencilIcon,
   fileRead: FileIcon,

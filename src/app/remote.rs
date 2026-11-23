@@ -1752,6 +1752,7 @@ fn remote_transcript_entries(session: &AgentSession, timing: &HashMap<Uuid, (u64
     enum Entry<'a> {
         Message(&'a crate::model::Message),
         Activity(&'a ActivityItem, Option<Uuid>),
+        Compacting,
     }
     let start = session.messages.len().saturating_sub(REMOTE_MESSAGE_LIMIT);
     let turns = session.turns.iter().map(|turn| (turn.id, turn)).collect::<HashMap<_, _>>();
@@ -1763,7 +1764,7 @@ fn remote_transcript_entries(session: &AgentSession, timing: &HashMap<Uuid, (u64
     }
     let mut ordered = Vec::new();
     for (index, message) in session.messages.iter().enumerate().skip(start) {
-        if matches!(message.role, MessageRole::User | MessageRole::Assistant) {
+        if matches!(message.role, MessageRole::User | MessageRole::Assistant | MessageRole::Compaction) {
             ordered.push((index, 1usize, (0usize, 0usize), Entry::Message(message)));
         }
     }
@@ -1781,12 +1782,29 @@ fn remote_transcript_entries(session: &AgentSession, timing: &HashMap<Uuid, (u64
             ));
         }
     }
+    if session.compaction.as_ref().is_some_and(|state| state.status == crate::model::CompactionStatus::Running) {
+        ordered.push((session.messages.len(), 1, (0, 0), Entry::Compacting));
+    }
     ordered.sort_by_key(|(anchor, kind, index, _)| (*anchor, *kind, *index));
     let mut remaining = 128 * 1024usize;
     let mut entries = Vec::new();
     let mut truncated = start > 0 || ordered.len() > 200;
     for (_, _, _, entry) in ordered.into_iter().rev().take(200) {
         let value = match entry {
+            Entry::Message(message) if message.role == MessageRole::Compaction => {
+                let turn_id = message.turn_id;
+                json!({"type": "activity", "id": message.id,
+                    "kind": if turn_id.is_some() { "compaction" } else { "compactionStandalone" },
+                    "turnId": turn_id, "turnRunning": turn_id.and_then(|id| turns.get(&id)).map(|turn| turn.status == crate::model::TurnStatus::Running),
+                    "title": "上下文已压缩", "text": "", "complete": true, "failed": false, "truncated": false})
+            }
+            Entry::Compacting => {
+                let turn_id = session.active_turn_id();
+                json!({"type": "activity", "id": format!("compacting:{}", session.id),
+                    "kind": if turn_id.is_some() { "compaction" } else { "compactionStandalone" },
+                    "turnId": turn_id, "turnRunning": turn_id.map(|_| true),
+                    "title": "正在压缩上下文", "text": "", "complete": false, "failed": false, "truncated": false})
+            }
             Entry::Message(message) => {
                 let content = message.visible_content();
                 let text = if message.role == MessageRole::Assistant {

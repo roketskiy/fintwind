@@ -550,6 +550,9 @@ pub struct TurnStats {
     /// The model key (`provider/id`) the turn's final step announced.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// The variant announced with the final model step, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
     /// The agent id the turn's final step announced, as the provider spells
     /// it (titlecasing is presentation, done at render time).
     #[serde(default, skip_serializing_if = "Option::is_none")]

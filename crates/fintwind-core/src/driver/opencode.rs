@@ -4182,6 +4182,11 @@ fn handle_event(
                 stats.stats.step_ids.clear();
             }
             if model.is_some() {
+                stats.stats.reasoning_effort = payload
+                    .pointer("/model/variant")
+                    .and_then(Value::as_str)
+                    .filter(|variant| !variant.trim().is_empty())
+                    .map(str::to_owned);
                 stats.stats.model = model;
             }
             if agent.is_some() {
@@ -4626,6 +4631,7 @@ fn apply_recovered_turn(
         let total = native_stats.get_or_insert_with(TurnStats::default);
         if stats.model.is_some() {
             total.model = stats.model.clone();
+            total.reasoning_effort = stats.reasoning_effort.clone();
         }
         if stats.agent.is_some() {
             total.agent = stats.agent.clone();

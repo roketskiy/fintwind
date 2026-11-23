@@ -14,6 +14,9 @@ import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { ModelPicker } from "@/components/model-picker";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Drawer, DrawerClose, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
+import { Markdown } from "@/components/markdown";
+import { Spinner } from "@/components/ui/spinner";
 import { useDelayedLoading } from "@/hooks/use-delayed-loading";
 import "./beautiful/segmented-control.css";
 import { remoteClient } from "@/lib/remote-client";
@@ -79,6 +82,9 @@ export function Composer({
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [caret, setCaret] = useState(0);
   const [fileResults, setFileResults] = useState<{ query: string; files: string[]; error?: string } | null>(null);
+  const [btw, setBtw] = useState<{ question: string; answer?: string; error?: string } | null>(null);
+  const btwRequest = useRef<string | null>(null);
+  const isPreview = !!previewOptions;
   const active = useRef(true);
   const filesRef = useRef(files);
   filesRef.current = files;
@@ -157,13 +163,42 @@ export function Composer({
 
   useEffect(() => {
     active.current = true;
+    setBtw(null);
     return () => {
       active.current = false;
+      if (btwRequest.current && !isPreview) void remoteClient.command("cancelBtw", { sessionId: session.id, generationId: btwRequest.current }).catch(() => {});
+      btwRequest.current = null;
+    };
+  }, [session.id, isPreview]);
+
+  useEffect(() => {
+    return () => {
       filesRef.current.forEach((entry) => {
         if (entry.preview) URL.revokeObjectURL(entry.preview);
       });
     };
   }, []);
+
+  function closeBtw() {
+    const id = btwRequest.current;
+    btwRequest.current = null;
+    setBtw(null);
+    if (id && !previewOptions) void remoteClient.command("cancelBtw", { sessionId: session.id, generationId: id }).catch(() => {});
+  }
+
+  function askBtw(question: string) {
+    const id = crypto.randomUUID();
+    btwRequest.current = id;
+    setBtw({ question });
+    const result = previewOptions
+      ? Promise.resolve({ text: "这是临时提问的预览回复。关闭卡片后不会保留。" })
+      : remoteClient.command("generateBtw", { sessionId: session.id, generationId: id, question });
+    void result.then(({ text }) => {
+      if (active.current && btwRequest.current === id) { btwRequest.current = null; setBtw({ question, answer: text }); }
+    }, (error: unknown) => {
+      if (active.current && btwRequest.current === id) { btwRequest.current = null; setBtw({ question, error: errorMessage(error) }); }
+    });
+  }
 
   useEffect(() => {
     if ((!panel && query === null) || !configurable || disabled || previewOptions) {
@@ -239,6 +274,17 @@ export function Composer({
       return;
     if (new TextEncoder().encode(draft).length > 32768) {
       onError("消息不能超过 32 KiB。");
+      return;
+    }
+    const sideQuestion = /^\s*\/btw(?:\s|$)([\s\S]*)$/i.exec(draft);
+    if (sideQuestion) {
+      const question = sideQuestion[1].trim();
+      if (!question) { setDeliveryError("请输入问题。"); return; }
+      if (files.length) { setDeliveryError("临时提问不能附带文件。"); return; }
+      if (!session.features.includes("btw") && !previewOptions) { setDeliveryError("当前会话不支持临时提问。"); return; }
+      setDeliveryError(null);
+      onDraft("");
+      askBtw(question);
       return;
     }
     sending.current = true;
@@ -402,6 +448,18 @@ export function Composer({
         </div>
       )} />
       {deliveryError && <Alert variant="destructive"><AlertDescription className="error-reason">{errorMessage(deliveryError)}</AlertDescription></Alert>}
+      <Drawer open={btw !== null} onOpenChange={(open) => { if (!open) closeBtw(); }}>
+        <DrawerContent className="btw-card">
+          <DrawerHeader className="btw-header">
+            <DrawerTitle>临时提问</DrawerTitle>
+            <DrawerClose render={<Button variant="ghost" size="icon" aria-label="关闭" />}><CloseIcon /></DrawerClose>
+          </DrawerHeader>
+          {btw && <div className="btw-body" data-base-ui-swipe-ignore>
+            <p className="btw-question">{btw.question}</p>
+            {btw.answer !== undefined ? <Markdown text={btw.answer} /> : btw.error ? <Alert variant="destructive"><AlertDescription>{btw.error}</AlertDescription><Button variant="outline" onClick={() => askBtw(btw.question)}>重试</Button></Alert> : <div className="btw-loading" role="status"><Spinner /><span>正在生成</span></div>}
+          </div>}
+        </DrawerContent>
+      </Drawer>
       {!configurable && (
         <p className="composer-notice">更新桌面端后可使用模型选项和附件。</p>
       )}

@@ -133,6 +133,8 @@ export interface CommandMap {
   watchSession: { fields: { sessionId: string; watchId: string; enabled: boolean }; result: { accepted: boolean } };
   getComposer: { fields: { sessionId: string }; result: ComposerOptions };
   searchFiles: { fields: { sessionId: string; query: string }; result: { files: string[] } };
+  generateBtw: { fields: { sessionId: string; generationId: string; question: string }; result: { text: string } };
+  cancelBtw: { fields: { sessionId: string; generationId: string }; result: { accepted: boolean } };
   configureSession: {
     fields: {
       sessionId: string;

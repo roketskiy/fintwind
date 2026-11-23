@@ -79,6 +79,8 @@ export function mutationScope(
     type === "getSession" ||
     type === "getComposer" ||
     type === "searchFiles" ||
+    type === "generateBtw" ||
+    type === "cancelBtw" ||
     type === "watchSession"
   )
     return "";
@@ -116,6 +118,15 @@ export function checkFieldBounds(
     case "searchFiles":
       id(fields["sessionId"]);
       if (typeof fields["query"] !== "string" || textBytes(fields["query"]) > 1024) throw bad();
+      return;
+    case "generateBtw":
+      id(fields["sessionId"]);
+      id(fields["generationId"]);
+      if (typeof fields["question"] !== "string" || !fields["question"].trim() || textBytes(fields["question"]) > 32768) throw bad();
+      return;
+    case "cancelBtw":
+      id(fields["sessionId"]);
+      id(fields["generationId"]);
       return;
     case "configureSession":
       id(fields["sessionId"]);
@@ -493,6 +504,9 @@ export function parseResult(type: CommandType, data: unknown): unknown {
       };
     case "searchFiles":
       return { files: reqArr(data["files"], 64, (file) => reqStr(file, 1024)) };
+    case "generateBtw":
+      return { text: reqStr(data["text"], 131072) };
+    case "cancelBtw":
     case "watchSession":
     case "configureSession":
     case "steerPrompt":

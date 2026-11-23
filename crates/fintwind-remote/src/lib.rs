@@ -157,6 +157,15 @@ pub enum RemoteCommand {
         session_id: Uuid,
         query: String,
     },
+    GenerateBtw {
+        session_id: Uuid,
+        generation_id: Uuid,
+        question: String,
+    },
+    CancelBtw {
+        session_id: Uuid,
+        generation_id: Uuid,
+    },
     ConfigureSession {
         session_id: Uuid,
         model: Option<String>,
@@ -220,6 +229,8 @@ impl RemoteCommand {
                 | Self::WatchSession { .. }
                 | Self::GetComposer { .. }
                 | Self::SearchFiles { .. }
+                | Self::GenerateBtw { .. }
+                | Self::CancelBtw { .. }
         )
     }
 
@@ -239,6 +250,8 @@ impl RemoteCommand {
             | Self::GetComposer { session_id }
             | Self::Stop { session_id } => !session_id.is_nil(),
             Self::SearchFiles { session_id, query } => !session_id.is_nil() && query.len() <= 1024,
+            Self::GenerateBtw { session_id, generation_id, question } => !session_id.is_nil() && !generation_id.is_nil() && ok(question, 32768),
+            Self::CancelBtw { session_id, generation_id } => !session_id.is_nil() && !generation_id.is_nil(),
             Self::ConfigureSession {
                 session_id,
                 model,

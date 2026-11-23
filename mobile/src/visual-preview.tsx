@@ -21,7 +21,7 @@ const options: ComposerOptions = {
 };
 const detail: SessionDetail = {
   id: "visual-session", projectId: "visual-project", title: "调整移动端的消息与输入体验", status: "idle",
-  features: ["orderedTranscript", "attachments", "composerOptions", "goals"], model: "preview/model", modelName: "GPT-6.1 Terra", interactionMode: "build", reasoningEffort: "max",
+  features: ["orderedTranscript", "attachments", "composerOptions", "goals", "btw"], model: "preview/model", modelName: "GPT-6.1 Terra", interactionMode: "build", reasoningEffort: "max",
   canSend: true, desktopRequired: false, truncated: false, permission: null, questions: null,
   goal: { objective: "优化手机上的对话体验，保留完整的模型选项与审批流程。", status: "active", turns: 3, maxTurns: 12, reason: "", result: "", tools: 8, elapsedSeconds: 149 },
   messages: [],

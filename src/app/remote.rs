@@ -117,6 +117,8 @@ const REMOTE_STREAM_INTERVAL: Duration = Duration::from_millis(120);
 pub(super) struct RemoteWorkspaceChanges {
     entries: HashMap<PathBuf, (Instant, Option<(u64, u64)>)>,
     pending: std::collections::HashSet<PathBuf>,
+    btw_generations: HashMap<Uuid, Uuid>,
+    cancelled_btw_generations: std::collections::VecDeque<(Uuid, Uuid)>,
 }
 
 #[derive(Clone, Debug)]
@@ -598,6 +600,56 @@ impl Fintwind {
                     fintwind_remote::RemoteEvent::Request(request) => {
                         let _ = this.update(cx, |_, cx| {
                         cx.spawn(async move |this, cx| {
+                        if let fintwind_remote::RemoteCommand::GenerateBtw { session_id, generation_id, question } = &request.command {
+                            let context = this.update(cx, |app, _| {
+                                if app.remote_generation != generation { return Err("远控已关闭。".to_owned()); }
+                                if let Some(index) = app.remote_workspace_changes.cancelled_btw_generations.iter().position(|entry| *entry == (*generation_id, *session_id)) {
+                                    app.remote_workspace_changes.cancelled_btw_generations.remove(index);
+                                    return Err("提问已取消。".to_owned());
+                                }
+                                let index = app.remote_session_index(*session_id)?;
+                                let session = &app.state.sessions[index];
+                                if session.provider != "opencode" { return Err("此会话不支持 /btw。".to_owned()); }
+                                if question.trim().is_empty() { return Err("请输入问题。".to_owned()); }
+                                if app.btw_options_pending.contains(session_id) { return Err(tr!("btw.model_not_synced")); }
+                                let options = app.session_options(session);
+                                let model = options.model.map(|model| fintwind_client::provider_session::SessionGenerationModel { model, variant: options.reasoning_effort });
+                                let native_id = session.native_session_id.clone().or_else(|| session.provider_cursor.as_ref().map(|cursor| cursor.native_id().to_owned())).ok_or_else(|| tr!("btw.session_required"))?;
+                                let binary = app.native_binary_path().ok_or_else(|| tr!("btw.unavailable"))?;
+                                let directory = app.workspace_path_for_session(session).ok_or_else(|| tr!("btw.unavailable"))?.to_path_buf();
+                                if app.remote_workspace_changes.btw_generations.len() >= 8 || app.remote_workspace_changes.btw_generations.contains_key(generation_id) {
+                                    return Err("临时提问过多，请稍后重试。".to_owned());
+                                }
+                                app.remote_workspace_changes.btw_generations.insert(*generation_id, *session_id);
+                                Ok((app.daemon.client(), binary, directory, native_id, model))
+                            }).unwrap_or_else(|_| Err("桌面窗口已关闭。".into()));
+                            let response = match context {
+                                Err(error) => Err(error),
+                                Ok((client, binary, directory, native_id, model)) => {
+                                    let id = *generation_id;
+                                    let owner = *session_id;
+                                    let question = question.clone();
+                                    let answer = cx.background_executor().spawn(async move {
+                                        match client.request_with_timeout(owner, Uuid::nil(), fintwind_client::Command::GenerateSessionText {
+                                            generation_id: id, binary, directory, session_id: native_id, question, model,
+                                        }, Duration::from_secs(135)) {
+                                            Ok(fintwind_client::ResponsePayload::SessionTextGenerated { text }) => Ok(text),
+                                            Ok(fintwind_client::ResponsePayload::SessionGenerationModelNotSynced) => Err(tr!("btw.model_not_synced")),
+                                            Ok(_) => Err(tr!("btw.invalid_response")),
+                                            Err(error) => Err(error.to_string()),
+                                        }
+                                    }).await;
+                                    this.update(cx, |app, _| {
+                                        if app.remote_workspace_changes.btw_generations.remove(&id) != Some(owner) { return Err("提问已取消。".to_owned()); }
+                                        if app.remote_generation != generation { return Err("远控已关闭。".to_owned()); }
+                                        app.remote_session_index(owner)?;
+                                        answer.map(|text| json!({"text": bounded_text(&text, 128 * 1024)})).map_err(|error| app.remote_error_text(&error))
+                                    }).unwrap_or_else(|_| Err("桌面窗口已关闭。".into()))
+                                }
+                            };
+                            let _ = request.respond.send(response).await;
+                            return;
+                        }
                         if let fintwind_remote::RemoteCommand::SearchFiles { session_id, query } = &request.command {
                             let context = this.update(cx, |app, _| {
                                 if app.remote_generation != generation { return Err("远控已关闭。".to_owned()); }
@@ -886,6 +938,9 @@ impl Fintwind {
         self.remote_uploads.0.clear();
         self.remote_composer_catalogs.clear();
         self.remote_model_catalogs.clear();
+        for (generation_id, session_id) in self.remote_workspace_changes.btw_generations.drain() {
+            let _ = self.daemon.client().notify(session_id, Uuid::nil(), fintwind_client::Command::CancelSessionGeneration { generation_id });
+        }
         self.remote_workspace_changes = RemoteWorkspaceChanges::default();
         self.remote_pairing_url = None;
         self.remote_pairing_qr = None;
@@ -980,6 +1035,19 @@ impl Fintwind {
                 Err("请重新打开会话选项。".into())
             }
             fintwind_remote::RemoteCommand::SearchFiles { .. } => Err("请重新搜索文件。".into()),
+            fintwind_remote::RemoteCommand::GenerateBtw { .. } => Err("请重新发送问题。".into()),
+            fintwind_remote::RemoteCommand::CancelBtw { session_id, generation_id } => {
+                self.remote_session_index(session_id)?;
+                if self.remote_workspace_changes.btw_generations.get(&generation_id) == Some(&session_id) {
+                    self.remote_workspace_changes.btw_generations.remove(&generation_id);
+                    let _ = self.daemon.client().notify(session_id, Uuid::nil(), fintwind_client::Command::CancelSessionGeneration { generation_id });
+                } else {
+                    let cancelled = &mut self.remote_workspace_changes.cancelled_btw_generations;
+                    if cancelled.len() >= 64 { cancelled.pop_front(); }
+                    cancelled.push_back((generation_id, session_id));
+                }
+                Ok(json!({"accepted": true}))
+            }
             fintwind_remote::RemoteCommand::SteerPrompt { .. } => {
                 Err("引导必须等待运行中的会话确认。".into())
             }
@@ -1400,7 +1468,7 @@ impl Fintwind {
             }));
         let (entries, entries_truncated) = remote_transcript_entries(session, &timing, &footer_stats);
         let mut features = vec!["orderedTranscript", "composerOptions", "attachments", "sessionDeltas", "turnMetadata", "todoList", "workspaceChanges", "sessionPermissions", "steering", "contextUsage"];
-        if session.provider == "opencode" { features.push("goals"); }
+        if session.provider == "opencode" { features.push("goals"); features.push("btw"); }
         let mut snapshot = json!({
             "id": session.id,
             "projectId": session.project_id,

@@ -301,7 +301,7 @@ export class RemoteClient {
           this.refreshSnapshot();
         }
         reject(new Error(TIMEOUT_MESSAGE));
-      }, COMMAND_TIMEOUT_MS);
+      }, type === "generateBtw" ? 150000 : COMMAND_TIMEOUT_MS);
       this.inflight.set(id, {
         resolve: resolve as (value: never) => void,
         reject,
@@ -371,7 +371,7 @@ export class RemoteClient {
     type: CommandType,
     fields: { projectId?: string; sessionId?: string },
   ): string {
-    if (type === "searchFiles") return "";
+    if (type === "searchFiles" || type === "generateBtw" || type === "cancelBtw") return "";
     if (mutationScope(type, fields)) return "";
     return JSON.stringify([
       this.route,

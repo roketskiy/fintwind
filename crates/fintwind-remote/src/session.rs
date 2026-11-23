@@ -308,10 +308,12 @@ impl Session {
             }
         }
         let read_only = !request.command.is_mutation();
+        let generation_request = matches!(&request.command, RemoteCommand::GenerateBtw { .. });
         let allow_deferred = matches!(
             &request.command,
         RemoteCommand::GetComposer { .. }
             | RemoteCommand::SearchFiles { .. }
+            | RemoteCommand::GenerateBtw { .. }
                 | RemoteCommand::SteerPrompt { .. }
                 | RemoteCommand::UploadChunk { complete: true, .. }
         );
@@ -326,7 +328,7 @@ impl Session {
             state.deferred.push(Pending {
                 id: request.id,
                 receiver,
-                deadline: tokio::time::Instant::now() + REQUEST_TIMEOUT,
+                deadline: tokio::time::Instant::now() + if generation_request { Duration::from_secs(150) } else { REQUEST_TIMEOUT },
                 read_only,
                 if_revision: request.if_revision,
             });

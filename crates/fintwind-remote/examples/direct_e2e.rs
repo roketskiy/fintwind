@@ -269,6 +269,8 @@ fn request_log(command: &RemoteCommand) -> (&'static str, Value) {
         RemoteCommand::SearchFiles { session_id, query } => {
             ("searchFiles", json!({"sessionId": session_id, "query": query}))
         }
+        RemoteCommand::GenerateBtw { session_id, generation_id, .. } => ("generateBtw", json!({"sessionId": session_id, "generationId": generation_id})),
+        RemoteCommand::CancelBtw { session_id, generation_id } => ("cancelBtw", json!({"sessionId": session_id, "generationId": generation_id})),
         RemoteCommand::ConfigureSession { session_id, .. } => {
             ("configureSession", json!({"sessionId": session_id}))
         }

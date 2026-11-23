@@ -9,8 +9,9 @@ export function composerCommands(session: SessionDetail, options: ComposerOption
     ...(session.goal && ["paused", "blocked"].includes(session.goal.status) ? [{ name: "goal resume", description: "继续目标", value: "/goal resume" }] : []),
     ...(session.goal ? [{ name: "goal clear", description: "清除目标", value: "/goal clear" }] : []),
   ] : [];
-  return [...goals, ...(options?.commands ?? [])
-    .filter((command) => !session.features.includes("goals") || command.name.replace(/^\//, "").toLowerCase() !== "goal")
+  const btw: ComposerCommand[] = session.features.includes("btw") ? [{ name: "btw", description: "临时提问", value: "/btw " }] : [];
+  return [...goals, ...btw, ...(options?.commands ?? [])
+    .filter((command) => !(session.features.includes("goals") && command.name.replace(/^\//, "").toLowerCase() === "goal") && command.name.replace(/^\//, "").toLowerCase() !== "btw")
     .map((command) => ({ ...command, name: command.name.replace(/^\//, ""), value: `/${command.name.replace(/^\//, "")} ` }))];
 }
 

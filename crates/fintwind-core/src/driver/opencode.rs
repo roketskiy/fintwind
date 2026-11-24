@@ -1493,8 +1493,9 @@ impl OpenCodeDriver {
                             // route — a plain prompt would deliver the typed
                             // text literally. Locally expanded templates never
                             // reach this branch (the composer already expanded
-                            // them). Unknown names and registry failures are
-                            // reported instead of being sent as plain text.
+                            // them). A skill with the same name is sent as a
+                            // prompt attachment only when no command matches.
+                            // Unknown names and registry failures are reported.
                             let invocation = slash_invocation(&text).map(|(name, arguments)| {
                                 (name.to_owned(), arguments.to_owned())
                             });
@@ -1511,16 +1512,26 @@ impl OpenCodeDriver {
                             );
                             let mut invalid_input = bodies.is_err();
                             let posted = bodies.and_then(|(mut current, legacy)| {
-                                if let Some((name, arguments)) = invocation {
+                                let command = if let Some((name, arguments)) = invocation {
                                     let names = server_command_names(&worker_server, &worker_location)
                                         .ok_or_else(|| {
                                             invalid_input = true;
                                             anyhow!("无法获取 OpenCode 命令列表，请重试。")
                                         })?;
-                                    if !names.contains(&name) {
+                                    if names.contains(&name) {
+                                        Some((name, arguments))
+                                    } else if current["skills"].as_array().is_some_and(|skills| {
+                                        skills.iter().any(|skill| skill["id"].as_str() == Some(&name))
+                                    }) {
+                                        None
+                                    } else {
                                         invalid_input = true;
                                         anyhow::bail!("未找到命令 /{name}。");
                                     }
+                                } else {
+                                    None
+                                };
+                                if let Some((name, arguments)) = command {
                                     current.as_object_mut().unwrap().remove("metadata");
                                     current["name"] = json!(name);
                                     current["text"] = json!(arguments);

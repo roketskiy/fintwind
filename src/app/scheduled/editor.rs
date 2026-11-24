@@ -271,7 +271,7 @@ impl ScheduledTasksView {
                                 .id("scheduled-editor-body")
                                 .min_h_0()
                                 .overflow_y_scroll()
-                                .child(self.render_form(&editor.draft, &theme, cx)),
+                                .child(self.render_form(&editor.draft, &theme, window, cx)),
                         )
                         .child(
                             div()
@@ -341,7 +341,7 @@ impl ScheduledTasksView {
                         let _ = weak.update(cx, |this, cx| this.request_close(window, cx));
                     },
                 )
-                .child(self.render_form(&editor.draft, &theme, cx))
+                .child(self.render_form(&editor.draft, &theme, window, cx))
                 .action(move |_| feedback)
                 .action(move |_| cancel)
                 .action(move |_| save)
@@ -434,7 +434,13 @@ impl ScheduledTasksView {
         Some(dialog.into_any_element())
     }
 
-    fn render_form(&self, editor: &Editor, theme: &Theme, cx: &mut Context<Self>) -> Div {
+    fn render_form(
+        &self,
+        editor: &Editor,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let busy = self.busy();
         let schedule = Select::new(
             "scheduled-schedule-kind",
@@ -723,16 +729,17 @@ impl ScheduledTasksView {
                 .child(target)
                 .child(field(tr!("scheduled_tasks.session_label"), session));
         }
-        let weak = cx.entity().downgrade();
         form.child(
-            ely_gpui_component::forms::Switch::new("scheduled-editor-enabled", editor.enabled)
-                .label(tr!("scheduled_tasks.enabled"))
-                .disabled(busy)
-                .on_change(move |enabled, _, cx| {
-                    let _ = weak.update(cx, |this, cx| {
-                        this.edit(|draft| draft.enabled = enabled, cx)
-                    });
-                }),
+            toggle_switch(
+                "scheduled-editor-enabled",
+                editor.enabled,
+                busy,
+                *theme,
+                window,
+                cx,
+                |this, _, cx| this.edit(|draft| draft.enabled = !draft.enabled, cx),
+            )
+            .label(tr!("scheduled_tasks.enabled")),
         )
     }
 }

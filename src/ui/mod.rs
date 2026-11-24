@@ -7,7 +7,7 @@ use gpui::{
     KeyDownEvent, ParentElement, PathBuilder, Pixels, RenderOnce, SharedString, Stateful,
     StyleRefinement, Styled, Svg, Window, canvas, div, img, point, prelude::*, px, rgb, svg,
 };
-use gpui_kit::component::{Disableable, switch::Switch};
+use gpui_kit::component::{Disableable, FocusableExt, switch::Switch};
 
 pub mod loading;
 pub mod menu;
@@ -169,14 +169,13 @@ impl ActivationExt for Stateful<Div> {
 ///
 /// One behavior change from the hand-rolled version: a disabled switch no
 /// longer keeps its tab stop — the library removes disabled controls from
-/// focus traversal instead of leaving them focusable-but-inert. Every
-/// current call site passes `disabled: false`.
+/// focus traversal instead of leaving them focusable-but-inert.
 pub fn toggle_switch<E>(
     id: impl Into<ElementId>,
     on: bool,
     disabled: bool,
     theme: Theme,
-    _window: &mut Window,
+    window: &mut Window,
     cx: &mut Context<E>,
     activate: impl Fn(&mut E, &mut Window, &mut Context<E>) + 'static,
 ) -> Switch
@@ -187,6 +186,7 @@ where
     let mut switch = Switch::new(id)
         .checked(on)
         .disabled(disabled)
+        .focus_ring(window.last_input_was_keyboard())
         .color(theme.neutral_fill);
     if !disabled {
         switch = switch.on_click(move |_, window, cx| {

@@ -51,6 +51,36 @@ remote.start_failed:
   en: Could not start remote control
 remote.connection_failed:
   en: Remote connection failed
+remote.description:
+  en: Access conversations on this computer from your phone
+remote.devices:
+  en: Connect a device
+remote.pairing:
+  en: Phone pairing
+remote.pairing_link:
+  en: Pairing link
+remote.encrypted:
+  en: Encrypted connection
+remote.scan:
+  en: Scan the QR code with your phone
+remote.open_on_phone:
+  en: Open on your phone
+remote.keep_private:
+  en: Keep the pairing link private.
+remote.credentials_notice:
+  en: The pairing link contains access credentials.
+remote.show_link:
+  en: View link
+remote.show_qr:
+  en: Back to QR code
+remote.off_description:
+  en: Turn on remote control to connect your phone.
+remote.connecting_description:
+  en: Preparing the connection.
+remote.failed_description:
+  en: Check the connection and try again.
+remote.retry:
+  en: Try again
 capsule.task_list:
   en: Tasks
 capsule.todo:

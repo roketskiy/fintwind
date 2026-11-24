@@ -1,6 +1,7 @@
 use super::*;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use gpui::Animation;
 use ely_gpui_component::{
     buttons::{Button, ButtonVariant},
     primitives::IconName,
@@ -159,9 +160,6 @@ impl RemoteUiStatus {
         }
     }
 
-    fn has_pairing(&self) -> bool {
-        matches!(self, Self::Waiting | Self::Connected)
-    }
 }
 
 fn session_updated_at(session: &AgentSession) -> u64 {
@@ -236,10 +234,22 @@ impl Fintwind {
             .child(
                 div()
                     .min_w_0()
-                    .text_size(ui_px(18.0))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text)
-                    .child(tr!("remote.title")),
+                    .flex()
+                    .flex_col()
+                    .gap(px(7.0))
+                    .child(
+                        div()
+                            .text_size(ui_px(20.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.text)
+                            .child(tr!("remote.title")),
+                    )
+                    .child(
+                        div()
+                            .text_size(ui_px(14.0))
+                            .text_color(theme.text_tertiary)
+                            .child(tr!("remote.description")),
+                    ),
             )
             .child(
                 toggle_switch(
@@ -263,163 +273,293 @@ impl Fintwind {
 
         let status_icon = status.icon();
         let status_tint = status.tint(theme);
-        let connected = matches!(status, RemoteUiStatus::Connected);
-
         let status_row = div()
-            .px(px(20.0))
-            .py(px(16.0))
+            .px(px(16.0))
+            .py(px(14.0))
             .flex()
             .items_center()
-            .gap(px(12.0))
-            .child(
-                div()
-                    .size(px(32.0))
-                    .rounded(px(8.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .bg(theme.overlay)
-                    .child(icon(status_icon, 16.0, status_tint)),
-            )
+            .gap(px(8.0))
+            .rounded(px(8.0))
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.raised)
+            .child(div().size(px(7.0)).rounded_full().bg(status_tint))
             .child(
                 div()
                     .min_w_0()
-                    .text_size(ui_px(13.5))
-                    .when(connected, |text| {
-                        text.font_weight(FontWeight::MEDIUM).text_color(theme.text)
-                    })
-                    .when(!connected, |text| text.text_color(theme.text_secondary))
-                    .child(status.label()),
-            );
-
-        let idle_state = div()
-            .px(px(28.0))
-            .py(px(36.0))
-            .flex()
-            .flex_col()
-            .items_center()
-            .gap(px(14.0))
-            .child(
-                div()
-                    .size(px(64.0))
-                    .rounded(px(18.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .bg(theme.overlay)
-                    .child(icon(status_icon, 30.0, status_tint)),
-            )
-            .child(
-                div()
-                    .text_size(ui_px(13.5))
+                    .text_size(ui_px(12.0))
                     .text_color(theme.text_secondary)
                     .child(status.label()),
             );
 
-        let qr_panel = if let Some(qr) = self.remote_pairing_qr.clone() {
-            div()
-                .p(px(12.0))
-                .rounded(px(14.0))
-                .border_1()
-                .border_color(theme.border)
-                .bg(gpui::white())
-                .child(img(qr).size(px(REMOTE_QR_SIZE)))
-        } else {
-            div()
-                .p(px(12.0))
-                .rounded(px(14.0))
-                .border_1()
-                .border_color(theme.border)
-                .bg(theme.inset)
-                .child(
+        let pairing_available = self.remote_pairing_url.is_some();
+        let content = if pairing_available {
+            let back = self.remote_pairing_back;
+            let flip_focus = self.transcript_control_focus("remote-flip", cx);
+            let flip = Button::new(
+                "remote-flip",
+                if back {
+                    tr!("remote.show_qr")
+                } else {
+                    tr!("remote.show_link")
+                },
+            )
+            .variant(ButtonVariant::Ghost)
+            .focus_handle(&flip_focus)
+            .on_click(cx.listener(|this, _, _, cx| this.flip_remote_pairing(cx)));
+            let card_body = if back {
+                let url = self.remote_pairing_url.clone().unwrap_or_default();
+                div()
+                    .flex_1()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .justify_center()
+                    .items_start()
+                    .gap(px(12.0))
+                    .child(
+                        div()
+                            .text_size(ui_px(14.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.text)
+                            .child(tr!("remote.open_on_phone")),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .px(px(12.0))
+                            .py(px(10.0))
+                            .rounded(px(7.0))
+                            .bg(theme.inset)
+                            .text_size(ui_px(12.0))
+                            .text_color(theme.text_secondary)
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(url),
+                    )
+                    .child(
+                        div()
+                            .text_size(ui_px(12.0))
+                            .text_color(theme.text_tertiary)
+                            .child(tr!("remote.keep_private")),
+                    )
+                    .child(remote_button(
+                        "remote-copy-link",
+                        tr!("remote.copy_link"),
+                        ButtonVariant::Secondary,
+                        IconName::Copy,
+                        false,
+                        cx,
+                        |this, cx| {
+                            if let Some(url) = this.remote_pairing_url.clone() {
+                                cx.write_to_clipboard(ClipboardItem::new_string(url));
+                                this.show_success_toast(tr!("remote.copied"));
+                            }
+                        },
+                    ))
+            } else {
+                let qr = if let Some(qr) = self.remote_pairing_qr.clone() {
                     div()
-                        .size(px(REMOTE_QR_SIZE))
+                        .p(px(8.0))
+                        .rounded(px(8.0))
+                        .bg(gpui::white())
+                        .child(img(qr).size(px(REMOTE_QR_SIZE)))
+                } else {
+                    div()
+                        .size(px(REMOTE_QR_SIZE + 16.0))
+                        .rounded(px(8.0))
+                        .bg(theme.inset)
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(icon("icons/laptop.svg", 28.0, theme.text_ghost)),
+                        .child(icon("icons/laptop.svg", 28.0, theme.text_ghost))
+                };
+                div()
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(12.0))
+                    .child(qr)
+                    .child(
+                        div()
+                            .text_size(ui_px(14.0))
+                            .text_color(theme.text)
+                            .child(tr!("remote.scan")),
+                    )
+            };
+            let card = div()
+                .w(px(360.0))
+                .h(px(362.0))
+                .flex_none()
+                .p(px(24.0))
+                .flex()
+                .flex_col()
+                .rounded(px(14.0))
+                .border_1()
+                .border_color(theme.border_strong)
+                .bg(theme.composer)
+                .shadow(theme.card_shadow())
+                .child(
+                    div()
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_size(ui_px(12.0))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme.text)
+                                .child(if back {
+                                    tr!("remote.pairing_link")
+                                } else {
+                                    tr!("remote.pairing")
+                                }),
+                        )
+                        .child(
+                            div()
+                                .text_size(ui_px(12.0))
+                                .text_color(theme.text_tertiary)
+                                .child(tr!("remote.encrypted")),
+                        ),
                 )
-        };
-        let qr_section = div()
-            .px(px(20.0))
-            .py(px(20.0))
-            .flex()
-            .justify_center()
-            .child(qr_panel);
-
-        let copy_button = self.remote_pairing_url.as_ref().map(|_| {
-            remote_button(
-                "remote-copy-link",
-                tr!("remote.copy_link"),
-                ButtonVariant::Outline,
-                IconName::Copy,
-                false,
-                cx,
-                |this, cx| {
-                    if let Some(url) = this.remote_pairing_url.clone() {
-                        cx.write_to_clipboard(ClipboardItem::new_string(url));
-                        this.show_success_toast(tr!("remote.copied"));
-                    }
-                },
-            )
-        });
-        let actions = div()
-            .px(px(20.0))
-            .py(px(14.0))
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap(px(8.0))
-            .when_some(copy_button, |row, button| row.child(button))
-            .child(remote_button(
-                "remote-refresh",
-                tr!("remote.refresh"),
-                ButtonVariant::Secondary,
-                IconName::RotateCw,
-                self.remote_starting,
-                cx,
-                |this, cx| {
-                    this.stop_remote_control();
-                    this.start_remote_control(cx);
-                    cx.notify();
-                },
-            ));
-
-        let separator = || {
+                .child(card_body)
+                .child(div().w_full().flex().justify_end().child(flip));
+            let card = if !self.remote_flip_animated || cx.reduce_motion() {
+                card.into_any_element()
+            } else {
+                let animation = Animation::new(Duration::from_millis(260)).with_max_fps(30.0);
+                let card = card.with_animation(
+                    ("remote-pairing-flip-inner", self.remote_flip_generation),
+                    animation.clone(),
+                    |card, progress| {
+                        let width = 360.0 * (std::f32::consts::PI * progress).cos().abs().max(0.01);
+                        card.ml(px((width - 360.0) / 2.0))
+                    },
+                );
+                div()
+                    .overflow_hidden()
+                    .child(card)
+                    .with_animation(
+                        ("remote-pairing-flip-outer", self.remote_flip_generation),
+                        animation,
+                        |card, progress| {
+                            card.w(px(
+                                360.0 * (std::f32::consts::PI * progress).cos().abs().max(0.01)
+                            ))
+                        },
+                    )
+                    .into_any_element()
+            };
+            let card = div().flex().justify_center().child(card);
             div()
-                .mx(px(20.0))
-                .h(px(1.0))
-                .bg(theme.border)
+                .w_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(16.0))
+                .child(card)
+                .when_some(self.remote_error.as_ref(), |view, error| {
+                    view.child(
+                        div()
+                            .text_size(ui_px(12.0))
+                            .text_color(theme.warning_text)
+                            .child(bounded_text(error, 512)),
+                    )
+                })
+                .child(
+                    div()
+                        .text_size(ui_px(12.0))
+                        .text_color(theme.text_tertiary)
+                        .child(tr!("remote.credentials_notice")),
+                )
+                .child(remote_button(
+                    "remote-refresh",
+                    tr!("remote.refresh"),
+                    ButtonVariant::Outline,
+                    IconName::RotateCw,
+                    self.remote_starting,
+                    cx,
+                    |this, cx| {
+                        this.stop_remote_control();
+                        this.start_remote_control(cx);
+                        cx.notify();
+                    },
+                ))
+                .into_any_element()
+        } else {
+            let description = match status {
+                RemoteUiStatus::Off => tr!("remote.off_description"),
+                RemoteUiStatus::Failed => tr!("remote.failed_description"),
+                _ => tr!("remote.connecting_description"),
+            };
+            let failed = matches!(status, RemoteUiStatus::Failed);
+            div()
+                .w_full()
+                .max_w(px(520.0))
+                .min_h(px(285.0))
+                .p(px(24.0))
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap(px(12.0))
+                .rounded(px(14.0))
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.raised)
+                .child(
+                    div()
+                        .size(px(48.0))
+                        .rounded(px(8.0))
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.overlay)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(icon(status_icon, 24.0, status_tint)),
+                )
+                .child(
+                    div()
+                        .text_size(ui_px(14.0))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.text)
+                        .child(status.label()),
+                )
+                .child(
+                    div()
+                        .text_size(ui_px(12.0))
+                        .text_color(theme.text_tertiary)
+                        .child(description),
+                )
+                .when_some(self.remote_error.as_ref(), |view, error| {
+                    view.child(
+                        div()
+                            .text_size(ui_px(12.0))
+                            .text_color(theme.warning_text)
+                            .child(bounded_text(error, 512)),
+                    )
+                })
+                .when(failed, |view| {
+                    view.child(remote_button(
+                        "remote-retry",
+                        tr!("remote.retry"),
+                        ButtonVariant::Secondary,
+                        IconName::RotateCw,
+                        false,
+                        cx,
+                        |this, cx| {
+                            this.stop_remote_control();
+                            this.start_remote_control(cx);
+                            cx.notify();
+                        },
+                    ))
+                })
                 .into_any_element()
         };
-        let mut body = Vec::new();
-        if status.has_pairing() {
-            body.push(status_row.into_any_element());
-            body.push(separator());
-            if connected {
-                body.push(actions.into_any_element());
-                body.push(separator());
-                body.push(qr_section.into_any_element());
-            } else {
-                body.push(qr_section.into_any_element());
-                body.push(separator());
-                body.push(actions.into_any_element());
-            }
-        } else {
-            body.push(idle_state.into_any_element());
-        }
-        if let Some(error) = self.remote_error.as_ref() {
-            body.push(
-                div()
-                    .px(px(20.0))
-                    .pb(px(16.0))
-                    .text_size(ui_px(12.5))
-                    .line_height(ui_px(18.0))
-                    .text_color(theme.warning_text)
-                    .child(bounded_text(error, 512))
-                    .into_any_element(),
-            );
-        }
 
         div()
             .id("remote-settings")
@@ -431,25 +571,49 @@ impl Fintwind {
             .child(
                 div()
                     .w_full()
-                    .max_w(px(560.0))
+                    .max_w(px(660.0))
                     .mx_auto()
                     .flex()
                     .flex_col()
                     .gap(px(20.0))
                     .child(title_row)
+                    .child(div().h(px(1.0)).bg(theme.border))
+                    .child(status_row)
                     .child(
                         div()
-                            .w_full()
-                            .rounded(px(13.0))
-                            .border_1()
-                            .border_color(theme.border)
-                            .bg(theme.raised)
-                            .shadow_xs()
-                            .overflow_hidden()
-                            .children(body),
-                    ),
+                            .text_size(ui_px(12.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.text_secondary)
+                            .child(tr!("remote.devices")),
+                    )
+                    .child(div().w_full().flex().justify_center().child(content)),
             )
             .into_any_element()
+    }
+
+    fn flip_remote_pairing(&mut self, cx: &mut Context<Self>) {
+        self.remote_flip_target = !self.remote_flip_target;
+        self.remote_flip_generation = self.remote_flip_generation.wrapping_add(1);
+        self.remote_flip_animated = true;
+        let generation = self.remote_flip_generation;
+        if cx.reduce_motion() {
+            self.remote_pairing_back = self.remote_flip_target;
+            cx.notify();
+            return;
+        }
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(130))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.remote_flip_generation == generation {
+                    this.remote_pairing_back = this.remote_flip_target;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     pub(super) fn start_remote_control(&mut self, cx: &mut Context<Self>) {
@@ -467,6 +631,10 @@ impl Fintwind {
         self.remote_session_hydrations.clear();
         self.remote_pairing_url = None;
         self.remote_pairing_qr = None;
+        self.remote_pairing_back = false;
+        self.remote_flip_target = false;
+        self.remote_flip_generation = self.remote_flip_generation.wrapping_add(1);
+        self.remote_flip_animated = false;
         self.remote_error = None;
         self.remote_starting = true;
         self.remote_status = RemoteUiStatus::Connecting;
@@ -931,6 +1099,10 @@ impl Fintwind {
     pub(super) fn stop_remote_control(&mut self) {
         self.remote_generation = self.remote_generation.wrapping_add(1);
         self.remote_starting = false;
+        self.remote_flip_generation = self.remote_flip_generation.wrapping_add(1);
+        self.remote_pairing_back = false;
+        self.remote_flip_target = false;
+        self.remote_flip_animated = false;
         if let Some(control) = self.remote_control.take() {
             control.stop();
         }

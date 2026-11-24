@@ -92,6 +92,8 @@ Design system source: `src/theme.rs`、`src/theme/palettes.rs`。
 
 - 2026-11-24 — 手机远控中，会话运行时的上下文压缩作为活动显示；会话结束后单独进行的压缩使用居中分隔线。两者均不展示压缩摘要。
 
+- 2026-11-24 — [手机远控设置设计方案](https://doop.design/c/R-EWh6CEeP?page=IgLumpAu6U)以翻转卡片区分扫码与链接，保留连接状态及恢复入口。
+
 ## Open questions · 待确认问题
 
 - 其余 13 套主题家族尚未导入，后续按具体设计任务确定扩展范围。

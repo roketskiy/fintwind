@@ -20,22 +20,23 @@ use fintwind_client::models_dev::{self, ModelsDevTable};
 use super::*;
 use ely_gpui_component::{
     buttons::{Button, ButtonVariant, SegmentedControl},
-    charts::CalendarHeatmap,
     feedback::{Alert, EmptyState},
-    layout::CardHeader,
-    lists::{List, ListItem},
-    primitives::{IconName, Severity},
-    theme::ControlSize,
-    typography::{Caption, Label, tabular},
+    primitives::{Icon, IconName, Severity},
+    theme::{ControlSize, IconSize},
+    typography::tabular,
 };
 use fintwind_client::provider_session::{UsageDayShare, UsageEntry, UsageStats};
-mod usage_flow;
+mod channels_card;
+mod quota_card;
+mod trend_chart;
 
 #[cfg(test)]
 use fintwind_client::provider_session::UsageModelLane;
 
 /// Heatmap horizon, in whole weeks ending today.
 pub(super) const HEATMAP_WEEKS: i64 = 26;
+/// Weekly retention-style matrix horizon, in whole weeks ending this week.
+pub(super) const MATRIX_WEEKS: i64 = 6;
 /// Timeline horizon for the unbounded range.
 const BAR_HORIZON_DAYS: i64 = 30;
 const DAY_WINDOW: i64 = 30;
@@ -45,12 +46,6 @@ pub(super) const CHART_TOOLTIP_DELAY: Duration = Duration::from_millis(0);
 /// A stored scan older than this is refreshed silently on page open; within
 /// it, reopening the page costs no server traversal.
 const STALE_AFTER: Duration = Duration::from_secs(60);
-/// While the page is open, how often to look for newer sessions. The scan
-/// itself is daemon-side and cached, so a quiet interval is cheap; a session
-/// that is actively streaming lands within half a minute of its next hop.
-/// Model rows drawn before the rest collapse into the header's model count.
-const MAX_MODEL_ROWS: usize = 8;
-const MAX_RANK_ROWS: usize = 5;
 
 /// What the KPI cards, timelines, and model ranking aggregate over. The
 /// heatmap keeps its own fixed week window, like GitHub's, so a short range
@@ -64,16 +59,155 @@ pub(super) enum UsageRange {
     Day(u8),
 }
 
+/// Which metric the main trend chart plots and which KPI card highlights.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum UsageChartMetric {
+    #[default]
+    Total,
+    Generated,
+    CacheHit,
+}
+
+impl UsageChartMetric {
+    pub(super) fn palette_index(self) -> usize {
+        match self {
+            Self::Total => 0,
+            Self::Generated => 1,
+            Self::CacheHit => 2,
+        }
+    }
+
+    pub(super) fn title(self) -> String {
+        match self {
+            Self::Total => tr!("usage_page.kpi_total_tokens"),
+            Self::Generated => tr!("usage_page.kpi_generated_tokens"),
+            Self::CacheHit => tr!("usage_page.kpi_cache_hit"),
+        }
+    }
+
+    pub(super) fn daily_value(self, day: &UsageDay) -> f64 {
+        match self {
+            Self::Total => day.total as f64,
+            Self::Generated => day.output as f64,
+            Self::CacheHit => cache_hit_percent(
+                day.cache_read,
+                day.input
+                    .saturating_add(day.cache_read)
+                    .saturating_add(day.cache_write),
+            )
+            .unwrap_or(0.0),
+        }
+    }
+
+    pub(super) fn hourly_value(self, hour: &UsageHour) -> f64 {
+        match self {
+            Self::Total => hour
+                .input
+                .saturating_add(hour.output)
+                .saturating_add(hour.cache_read)
+                .saturating_add(hour.cache_write) as f64,
+            Self::Generated => hour.output as f64,
+            Self::CacheHit => cache_hit_percent(
+                hour.cache_read,
+                hour.input
+                    .saturating_add(hour.cache_read)
+                    .saturating_add(hour.cache_write),
+            )
+            .unwrap_or(0.0),
+        }
+    }
+
+    pub(super) fn format_total(self, totals: &UsageTotals) -> String {
+        match self {
+            Self::Total => format_tokens(totals.total()),
+            Self::Generated => format_tokens(totals.generated()),
+            Self::CacheHit => cache_hit_percent(
+                totals.cache_read,
+                totals
+                    .input
+                    .saturating_add(totals.cache_read)
+                    .saturating_add(totals.cache_write),
+            )
+            .map(|v| format!("{v:.1}%"))
+            .unwrap_or_else(|| "—".into()),
+        }
+    }
+
+    pub(super) fn format_axis(self, val: f64) -> String {
+        match self {
+            Self::Total | Self::Generated => format_tokens(val.round().max(0.0) as u64),
+            Self::CacheHit => format!("{val:.0}%"),
+        }
+    }
+
+    pub(super) fn format_point(self, val: f64) -> String {
+        match self {
+            Self::Total | Self::Generated => format_tokens(val.round().max(0.0) as u64),
+            Self::CacheHit => format!("{val:.1}%"),
+        }
+    }
+}
+
+/// Which breakdown the bottom-left channel bars card shows.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum UsageChannelDimension {
+    #[default]
+    Models,
+    Providers,
+    Projects,
+    Composition,
+}
+
+impl UsageChannelDimension {
+    pub(super) fn key(self) -> &'static str {
+        match self {
+            Self::Models => "models",
+            Self::Providers => "providers",
+            Self::Projects => "projects",
+            Self::Composition => "composition",
+        }
+    }
+
+    pub(super) fn from_key(key: &str) -> Self {
+        match key {
+            "providers" => Self::Providers,
+            "projects" => Self::Projects,
+            "composition" => Self::Composition,
+            _ => Self::Models,
+        }
+    }
+}
+
+/// Which view the bottom-right activity card shows.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum UsageActivityView {
+    #[default]
+    WeeklyMatrix,
+    CalendarHeatmap,
+}
+
+impl UsageActivityView {
+    pub(super) fn key(self) -> &'static str {
+        match self {
+            Self::WeeklyMatrix => "matrix",
+            Self::CalendarHeatmap => "heatmap",
+        }
+    }
+
+    pub(super) fn from_key(key: &str) -> Self {
+        match key {
+            "heatmap" => Self::CalendarHeatmap,
+            _ => Self::WeeklyMatrix,
+        }
+    }
+}
+
 /// Selection is scoped to the currently aggregated snapshot. It is cleared
 /// whenever a replacement snapshot or time range lands.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum UsageFlowSelection {
-    Model(usize),
-    Lane(usize),
     Day(usize),
     Hour(usize),
-    Provider(usize),
-    Project(usize),
 }
 
 impl UsageRange {
@@ -167,6 +301,12 @@ impl UsageTotals {
     fn generated(&self) -> u64 {
         self.output.saturating_add(self.reasoning)
     }
+
+    fn direct(&self) -> u64 {
+        self.input
+            .saturating_add(self.output)
+            .saturating_add(self.reasoning)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -212,7 +352,6 @@ pub(super) struct UsageModelRow {
     pub model: Option<String>,
     pub sessions: u32,
     pub total: u64,
-    #[cfg(test)]
     pub cost: f64,
     pub last_used: u64,
 }
@@ -223,7 +362,6 @@ pub(super) struct UsageProjectRow {
     pub directory: String,
     pub sessions: u32,
     pub total: u64,
-    #[cfg(test)]
     pub cost: f64,
 }
 
@@ -237,18 +375,39 @@ pub(super) struct UsageProviderRow {
     pub provider: String,
     pub models: u32,
     pub total: u64,
+    pub cost: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct UsageWeekMatrixCell {
+    pub date: NaiveDate,
+    pub direct: u64,
+    pub total: u64,
+    pub sessions: u32,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct UsageWeekMatrixRow {
+    pub label: String,
+    pub direct_total: u64,
+    pub cells: [Option<UsageWeekMatrixCell>; 7],
 }
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct UsageViews {
     pub totals: UsageTotals,
+    pub prev_totals: Option<UsageTotals>,
     /// Contiguous days ending today (or the selected day), oldest first.
     pub daily: Vec<UsageDay>,
+    pub prev_daily: Vec<UsageDay>,
     pub hourly: Vec<UsageHour>,
+    pub prev_hourly: Vec<UsageHour>,
     pub hourly_estimated: bool,
     /// Week columns of seven cells, Monday first; `None` past today.
     pub weeks: Vec<Vec<Option<UsageHeatCell>>>,
     pub heatmap_active_days: u32,
+    pub weekly_matrix: Vec<UsageWeekMatrixRow>,
+    pub matrix_active_days: u32,
     pub models: Vec<UsageModelRow>,
     pub model_count: usize,
     pub providers: Vec<UsageProviderRow>,
@@ -258,57 +417,6 @@ pub(super) struct UsageViews {
 }
 
 impl Fintwind {
-    /// Keep peer widths equal and center a short final row. Two tracks per
-    /// card allow half-column offsets without stretching the final cards.
-    fn usage_grid(
-        &self,
-        window: &Window,
-        min_rems: f32,
-        items: impl IntoIterator<Item = impl IntoElement>,
-    ) -> Div {
-        let items: Vec<_> = items
-            .into_iter()
-            .map(IntoElement::into_any_element)
-            .collect();
-        let count = items.len();
-        let gap = gpui::rems(1.0).to_pixels(window.rem_size());
-        let min = gpui::rems(min_rems).to_pixels(window.rem_size());
-        let width = if self.usage_content_width > px(0.0) {
-            self.usage_content_width
-        } else {
-            window.viewport_size().width - gpui::rems(6.0).to_pixels(window.rem_size())
-        };
-        let mut columns =
-            (((width + gap) / (min + gap)).floor().max(1.0) as usize).min(count.max(1));
-        while columns > 1 && count % columns != 0 && (count % columns) * 2 < columns {
-            columns -= 1;
-        }
-        let remainder = count % columns;
-        let last_row = count / columns;
-        div()
-            .w_full()
-            .grid()
-            .grid_cols((columns * 2) as u16)
-            .items_stretch()
-            .gap_4()
-            .children(items.into_iter().enumerate().map(|(index, item)| {
-                let row = index / columns;
-                let offset = if row == last_row && remainder != 0 {
-                    columns - remainder
-                } else {
-                    0
-                };
-                div()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .col_span(2)
-                    .col_start((index % columns * 2 + offset + 1) as i16)
-                    .row_start((row + 1) as i16)
-                    .child(item)
-            }))
-    }
-
     /// Price-network latency must never gate token snapshots. Stale prices
     /// remain usable while this independent task refreshes the catalog.
     fn refresh_usage_pricing(&mut self, cx: &mut Context<Self>) {
@@ -557,15 +665,13 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = Theme::current(cx);
-        let first_load = self
-            .usage_stats
-            .as_ref()
-            .is_none_or(|stats| {
-                !self.usage_stats_complete && stats.entries.is_empty() && stats.refreshing
-            });
+        let first_load = self.usage_stats.as_ref().is_none_or(|stats| {
+            !self.usage_stats_complete && stats.entries.is_empty() && stats.refreshing
+        });
         let source = self.native_binary_path().zip(self.state.selected_project);
         let no_workspace = source.is_none();
-        let loading_phase = if let Some(source) = source.filter(|_| self.usage_stats_error.is_none()) {
+        let loading_phase = if let Some(source) = source.filter(|_| self.usage_stats_error.is_none())
+        {
             let (phase, wake) = LoadingDelay::observe(
                 &mut self.usage_loading,
                 source,
@@ -587,8 +693,41 @@ impl Fintwind {
             LoadingPhase::Done
         };
 
-        let mut column = div().flex().flex_col().gap_6().min_w_0().w_full();
-        let mut quota_rendered = false;
+        let summary = (loading_phase == LoadingPhase::Done
+            && self
+                .usage_stats
+                .as_ref()
+                .is_some_and(|stats| !stats.entries.is_empty())
+            && self.usage_views.totals.sessions > 0)
+            .then(|| {
+                let totals = &self.usage_views.totals;
+                let mut text = tr!("usage_page.model_sessions", count = totals.sessions);
+                if totals.active_days > 0 {
+                    text.push_str(&format!(
+                        " · {}",
+                        tr!("usage_page.active_days_value", count = totals.active_days)
+                    ));
+                }
+                if totals.cost >= 0.005 {
+                    text.push_str(&format!(" · {}", format_cost(totals.cost)));
+                }
+                tabular(div())
+                    .truncate()
+                    .text_size(ui_px(12.0))
+                    .text_color(theme.text_secondary)
+                    .child(text)
+            });
+        let filter = self.render_usage_history_filter(window, &theme, cx);
+        let top_bar = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .child(div().flex_1().min_w_0().children(summary))
+            .child(div().flex_none().child(filter));
+
+        let mut column = div().flex().flex_col().gap_4().min_w_0().w_full().child(top_bar);
 
         if let Some(error) = &self.usage_stats_error {
             column = column.child(
@@ -601,34 +740,67 @@ impl Fintwind {
                 .action(usage_retry_button(&theme, cx)),
             );
         } else if loading_phase != LoadingPhase::Done {
-            let compact = self.usage_content_width > px(0.0)
-                && self.usage_content_width < px(900.0);
-            let placeholder_opacity = if loading_phase == LoadingPhase::Visible { 1.0 } else { 0.0 };
-            let quota = self.render_usage_quota_compact(&theme, compact, cx);
-            quota_rendered = true;
-            column = column.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_4()
-                    .child(self.render_usage_history_filter(window, &theme, cx))
-                    .child(
-                        div().flex().flex_wrap().w_full().border_y_1().border_color(theme.border).py_3()
-                            .opacity(placeholder_opacity)
-                            .children((0..6).map(|_| {
-                                div().flex_1().min_w(px(120.0)).px_3().flex().flex_col().gap_1()
-                                    .child(div().w(px(72.0)).h(ui_px(12.0)).rounded(px(3.0)).bg(theme.overlay_strong))
-                                    .child(div().w(px(92.0)).h(ui_px(22.0)).rounded(px(3.0)).bg(theme.overlay_strong))
-                                    .child(div().w(px(64.0)).h(ui_px(12.0)).rounded(px(3.0)).bg(theme.overlay_strong))
-                            })),
-                    )
-                    .child(
-                        div().flex().gap_3().min_w_0()
-                            .when(compact, |row| row.flex_col())
-                            .child(usage_card(&theme).flex_1().min_h(px(282.0)).opacity(placeholder_opacity))
-                            .child(quota),
-                    ),
-            );
+            let placeholder_opacity = if loading_phase == LoadingPhase::Visible {
+                1.0
+            } else {
+                0.0
+            };
+            let cols = kpi_columns(self.usage_content_width, window);
+            let bottom_cols = two_card_columns(self.usage_content_width);
+            column = column
+                .child(
+                    div()
+                        .w_full()
+                        .grid()
+                        .grid_cols(cols)
+                        .gap_3()
+                        .opacity(placeholder_opacity)
+                        .children((0..4).map(|_| {
+                            div()
+                                .h(px(138.0))
+                                .rounded(px(13.0))
+                                .border_1()
+                                .border_color(theme.card_border())
+                                .bg(theme.inset)
+                                .p_1()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .px_2p5()
+                                        .py_1p5()
+                                        .child(div().w(px(76.0)).h(px(12.0)).rounded(px(4.0)).bg(theme.overlay_strong)),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .rounded(px(9.0))
+                                        .bg(theme.composer)
+                                        .p_3()
+                                        .flex()
+                                        .flex_col()
+                                        .justify_between()
+                                        .child(div().w(px(96.0)).h(px(24.0)).rounded(px(5.0)).bg(theme.overlay_strong))
+                                        .child(div().w(px(132.0)).h(px(12.0)).rounded(px(4.0)).bg(theme.overlay_strong)),
+                                )
+                        })),
+                )
+                .child(
+                    usage_card(&theme)
+                        .h(px(340.0))
+                        .opacity(placeholder_opacity),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .grid()
+                        .grid_cols(bottom_cols)
+                        .gap_4()
+                        .opacity(placeholder_opacity)
+                        .child(usage_card(&theme).h(px(300.0)))
+                        .child(usage_card(&theme).h(px(300.0))),
+                );
         }
 
         if no_workspace {
@@ -637,10 +809,8 @@ impl Fintwind {
                 tr!("usage_page.no_workspace_title"),
                 tr!("usage_page.no_workspace_body"),
             ));
-        } else if loading_phase == LoadingPhase::Done && let Some(stats) = self
-            .usage_stats
-            .as_ref()
-            .filter(|stats| {
+        } else if loading_phase == LoadingPhase::Done
+            && let Some(stats) = self.usage_stats.as_ref().filter(|stats| {
                 !stats.entries.is_empty() || !stats.refreshing || self.usage_stats_complete
             })
         {
@@ -651,10 +821,6 @@ impl Fintwind {
                     tr!("usage_page.empty_body"),
                 ));
             } else {
-                // A scan that ran out of pages covers only the newest
-                // sessions. The numbers below are still correct for what they
-                // cover — say what that is rather than let a quiet-looking
-                // total speak for a store it never saw.
                 if stats.truncated {
                     column = column.child(usage_notice(
                         &theme,
@@ -667,216 +833,28 @@ impl Fintwind {
                     ));
                 }
                 let views = &self.usage_views;
-                // Only the statistics subpage builds these elements. Its
-                // filter and refresh never change the subscription snapshot.
-                let mut history = div()
-                    .flex()
-                    .flex_col()
-                    .gap_4()
-                    .child(self.render_usage_history_filter(window, &theme, cx))
-                    .child(self.render_usage_kpis(views, window, &theme));
-                let compact = self.usage_content_width > px(0.0)
-                    && self.usage_content_width < px(900.0);
-                let flow = self.render_usage_flow(views, window, &theme, cx);
-                let quota = self.render_usage_quota_compact(&theme, compact, cx);
-                quota_rendered = true;
-                history = history.child(
-                    div().flex().gap_3().min_w_0()
-                        .when(compact, |row| row.flex_col())
-                        .child(flow).child(quota),
-                );
-                let trend = self.render_usage_daily(views, &theme, cx);
-                let ranking = if self.usage_ranking_provider {
-                    self.render_usage_providers(views, &theme, false, cx)
-                } else {
-                    self.render_usage_models(window, cx, views, &theme)
-                };
-                let projects = self.render_usage_projects(views, &theme, false, cx);
-                history = history.child(self.usage_grid(window, 22.0, [trend.into_any_element(), ranking.into_any_element(), projects.into_any_element()]));
-                history = history.child(self.render_usage_heatmap(views, &theme));
-                column = column.child(history);
+                let kpis = self.render_usage_kpis(views, window, &theme, cx);
+                let trend = self.render_usage_trend_chart(views, window, &theme, cx);
+                let channels = self.render_usage_channels(views, &theme, cx);
+                let activity = self.render_usage_activity_card(views, &theme, cx);
+                let bottom_cols = two_card_columns(self.usage_content_width);
+                column = column
+                    .child(kpis)
+                    .child(trend)
+                    .child(
+                        div()
+                            .w_full()
+                            .grid()
+                            .grid_cols(bottom_cols)
+                            .items_stretch()
+                            .gap_4()
+                            .child(div().min_w_0().child(channels))
+                            .child(div().min_w_0().child(activity)),
+                    );
             }
         }
 
-        if !quota_rendered {
-            column = column.child(self.render_usage_quota_compact(&theme, true, cx));
-        }
         column.into_any_element()
-    }
-
-    /// A compact view of the real subscription snapshots. Keep the detailed
-    /// subscription page available for refresh/status and overflow cases.
-    fn render_usage_quota_compact(&self, theme: &Theme, compact: bool, cx: &mut Context<Self>) -> Div {
-        let cards = self.subscription_cards();
-        let (quota_phase, wake) = if self.subscriptions_connection_error() {
-            *self.usage_quota_loading.borrow_mut() = None;
-            (LoadingPhase::Done, None)
-        } else {
-            LoadingDelay::observe(
-                &mut self.usage_quota_loading.borrow_mut(),
-                (),
-                cards.is_empty()
-                    && !self.subscriptions_connections_loaded()
-                    && self.subscriptions_loading(),
-            )
-        };
-        if let Some(wake) = wake {
-            cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(wake.delay()).await;
-                wake.fired();
-                let _ = this.update(cx, |_, cx| cx.notify());
-            })
-            .detach();
-        }
-        // Measure the actual clipped viewport instead of subtracting guessed
-        // padding from its parent. Leave the border inside the clip on all sides.
-        let viewport_width = f32::from(self.usage_quota_viewport_width);
-        let width = (viewport_width - 2.0).max(0.0);
-        let current = self.usage_quota_index.min(cards.len().saturating_sub(1));
-        let slots = cards.iter().map(|(provider, _, reading)| {
-            let (_, windows) = providers_quota::subscription_layout(provider, reading.as_ref());
-            (windows, reading.as_ref().map_or(0, |q| q.balances.len()))
-        }).fold((1, 0), |a, b| (a.0.max(b.0), a.1.max(b.1)));
-        let offset = self.usage_quota_drag.map_or(0.0, |(_, delta)| f32::from(delta));
-        let mut strip = div().id("usage-quota-drag").relative().w_full().h(px(300.0)).overflow_hidden()
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _, _| {
-                this.usage_quota_drag = Some((event.position, px(0.0)));
-                this.usage_quota_snap = None;
-            }))
-            .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
-                if event.pressed_button != Some(MouseButton::Left) { return; }
-                if let Some((start, delta)) = &mut this.usage_quota_drag {
-                    let mut next = event.position.x - start.x;
-                    let vertical = event.position.y - start.y;
-                    if f32::from(vertical).abs() > f32::from(next).abs() {
-                        next = px(0.0);
-                    }
-                    if (current == 0 && next > px(0.0)) || (current + 1 == cards.len() && next < px(0.0)) { next *= 0.25; }
-                    next = px(f32::from(next).clamp(-width, width));
-                    if *delta != next { *delta = next; cx.notify(); }
-                }
-            }))
-            .on_mouse_up(MouseButton::Left, cx.listener(move |this, _: &MouseUpEvent, _, cx| {
-                this.finish_usage_quota_drag(width, cx);
-            }))
-            .on_mouse_up_out(MouseButton::Left, cx.listener(move |this, _: &MouseUpEvent, _, cx| {
-                this.finish_usage_quota_drag(width, cx);
-            }));
-        for (i, (provider, loading, reading)) in self.subscription_cards().iter().enumerate() {
-            if width == 0.0 { continue; }
-            if i.abs_diff(current) > 1 { continue; }
-            if i != current && self.usage_quota_drag.is_none() && self.usage_quota_snap.is_none() { continue; }
-            let position = 1.0 + (i as f32 - current as f32) * width + offset;
-            let content = self.render_subscription_slide(provider, *loading, reading.as_ref(), slots, theme, cx);
-            let child = div().id(SharedString::from(format!("usage-quota-slide-{provider}")))
-                .absolute().left(px(position)).top(px(1.0)).w(px(width)).h(px(298.0))
-                .bg(theme.composer).border_1().border_color(theme.border).rounded(px(6.0)).overflow_hidden()
-                .child(div().id(SharedString::from(format!("usage-quota-content-{provider}")))
-                    .size_full().overflow_y_scroll().child(content));
-            let child = if self.usage_quota_drag.is_none() {
-                if let Some((from, generation)) = self.usage_quota_snap {
-                    child.with_animation(
-                        SharedString::from(format!("usage-quota-snap-{generation}-{i}")),
-                        Animation::new(Duration::from_millis(200)).with_easing(ease_out_quint()),
-                        move |element, progress| element.left(px(position + from * (1.0 - progress))),
-                    ).into_any_element()
-                } else { child.into_any_element() }
-            } else { child.into_any_element() };
-            strip = strip.child(child);
-        }
-        let measure = cx.listener(|this, bounds: &Bounds<Pixels>, _, cx| {
-            if this.usage_quota_viewport_width != bounds.size.width {
-                this.usage_quota_viewport_width = bounds.size.width;
-                cx.notify();
-            }
-        });
-        strip = strip.child(canvas(
-            move |bounds, window, cx| measure(&bounds, window, cx),
-            |_, _, _, _| {},
-        ).absolute().inset_0());
-        let mut positions = div().flex_none().flex().items_center().justify_center().gap_1().h(px(28.0));
-        let count = self.subscription_cards().len();
-        for i in 0..count {
-            let active = i == current;
-            let provider = self.subscription_cards()[i].0.clone();
-            positions = positions.child(div().id(SharedString::from(format!("usage-quota-position-{i}")))
-                .tab_index(0).w(px(28.0)).h(px(24.0)).flex().items_center().justify_center()
-                .tooltip(Tooltip::text(self.subscription_display_name(&provider)))
-                .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
-                .child(div().w(px(20.0)).h(px(3.0)).rounded(px(2.0)).bg(if active { theme.accent } else { theme.border_strong }))
-                .on_click(cx.listener(move |this, _, _, cx| { this.usage_quota_index = i; this.usage_quota_snap = None; cx.notify(); }))
-                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                    let target = match event.keystroke.key.as_str() {
-                        "enter" | "space" => Some(i),
-                        "left" => Some(this.usage_quota_index.saturating_sub(1)),
-                        "right" => Some((this.usage_quota_index + 1).min(count - 1)),
-                        "home" => Some(0),
-                        "end" => Some(count - 1),
-                        _ => None,
-                    };
-                    if let Some(target) = target {
-                        this.usage_quota_index = target; this.usage_quota_snap = None; cx.notify(); cx.stop_propagation();
-                    }
-                })));
-        }
-        let mut inner = div().flex().flex_col().child(strip).child(positions);
-        if quota_phase != LoadingPhase::Done {
-            inner = div().p_3().h(px(120.0)).flex().flex_col().gap(px(10.0))
-                .when(quota_phase == LoadingPhase::Visible, |body| body.children(
-                    [120.0, 180.0, 150.0].into_iter().map(|width| {
-                        div().w(px(width)).h(px(12.0)).rounded(px(3.0)).bg(theme.overlay_strong)
-                    }),
-                ));
-        } else if count == 0 {
-            inner = div().p_3().when(!self.subscriptions_connection_error(), |body| {
-                body.child(tr!("usage_page.subscriptions_empty"))
-            });
-        }
-        usage_card(theme).min_w_0().flex_none().when(compact, |card| card.w_full()).when(!compact, |card| card.w(px(300.0)))
-            .p_3().flex().flex_col().gap_2()
-            .child(div().text_size(ui_px(13.0)).font_weight(FontWeight::MEDIUM).child(tr!("usage_page.subscriptions_title")))
-            .when(self.subscriptions_connection_error(), |card| {
-                card.child(
-                    div().flex().items_center().gap(px(8.0)).text_size(ui_px(12.0))
-                        .text_color(theme.danger_text)
-                        .child(div().flex_1().min_w_0().child(tr!("usage_page.connections_failed")))
-                        .child(
-                            div().id("usage-quota-retry").tab_index(0)
-                                .text_color(theme.text_secondary)
-                                .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
-                                .child(tr!("common.retry"))
-                                .on_activation(cx, |this, _, cx| this.load_subscriptions(true, cx)),
-                        ),
-                )
-            })
-            .child(inner)
-    }
-
-    fn finish_usage_quota_drag(&mut self, width: f32, cx: &mut Context<Self>) {
-        let Some((_, offset)) = self.usage_quota_drag.take() else { return; };
-        let offset = f32::from(offset);
-        let count = self.subscription_cards().len();
-        let previous = self.usage_quota_index.min(count.saturating_sub(1));
-        let next = if offset < -36.0 { (previous + 1).min(count.saturating_sub(1)) }
-            else if offset > 36.0 { previous.saturating_sub(1) } else { previous };
-        self.usage_quota_index = next;
-        self.usage_quota_animation_generation = self.usage_quota_animation_generation.wrapping_add(1);
-        let generation = self.usage_quota_animation_generation;
-        self.usage_quota_snap = if cx.reduce_motion() { None } else {
-            Some((offset + (next as f32 - previous as f32) * width, generation))
-        };
-        if self.usage_quota_snap.is_some() {
-            cx.spawn(async move |this, cx| {
-                smol::Timer::after(Duration::from_millis(210)).await;
-                let _ = this.update(cx, |this, cx| {
-                    if this.usage_quota_snap.is_some_and(|(_, current)| current == generation) {
-                        this.usage_quota_snap = None;
-                        cx.notify();
-                    }
-                });
-            }).detach();
-        }
-        cx.notify();
     }
 
     pub(super) fn render_usage_toolbar(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
@@ -916,7 +894,12 @@ impl Fintwind {
             .items_center()
             .h_8()
             .gap_3()
-            .child(div().text_size(ui_px(16.0)).font_weight(FontWeight::MEDIUM).child(tr!("usage_page.statistics_title")))
+            .child(
+                div()
+                    .text_size(ui_px(16.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(tr!("usage_page.statistics_title")),
+            )
             .child(div().flex_1().min_w_0())
             .child(refresh)
     }
@@ -941,18 +924,25 @@ impl Fintwind {
             let date = today - ChronoDuration::days(i64::from(offset));
             let earliest = today - ChronoDuration::days(DAY_WINDOW - 1);
             let weak = cx.entity().downgrade();
-            Some(ely_gpui_component::forms::DatePicker::new(
-                "usage-day-picker", date.to_string().parse().ok(),
-            ).range(earliest.to_string().parse().ok(), today.to_string().parse().ok())
+            Some(
+                ely_gpui_component::forms::DatePicker::new(
+                    "usage-day-picker",
+                    date.to_string().parse().ok(),
+                )
+                .range(earliest.to_string().parse().ok(), today.to_string().parse().ok())
                 .on_change(move |date, _, cx| {
                     let selected = date.strftime("%Y-%m-%d").to_string();
                     if let Ok(selected) = NaiveDate::parse_from_str(&selected, "%Y-%m-%d") {
                         let offset = (Local::now().date_naive() - selected).num_days();
                         let _ = weak.update(cx, |this, cx| {
-                            this.set_usage_range(UsageRange::Day(offset.clamp(0, DAY_WINDOW - 1) as u8), cx);
+                            this.set_usage_range(
+                                UsageRange::Day(offset.clamp(0, DAY_WINDOW - 1) as u8),
+                                cx,
+                            );
                         });
                     }
-                }))
+                }),
+            )
         } else {
             None
         };
@@ -963,12 +953,21 @@ impl Fintwind {
             .items_center()
             .gap_2()
             .when(stacked, |row| row.flex_wrap())
-            .child(div().flex_none().child(selector))
             .children(day_navigation)
+            .child(div().flex_none().child(selector))
     }
 
-    fn render_usage_kpis(&self, views: &UsageViews, _window: &Window, theme: &Theme) -> Div {
+    fn render_usage_kpis(
+        &self,
+        views: &UsageViews,
+        window: &Window,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let totals = &views.totals;
+        let prev = views.prev_totals.as_ref();
+        let series = dashboard_series_colors(theme);
+
         let hit = cache_hit_percent(
             totals.cache_read,
             totals
@@ -976,252 +975,354 @@ impl Fintwind {
                 .saturating_add(totals.cache_read)
                 .saturating_add(totals.cache_write),
         );
-        let metrics = [
-            (tr!("usage_page.kpi_total_tokens"), format_tokens(totals.total()), String::new()),
-            (tr!("usage_page.tokens_input"), format_tokens(totals.input), String::new()),
-            (tr!("usage_page.kpi_generated_tokens"), format_tokens(totals.generated()), if matches!(self.usage_range, UsageRange::All) { format!("{} {} · {} {}", tr!("usage_page.tokens_output"), format_tokens(totals.output), tr!("usage_page.flow_reasoning"), format_tokens(totals.reasoning)) } else { tr!("usage_page.incl_reasoning") }),
-            (tr!("usage_page.plot_cache_read"), format_tokens(totals.cache_read), format!("{} {}", tr!("usage_page.plot_cache_write"), format_tokens(totals.cache_write))),
-            (tr!("usage_page.kpi_cache_hit"), hit.map(|value| format!("{value:.1}%")).unwrap_or_else(|| "—".into()), String::new()),
-            (tr!("usage_page.kpi_sessions"), totals.sessions.to_string(), tr!("usage_page.active_days_value", count = totals.active_days)),
-        ];
-        div().flex().flex_wrap().w_full().border_y_1().border_color(theme.border).py_3().children(
-            metrics.into_iter().map(|(label, value, caption)| {
-                div().flex_1().min_w(px(120.0)).px_3().flex().flex_col().gap_1()
-                    .child(Caption::new(label))
-                    .child(tabular(Label::new(value)).text_size(ui_px(22.0)).font_weight(FontWeight::MEDIUM))
-                    .child(Caption::new(caption))
-            })
-        )
-    }
+        let prev_hit = prev.and_then(|p| {
+            cache_hit_percent(
+                p.cache_read,
+                p.input
+                    .saturating_add(p.cache_read)
+                    .saturating_add(p.cache_write),
+            )
+        });
 
-    fn render_usage_heatmap(&self, views: &UsageViews, theme: &Theme) -> Div {
-        let card = usage_card(theme).h_full().p_5().gap_4().child(
-            CardHeader::new(tr!("usage_page.heatmap_title")).description(tr!(
-                "usage_page.heatmap_caption",
-                weeks = HEATMAP_WEEKS,
-                active = views.heatmap_active_days
-            )),
-        );
-        let mut cells = views.weeks.iter().flatten().flatten();
-        let Some(first) = cells.next() else {
-            return card;
-        };
-        let Ok(start) = first.date.to_string().parse() else {
-            return card;
-        };
-        // Omit future dates instead of drawing them as zero-usage days.
-        let counts = std::iter::once(first)
-            .chain(cells)
-            .map(|cell| cell.direct as f64);
-        card.child(
-            CalendarHeatmap::new("usage-activity", start, counts)
-                .h_48()
-                .format(|value| format_tokens(value as u64)),
-        )
-    }
-
-    fn render_usage_daily(&self, views: &UsageViews, theme: &Theme, cx: &mut Context<Self>) -> Div {
-        let single_day = matches!(self.usage_range, UsageRange::Day(_));
-        let points: Vec<UsagePlotPoint> = if single_day {
-            views
-                .hourly
-                .iter()
-                .map(|hour| UsagePlotPoint {
-                    label: format!("{:02}:00", hour.hour),
-                    input: hour.input,
-                    output: hour.output,
-                })
-                .collect()
+        let total_tokens = totals.total();
+        let direct_ratio = if total_tokens > 0 {
+            (totals.direct() as f32 / total_tokens as f32).clamp(0.0, 1.0)
         } else {
-            views
-                .daily
-                .iter()
-                .map(|day| UsagePlotPoint {
-                    label: format_day_label(day.date),
-                    input: day.input,
-                    output: day.output,
-                })
-                .collect()
+            0.0
         };
-        let use_io = single_day || self.usage_trend_io;
-        let values: Vec<u64> = points.iter().enumerate().map(|(i, point)| {
-            if use_io { point.input.saturating_add(point.output) }
-            else { views.daily.get(i).map_or(0, |day| day.total) }
-        }).collect();
-        let max = values.iter().copied().max().unwrap_or(0).max(1);
-        let mut chart = div().flex().items_end().gap(px(3.0)).w_full().h(px(128.0));
-        let mut axis = div().flex().gap(px(3.0)).w_full().h(ui_px(18.0));
-        let colors = plot_colors(theme);
-        for (i, (point, value)) in points.iter().zip(values.iter()).enumerate() {
-            let mut tick = div().relative().flex_1().min_w_0();
-            if single_day {
-                if i % 6 == 0 {
-                    tick = tick.child(
-                        div().absolute().left_0().top_0().w(ui_px(44.0)).truncate()
-                            .text_size(ui_px(10.0)).text_color(theme.text_tertiary)
-                            .child(point.label.clone()),
-                    );
-                }
-            } else if points.len() <= 12 || i % 5 == 0 {
-                tick = tick.child(
-                    div().absolute().left_0().top_0()
-                        .when(points.len() <= 12, |label| label.w_full().text_center())
-                        .when(points.len() > 12, |label| label.w(ui_px(36.0)))
-                        .truncate().text_size(ui_px(10.0)).text_color(theme.text_tertiary)
-                        .child(point.label.clone()),
-                );
-            }
-            axis = axis.child(tick);
-            if matches!(self.usage_range, UsageRange::Day(0)) && i > Local::now().hour() as usize {
-                chart = chart.child(div().flex_1().min_w_0().h_full().bg(theme.overlay));
-                continue;
-            }
-            let selection = if single_day { UsageFlowSelection::Hour(i) } else { UsageFlowSelection::Day(i) };
-            let selected = self.usage_flow_selection.as_ref() == Some(&selection);
-            let click_selection = selection.clone();
-            let key_selection = selection;
-            let value_height = ((*value as f64 / max as f64) * 112.0) as f32;
-            let mut bar = div().w_full().h(px(value_height)).flex().flex_col().justify_end();
-            if use_io && *value > 0 {
-                bar = bar.child(div().w_full().h(gpui::relative(point.output as f32 / *value as f32)).bg(colors[1].opacity(0.7)))
-                    .child(div().w_full().h(gpui::relative(point.input as f32 / *value as f32)).bg(colors[0].opacity(0.7)));
-            } else {
-                bar = bar.bg(theme.accent.opacity(0.75));
-            }
-            chart = chart.child(div().id(SharedString::from(format!("usage-trend-bar-{i}"))).tab_index(0)
-                .flex_1().min_w_0().h_full().rounded(px(4.0)).border_1()
-                .border_color(if selected { theme.accent_focus } else { gpui::transparent_black() })
-                .focus_visible(|style| style.border_color(theme.accent_focus))
-                .hover(|style| style.bg(theme.overlay))
-                .flex().flex_col().justify_end().items_center()
-                .when(points.len() <= 12, |element| element.child(div().w_full().truncate().text_center().text_size(ui_px(10.0)).text_color(theme.text_tertiary).child(format_tokens(*value))))
-                .child(bar)
-                .on_click(cx.listener(move |this, _, _, cx| {this.usage_flow_selection = Some(click_selection.clone());cx.notify();}))
-                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {this.usage_flow_selection = Some(key_selection.clone());cx.notify();cx.stop_propagation();}
-                })));
-        }
-        let selector = SegmentedControl::new("usage-trend-kind", if self.usage_trend_io {"io"} else {"total"})
-            .size(ControlSize::Sm).segment("total", tr!("usage_page.flow_total"), None)
-            .segment("io", tr!("usage_page.flow_input_generated"), None)
-            .on_change(cx.listener(|this, value: &SharedString, _, cx| { this.usage_trend_io = value.as_ref() == "io";cx.notify(); }));
-        usage_card(theme)
-            .h_full()
-            .p_3().gap_2()
-            .child(div().flex().items_center().justify_between()
-                .child(div().text_size(ui_px(13.0)).font_weight(FontWeight::MEDIUM).child(if single_day {tr!("usage_page.hourly_title")} else {tr!("usage_page.daily_title")}))
-                .when(!single_day, |header| header.child(selector)))
-            .child(div().flex().flex_col().gap_1().bg(theme.composer).border_1().border_color(theme.border).rounded(px(6.0)).p_3()
-                .child(chart)
-                .child(div().border_t_1().border_color(theme.border).pt_1().child(axis))
-                .when(single_day && views.hourly_estimated, |body| body.child(Caption::new(tr!("usage_page.hourly_estimated")))))
-    }
+        let gen_basis = totals.input.saturating_add(totals.generated());
+        let gen_ratio = if gen_basis > 0 {
+            (totals.generated() as f32 / gen_basis as f32).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let hit_ratio = (hit.unwrap_or(0.0) / 100.0).clamp(0.0, 1.0) as f32;
 
-    /// Readable model comparisons even when only one or two models were used.
-    fn render_usage_models(
-        &self,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-        views: &UsageViews,
-        theme: &Theme,
-    ) -> Div {
-        let rows = views
-            .models
-            .iter()
-            .enumerate().take(MAX_RANK_ROWS).map(|(index, row)| {
-                // The tile carries the model id; the tooltip carries the
-                // whole `provider/model`, because two providers can serve the
-                // same id and the bare one cannot tell them apart.
-                let (name, qualified) = match &row.model {
-                    Some(model) => match model.split_once('/') {
-                        Some((_, id)) => (id.to_owned(), model.clone()),
-                        None => (model.clone(), model.clone()),
-                    },
-                    None => (tr!("usage_page.unknown_model").to_owned(), String::new()),
-                };
-                UsageRankRow {
-                    id: format!("usage-model-{qualified}"),
-                    display: name,
-                    tooltip: qualified,
-                    count_label: tr!("usage_page.model_sessions", count = row.sessions),
-                    total: row.total,
-                    selection: UsageFlowSelection::Model(index),
-                }
-            })
-            .collect();
-        usage_ranking_card(
-            tr!("usage_page.models_title"),
-            tr!("usage_page.models_caption", count = views.model_count),
-            rows,
-            theme,
-            ranking_row_count(views),
-            views.totals.total(),
-            Some(usage_ranking_selector(self.usage_ranking_provider, cx)),
-            cx,
-        )
-    }
+        let cards = [
+            KpiCardSpec {
+                id: "total",
+                metric: UsageChartMetric::Total,
+                icon: IconName::Activity,
+                label: tr!("usage_page.kpi_total_tokens"),
+                header_meta: None,
+                value: format_tokens(total_tokens),
+                tick_ratio: direct_ratio,
+                color: series[0],
+                delta: relative_delta(
+                    total_tokens as f64,
+                    prev.map(|p| p.total() as f64),
+                ),
+                fallback_caption: format!(
+                    "{} {} · {} {}",
+                    tr!("usage_page.tokens_input"),
+                    format_tokens(totals.input),
+                    tr!("usage_page.tokens_cache"),
+                    format_tokens(totals.cache_read.saturating_add(totals.cache_write))
+                ),
+            },
+            KpiCardSpec {
+                id: "generated",
+                metric: UsageChartMetric::Generated,
+                icon: IconName::Sparkles,
+                label: tr!("usage_page.kpi_generated_tokens"),
+                header_meta: None,
+                value: format_tokens(totals.generated()),
+                tick_ratio: gen_ratio,
+                color: series[1],
+                delta: relative_delta(
+                    totals.generated() as f64,
+                    prev.map(|p| p.generated() as f64),
+                ),
+                fallback_caption: if matches!(self.usage_range, UsageRange::All) {
+                    format!(
+                        "{} {} · {} {}",
+                        tr!("usage_page.tokens_output"),
+                        format_tokens(totals.output),
+                        tr!("usage_page.flow_reasoning"),
+                        format_tokens(totals.reasoning)
+                    )
+                } else {
+                    format!(
+                        "{} {}",
+                        tr!("usage_page.tokens_input"),
+                        format_tokens(totals.input)
+                    )
+                },
+            },
+            KpiCardSpec {
+                id: "cache-hit",
+                metric: UsageChartMetric::CacheHit,
+                icon: IconName::Zap,
+                label: tr!("usage_page.kpi_cache_hit"),
+                header_meta: None,
+                value: hit
+                    .map(|v| format!("{v:.1}%"))
+                    .unwrap_or_else(|| "—".into()),
+                tick_ratio: hit_ratio,
+                color: series[2],
+                delta: point_delta(hit, prev_hit),
+                fallback_caption: tr!(
+                    "usage_page.cache_read_tokens",
+                    tokens = format_tokens(totals.cache_read)
+                ),
+            },
+        ];
 
-    /// The per-provider ranking: where the store's usage actually went.
-    /// Derived from the model strings the scan already carries, so it costs
-    /// no extra request and no extra protocol field.
-    fn render_usage_providers(&self, views: &UsageViews, theme: &Theme, _narrow: bool, cx: &mut Context<Self>) -> Div {
-        let rows: Vec<UsageRankRow> = views
-            .providers
-            .iter()
-            .enumerate().take(MAX_RANK_ROWS).map(|(index, row)| UsageRankRow {
-                id: format!("usage-provider-{}", row.provider),
-                tooltip: row.provider.clone(),
-                display: row.provider.clone(),
-                count_label: tr!("usage_page.provider_models", count = row.models),
-                total: row.total,
-                selection: UsageFlowSelection::Provider(index),
-            })
-            .collect();
-        usage_ranking_card(
-            tr!("usage_page.providers_title"),
-            tr!("usage_page.providers_caption", count = views.provider_count),
-            rows,
-            theme,
-            ranking_row_count(views),
-            views.totals.total(),
-            Some(usage_ranking_selector(self.usage_ranking_provider, cx)),
-            cx,
-        )
-    }
-
-    /// The per-project ranking: which working directories the store's
-    /// sessions actually ran in, largest share first.
-    fn render_usage_projects(&self, views: &UsageViews, theme: &Theme, _narrow: bool, cx: &mut Context<Self>) -> Div {
-        let rows: Vec<UsageRankRow> = views
-            .projects
-            .iter()
-            .enumerate().take(MAX_RANK_ROWS).map(|(index, row)| UsageRankRow {
-                id: format!("usage-project-{}", row.directory),
-                tooltip: row.directory.clone(),
-                display: project_display_name(&row.directory),
-                count_label: tr!("usage_page.model_sessions", count = row.sessions),
-                total: row.total,
-                selection: UsageFlowSelection::Project(index),
-            })
-            .collect();
-        usage_ranking_card(
-            tr!("usage_page.projects_title"),
-            tr!("usage_page.projects_caption", count = views.project_count),
-            rows,
-            theme,
-            ranking_row_count(views),
-            views.totals.total(),
-            None,
-            cx,
-        )
+        let cols = kpi_columns(self.usage_content_width, window);
+        let subscription_card = self.render_usage_subscription_card(theme, cx);
+        div()
+            .w_full()
+            .grid()
+            .grid_cols(cols)
+            .items_stretch()
+            .gap_3()
+            .children(cards.into_iter().map(|card| {
+                let selected = self.usage_chart_metric == card.metric;
+                render_kpi_card(card, selected, theme, cx)
+            }))
+            .child(subscription_card)
     }
 }
 
-#[derive(Clone)]
-struct UsagePlotPoint {
+struct KpiCardSpec {
+    id: &'static str,
+    metric: UsageChartMetric,
+    icon: IconName,
     label: String,
-    input: u64,
-    output: u64,
+    header_meta: Option<String>,
+    value: String,
+    tick_ratio: f32,
+    color: Hsla,
+    delta: Option<f64>,
+    fallback_caption: String,
+}
+
+fn kpi_columns(content_width: Pixels, window: &Window) -> u16 {
+    let w = if content_width > px(0.0) {
+        f32::from(content_width)
+    } else {
+        f32::from(window.viewport_size().width) - 96.0
+    };
+    if w >= 860.0 {
+        4
+    } else if w >= 480.0 {
+        2
+    } else {
+        1
+    }
+}
+
+fn two_card_columns(content_width: Pixels) -> u16 {
+    if content_width > px(0.0) && content_width < px(820.0) {
+        1
+    } else {
+        2
+    }
+}
+
+fn relative_delta(current: f64, previous: Option<f64>) -> Option<f64> {
+    let prev = previous?;
+    if prev <= 0.0 || !prev.is_finite() || !current.is_finite() {
+        return None;
+    }
+    Some((current - prev) / prev * 100.0)
+}
+
+fn point_delta(current: Option<f64>, previous: Option<f64>) -> Option<f64> {
+    let (cur, prev) = (current?, previous?);
+    if !cur.is_finite() || !prev.is_finite() {
+        return None;
+    }
+    Some(cur - prev)
+}
+
+fn render_kpi_card(
+    spec: KpiCardSpec,
+    selected: bool,
+    theme: &Theme,
+    cx: &mut Context<Fintwind>,
+) -> Stateful<Div> {
+    const TICK_COUNT: usize = 32;
+    let filled = ((spec.tick_ratio.clamp(0.0, 1.0) * TICK_COUNT as f32).round() as usize)
+        .min(TICK_COUNT);
+    let unfilled_color = theme.border_strong.opacity(if theme.is_dark { 0.6 } else { 0.8 });
+
+    let ticks = div()
+        .w_full()
+        .overflow_hidden()
+        .flex()
+        .items_center()
+        .gap(px(3.0))
+        .children((0..TICK_COUNT).map(|ix| {
+            div()
+                .w(px(2.5))
+                .h(px(7.0))
+                .rounded_full()
+                .flex_none()
+                .bg(if ix < filled {
+                    spec.color
+                } else {
+                    unfilled_color
+                })
+        }));
+
+    let footer = if let Some(delta) = spec.delta {
+        let (trend_icon, trend_color) = if delta > 0.05 {
+            (IconName::TrendingUp, theme.success_text)
+        } else if delta < -0.05 {
+            (IconName::TrendingDown, theme.danger_text)
+        } else {
+            (IconName::Minus, theme.text_tertiary)
+        };
+        let signed = if delta >= 0.0 {
+            format!("+{delta:.1}%")
+        } else {
+            format!("{delta:.1}%")
+        };
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .min_w_0()
+            .child(Icon::new(trend_icon).size(IconSize::Xs).color(trend_color))
+            .child(
+                tabular(div())
+                    .flex_none()
+                    .text_size(ui_px(12.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(trend_color)
+                    .child(signed),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(ui_px(12.0))
+                    .text_color(theme.text_secondary)
+                    .child(tr!("usage_page.vs_prior_period")),
+            )
+    } else {
+        div()
+            .min_w_0()
+            .truncate()
+            .text_size(ui_px(12.0))
+            .text_color(theme.text_tertiary)
+            .child(spec.fallback_caption)
+    };
+
+    let metric = spec.metric;
+    let outer_bg = if selected {
+        theme.overlay
+    } else {
+        theme.inset
+    };
+    let outer_border = if selected {
+        theme.border_strong
+    } else {
+        theme.card_border()
+    };
+
+    div()
+        .id(SharedString::from(format!("usage-kpi-{}", spec.id)))
+        .role(gpui::Role::Button)
+        .tab_index(0)
+        .min_w_0()
+        .rounded(px(13.0))
+        .border_1()
+        .border_color(outer_border)
+        .bg(outer_bg)
+        .shadow_xs()
+        .p(px(4.0))
+        .flex()
+        .flex_col()
+        .cursor_pointer()
+        .focus_visible(|style| style.border_color(theme.accent_focus))
+        .hover(|style| style.bg(theme.overlay))
+        .on_activation(cx, move |this, _, cx| {
+            if this.usage_chart_metric != metric {
+                this.usage_chart_metric = metric;
+                cx.notify();
+            }
+        })
+        .child(
+            div()
+                .px_2()
+                .py_1p5()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .child(
+                            Icon::new(spec.icon)
+                                .size(IconSize::Sm)
+                                .color(theme.text_tertiary),
+                        )
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(ui_px(12.5))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(theme.text_secondary)
+                                .child(spec.label),
+                        ),
+                )
+                .children(spec.header_meta.map(|meta| {
+                    tabular(div())
+                        .flex_none()
+                        .text_size(ui_px(11.0))
+                        .text_color(theme.text_tertiary)
+                        .child(meta)
+                })),
+        )
+        .child(
+            div()
+                .flex_1()
+                .rounded(px(9.0))
+                .border_1()
+                .border_color(theme.card_border())
+                .bg(theme.composer)
+                .px_3()
+                .py_2p5()
+                .flex()
+                .flex_col()
+                .justify_between()
+                .gap_3()
+                .child(
+                    tabular(div())
+                        .truncate()
+                        .text_size(ui_px(22.0))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.text)
+                        .child(spec.value),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(ticks)
+                        .child(footer),
+                ),
+        )
+}
+
+/// Primary dashboard palette inspired by the analytics reference, adapted
+/// cleanly for both light and dark themes.
+pub(super) fn dashboard_series_colors(theme: &Theme) -> [Hsla; 5] {
+    let colors = if theme.is_dark {
+        [0xff6e4a, 0x60a5fa, 0x34d399, 0xfacc15, 0xf472b6]
+    } else {
+        [0xfd4b23, 0x2563eb, 0x18b170, 0xe8b41c, 0xec4899]
+    };
+    colors.map(|color| rgb(color).into())
 }
 
 /// The hue series every chart on this page draws from. The treemap borrows it
@@ -1233,116 +1334,6 @@ pub(super) fn plot_colors(theme: &Theme) -> [Hsla; 5] {
         [0x1d4ed8, 0x15803d, 0xc2410c, 0x7e22ce, 0xbe123c]
     };
     colors.map(|color| rgb(color).into())
-}
-
-/// One row of a usage ranking card. The model, provider, and project rankings
-/// differ only in what fills these fields, so they share one renderer; the
-/// alternative was three copies of the same bar, tooltip, and focus handling.
-struct UsageRankRow {
-    id: String,
-    /// The label, truncated to fit its column.
-    display: String,
-    /// Full model identity or directory for the tooltip.
-    tooltip: String,
-    /// The trailing count, already localized — "3 个会话" or "2 个模型".
-    count_label: String,
-    total: u64,
-    selection: UsageFlowSelection,
-}
-
-fn usage_ranking_selector(provider: bool, cx: &mut Context<Fintwind>) -> AnyElement {
-    SegmentedControl::new("usage-ranking-kind", if provider { "provider" } else { "model" })
-        .size(ControlSize::Sm)
-        .segment("model", tr!("usage_page.models_title"), None)
-        .segment("provider", tr!("usage_page.providers_title"), None)
-        .on_change(cx.listener(|this, value: &SharedString, _, cx| {
-            this.usage_ranking_provider = value.as_ref() == "provider";
-            cx.notify();
-        }))
-        .into_any_element()
-}
-
-/// Horizontal share comparisons using the same total across all three cards.
-/// Ely rows keep names and exact figures readable without hovering; the bars
-/// sit directly below their labels instead of duplicating the ranking.
-fn usage_ranking_card(
-    title: String,
-    caption: String,
-    rows: Vec<UsageRankRow>,
-    theme: &Theme,
-    row_count: usize,
-    total: u64,
-    selector: Option<AnyElement>,
-    cx: &mut Context<Fintwind>,
-) -> Div {
-    let list = List::new().divided().children(rows.into_iter().map(|row| {
-        let share = if total > 0 {
-            row.total as f64 / total as f64 * 100.0
-        } else {
-            0.0
-        };
-        let key_selection = row.selection.clone();
-        let click_selection = row.selection;
-        div()
-            .id(SharedString::from(format!("{}-detail", row.id)))
-            .tab_index(0)
-            .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
-            .on_click(cx.listener(move |this, _, _, cx| {this.usage_flow_selection = Some(click_selection.clone());cx.notify();}))
-            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                if matches!(event.keystroke.key.as_str(), "enter" | "space") {this.usage_flow_selection = Some(key_selection.clone());cx.notify();cx.stop_propagation();}
-            }))
-            .min_h(gpui::rems(2.0))
-            .tooltip(Tooltip::text(row.tooltip))
-            .child(
-                ListItem::new(SharedString::from(row.id), row.display)
-                    .description(row.count_label)
-                    .trailing(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .items_end()
-                            .gap_0p5()
-                            .child(tabular(Label::new(format_tokens(row.total))))
-                            .child(tabular(Caption::new(format!("{share:.1}%")))),
-                    ),
-            )
-            .child(
-                div().px_3().pb_3().child(
-                    div()
-                        .w_full()
-                        .h(px(8.0))
-                        .rounded(px(3.0))
-                        .overflow_hidden()
-                        .bg(theme.accent.opacity(0.12))
-                        .child(
-                            div()
-                                .h_full()
-                                .w(gpui::relative((share / 100.0).clamp(0.0, 1.0) as f32))
-                                .rounded(px(3.0))
-                                .bg(theme.accent),
-                        ),
-                ),
-            )
-    }));
-    usage_card(theme)
-        .h_full()
-        .p_3()
-        .gap_2()
-        .child(div().flex().items_center().justify_between().gap_2()
-            .child(CardHeader::new(title).action(Caption::new(caption)))
-            .children(selector))
-        .child(div().bg(theme.composer).border_1().border_color(theme.border).rounded(px(6.0))
-            .min_h(gpui::rems(2.0 * row_count as f32)).child(list))
-}
-
-fn ranking_row_count(views: &UsageViews) -> usize {
-    views
-        .models
-        .len()
-        .max(views.providers.len())
-        .max(views.projects.len())
-        .min(MAX_RANK_ROWS)
-        .max(1)
 }
 
 /// Product-owned surface treatment around Ely content. Match the composer
@@ -2075,6 +2066,7 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
     let bar_start = selected_day.unwrap_or(today - ChronoDuration::days(bar_horizon - 1));
 
     let mut totals = UsageTotals::default();
+    let mut prev_totals = (!matches!(range, UsageRange::All)).then(UsageTotals::default);
     // Day buckets are built from every entry: the heatmap shows its fixed
     // 26-week window however narrow the selected range is. The range only
     // gates what the totals, daily bars, and rankings count.
@@ -2085,6 +2077,14 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
             ..Default::default()
         })
         .collect::<Vec<_>>();
+    let mut prev_hourly = selected_day.map(|_| {
+        (0..24)
+            .map(|hour| UsageHour {
+                hour,
+                ..Default::default()
+            })
+            .collect::<Vec<_>>()
+    });
     let mut hourly_estimated = false;
     // Model rows key on the raw `provider/id` string, except a session the
     // server recorded no model for — it folds into the unknown-model row so
@@ -2099,6 +2099,8 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
     // ranks as one; the first-seen spelling is what gets displayed.
     let mut projects: HashMap<String, (String, u32, u64, f64)> = HashMap::new();
     let mut range_days: std::collections::HashSet<NaiveDate> = std::collections::HashSet::new();
+    let mut prev_range_days: std::collections::HashSet<NaiveDate> =
+        std::collections::HashSet::new();
 
     for entry in &stats.entries {
         let mut session_days = std::collections::HashSet::new();
@@ -2110,6 +2112,23 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
         } else {
             None
         };
+        if let Some(prev_totals) = &mut prev_totals {
+            let prev_entry = if let Some(date) = selected_day {
+                entry_on_day(entry, date - ChronoDuration::days(1))
+            } else if let Some(days) = range.days() {
+                let start = today - ChronoDuration::days(days - 1);
+                let prev_start = start - ChronoDuration::days(days);
+                entry_in_dates(entry, |date| date >= prev_start && date < start)
+            } else {
+                None
+            };
+            if let Some(prev_in_range) = prev_entry {
+                prev_totals.add(&prev_in_range);
+                if let Some(date) = local_date(prev_in_range.timestamp) {
+                    prev_range_days.insert(date);
+                }
+            }
+        }
         let in_range = if matches!(range, UsageRange::All) {
             Some(entry)
         } else {
@@ -2162,6 +2181,16 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
                 |selected| date == selected,
             ) {
                 range_days.insert(date);
+            } else if let Some(selected) = selected_day {
+                if date == selected - ChronoDuration::days(1) {
+                    prev_range_days.insert(date);
+                }
+            } else if let Some(days) = range.days() {
+                let start = today - ChronoDuration::days(days - 1);
+                let prev_start = start - ChronoDuration::days(days);
+                if date >= prev_start && date < start {
+                    prev_range_days.insert(date);
+                }
             }
             let day = days.entry(date).or_insert_with(|| empty_day(date));
             day.total = day.total.saturating_add(lane.total);
@@ -2176,70 +2205,16 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
             }
         }
         if let Some(selected) = selected_day {
-            if entry.hours.is_empty() {
-                if entry.total_tokens() > 0 && local_date(entry.timestamp) == Some(selected) {
-                    hourly_estimated = true;
-                    let hour = local_hour(entry.timestamp) as usize;
-                    let bucket = &mut hourly[hour];
-                    bucket.input = bucket.input.saturating_add(entry.input_tokens);
-                    bucket.output = bucket
-                        .output
-                        .saturating_add(entry.output_tokens.saturating_add(entry.reasoning_tokens));
-                    bucket.cache_read = bucket.cache_read.saturating_add(entry.cache_read_tokens);
-                    bucket.cache_write =
-                        bucket.cache_write.saturating_add(entry.cache_write_tokens);
-                    bucket.cost += entry.cost.unwrap_or_default();
-                }
-            } else {
-                for share in &entry.hours {
-                    if local_date(share.timestamp) != Some(selected) {
-                        continue;
-                    }
-                    hourly_estimated |= share.estimated;
-                    let bucket = &mut hourly[local_hour(share.timestamp) as usize];
-                    bucket.input = bucket.input.saturating_add(share.input);
-                    bucket.output = bucket.output.saturating_add(share.output);
-                    bucket.cache_read = bucket.cache_read.saturating_add(share.cache_read);
-                    bucket.cache_write = bucket.cache_write.saturating_add(share.cache_write);
-                    bucket.cost += share.cost;
-                }
-                // A session summary can contain tokens absent from its
-                // message walk (including folded sub-agents). Attribute the
-                // unlocated remainder to last activity.
-                if local_date(entry.timestamp) == Some(selected) {
-                    let missing_input = entry
-                        .input_tokens
-                        .saturating_sub(entry.hours.iter().map(|h| h.input).sum());
-                    let missing_output = entry
-                        .output_tokens
-                        .saturating_add(entry.reasoning_tokens)
-                        .saturating_sub(entry.hours.iter().map(|h| h.output).sum());
-                    let missing_read = entry
-                        .cache_read_tokens
-                        .saturating_sub(entry.hours.iter().map(|h| h.cache_read).sum());
-                    let missing_write = entry
-                        .cache_write_tokens
-                        .saturating_sub(entry.hours.iter().map(|h| h.cache_write).sum());
-                    let missing_cost = (entry.cost.unwrap_or_default()
-                        - entry.hours.iter().map(|h| h.cost).sum::<f64>())
-                    .max(0.0);
-                    // Ignore floating-point dust from the pricing pass.
-                    hourly_estimated |= missing_input > 0
-                        || missing_output > 0
-                        || missing_read > 0
-                        || missing_write > 0
-                        || missing_cost > 0.005;
-                    let bucket = &mut hourly[local_hour(entry.timestamp) as usize];
-                    bucket.input = bucket.input.saturating_add(missing_input);
-                    bucket.output = bucket.output.saturating_add(missing_output);
-                    bucket.cache_read = bucket.cache_read.saturating_add(missing_read);
-                    bucket.cache_write = bucket.cache_write.saturating_add(missing_write);
-                    bucket.cost += missing_cost;
-                }
+            hourly_estimated |= accumulate_day_hours(entry, selected, &mut hourly);
+            if let Some(prev_hourly) = &mut prev_hourly {
+                accumulate_day_hours(entry, selected - ChronoDuration::days(1), prev_hourly);
             }
         }
     }
     totals.active_days = range_days.len() as u32;
+    if let Some(prev_totals) = &mut prev_totals {
+        prev_totals.active_days = prev_range_days.len() as u32;
+    }
 
     let mut daily = Vec::with_capacity(bar_horizon as usize);
     for offset in 0..bar_horizon {
@@ -2248,6 +2223,17 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
         let day = days.get(&date).cloned().unwrap_or_else(|| empty_day(date));
         daily.push(day);
     }
+    let prev_daily = if selected_day.is_none() && !matches!(range, UsageRange::All) {
+        let prev_start = bar_start - ChronoDuration::days(bar_horizon);
+        (0..bar_horizon)
+            .map(|offset| {
+                let date = prev_start + ChronoDuration::days(offset);
+                days.get(&date).cloned().unwrap_or_else(|| empty_day(date))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     // The heatmap window ends on this week's Sunday, so the final column
     // always contains today and every column starts on a Monday. Days past
@@ -2298,6 +2284,45 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
         .map(<[Option<UsageHeatCell>]>::to_vec)
         .collect();
 
+    let matrix_start = today + ChronoDuration::days(6 - today_weekday)
+        - ChronoDuration::days(MATRIX_WEEKS * 7 - 1);
+    let mut weekly_matrix = Vec::with_capacity(MATRIX_WEEKS as usize);
+    let mut matrix_active_days = 0u32;
+    for week_ix in 0..MATRIX_WEEKS {
+        let week_monday = matrix_start + ChronoDuration::days(week_ix * 7);
+        let mut row_cells: [Option<UsageWeekMatrixCell>; 7] = [None; 7];
+        let mut direct_total = 0u64;
+        for (day_ix, slot) in row_cells.iter_mut().enumerate() {
+            let date = week_monday + ChronoDuration::days(day_ix as i64);
+            if date <= today {
+                let day = days.get(&date);
+                let direct = day.map_or(0, |d| d.direct);
+                let total = day.map_or(0, |d| d.total);
+                let sessions = day.map_or(0, |d| d.sessions);
+                if direct > 0 {
+                    matrix_active_days += 1;
+                }
+                direct_total = direct_total.saturating_add(direct);
+                *slot = Some(UsageWeekMatrixCell {
+                    date,
+                    direct,
+                    total,
+                    sessions,
+                });
+            }
+        }
+        let label = if week_ix + 1 == MATRIX_WEEKS {
+            tr!("usage_page.this_week")
+        } else {
+            format_day_label(week_monday)
+        };
+        weekly_matrix.push(UsageWeekMatrixRow {
+            label,
+            direct_total,
+            cells: row_cells,
+        });
+    }
+
     // Providers roll up the model rows, before the ranking is truncated: the
     // provider's model count and total must stay right even when only the top
     // N models are shown. Rolling up here rather than while walking sessions
@@ -2317,12 +2342,11 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
     let mut models: Vec<UsageModelRow> = models
         .into_iter()
         .map(
-            |(model, (sessions, total, _cost, last_used))| UsageModelRow {
+            |(model, (sessions, total, cost, last_used))| UsageModelRow {
                 model,
                 sessions,
                 total,
-                #[cfg(test)]
-                cost: _cost,
+                cost,
                 last_used,
             },
         )
@@ -2332,23 +2356,23 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
 
     let mut provider_rows: Vec<UsageProviderRow> = providers
         .into_iter()
-        .map(|(provider, (models, total, _))| UsageProviderRow {
+        .map(|(provider, (models, total, cost))| UsageProviderRow {
             provider,
             models,
             total,
+            cost,
         })
         .collect();
-    provider_rows.sort_by(|a, b| b.total.cmp(&a.total));
+    provider_rows.sort_by_key(|b| std::cmp::Reverse(b.total));
     let provider_count = provider_rows.len();
 
     let mut projects: Vec<UsageProjectRow> = projects
         .into_iter()
-        .map(|(_, (directory, sessions, total, _cost))| UsageProjectRow {
+        .map(|(_, (directory, sessions, total, cost))| UsageProjectRow {
             directory,
             sessions,
             total,
-            #[cfg(test)]
-            cost: _cost,
+            cost,
         })
         .collect();
     projects.sort_by(|a, b| b.total.cmp(&a.total).then(b.directory.cmp(&a.directory)));
@@ -2356,11 +2380,16 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
 
     UsageViews {
         totals,
+        prev_totals,
         daily,
+        prev_daily,
         hourly,
+        prev_hourly: prev_hourly.unwrap_or_default(),
         hourly_estimated,
         weeks,
         heatmap_active_days,
+        weekly_matrix,
+        matrix_active_days,
         models,
         model_count,
         providers: provider_rows,
@@ -2368,6 +2397,77 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
         projects,
         project_count,
     }
+}
+
+fn accumulate_day_hours(
+    entry: &UsageEntry,
+    target_day: NaiveDate,
+    hourly: &mut [UsageHour],
+) -> bool {
+    let mut estimated = false;
+    if entry.hours.is_empty() {
+        if entry.total_tokens() > 0 && local_date(entry.timestamp) == Some(target_day) {
+            estimated = true;
+            let hour = local_hour(entry.timestamp) as usize;
+            let bucket = &mut hourly[hour];
+            bucket.input = bucket.input.saturating_add(entry.input_tokens);
+            bucket.output = bucket
+                .output
+                .saturating_add(entry.output_tokens.saturating_add(entry.reasoning_tokens));
+            bucket.cache_read = bucket.cache_read.saturating_add(entry.cache_read_tokens);
+            bucket.cache_write = bucket
+                .cache_write
+                .saturating_add(entry.cache_write_tokens);
+            bucket.cost += entry.cost.unwrap_or_default();
+        }
+    } else {
+        for share in &entry.hours {
+            if local_date(share.timestamp) != Some(target_day) {
+                continue;
+            }
+            estimated |= share.estimated;
+            let bucket = &mut hourly[local_hour(share.timestamp) as usize];
+            bucket.input = bucket.input.saturating_add(share.input);
+            bucket.output = bucket.output.saturating_add(share.output);
+            bucket.cache_read = bucket.cache_read.saturating_add(share.cache_read);
+            bucket.cache_write = bucket.cache_write.saturating_add(share.cache_write);
+            bucket.cost += share.cost;
+        }
+        // A session summary can contain tokens absent from its
+        // message walk (including folded sub-agents). Attribute the
+        // unlocated remainder to last activity.
+        if local_date(entry.timestamp) == Some(target_day) {
+            let missing_input = entry
+                .input_tokens
+                .saturating_sub(entry.hours.iter().map(|h| h.input).sum());
+            let missing_output = entry
+                .output_tokens
+                .saturating_add(entry.reasoning_tokens)
+                .saturating_sub(entry.hours.iter().map(|h| h.output).sum());
+            let missing_read = entry
+                .cache_read_tokens
+                .saturating_sub(entry.hours.iter().map(|h| h.cache_read).sum());
+            let missing_write = entry
+                .cache_write_tokens
+                .saturating_sub(entry.hours.iter().map(|h| h.cache_write).sum());
+            let missing_cost = (entry.cost.unwrap_or_default()
+                - entry.hours.iter().map(|h| h.cost).sum::<f64>())
+            .max(0.0);
+            // Ignore floating-point dust from the pricing pass.
+            estimated |= missing_input > 0
+                || missing_output > 0
+                || missing_read > 0
+                || missing_write > 0
+                || missing_cost > 0.005;
+            let bucket = &mut hourly[local_hour(entry.timestamp) as usize];
+            bucket.input = bucket.input.saturating_add(missing_input);
+            bucket.output = bucket.output.saturating_add(missing_output);
+            bucket.cache_read = bucket.cache_read.saturating_add(missing_read);
+            bucket.cache_write = bucket.cache_write.saturating_add(missing_write);
+            bucket.cost += missing_cost;
+        }
+    }
+    estimated
 }
 
 fn local_hour(timestamp: u64) -> u32 {

@@ -1728,6 +1728,25 @@ usage_page.cost_unknown: 暂无费用数据
 usage_page.connections_failed: 无法读取已连接的服务
 usage_page.subscriptions_caption: 共 %{count} 个服务
 usage_page.history_title: 历史统计
+usage_page.vs_prior_period: 较上一周期
+usage_page.this_period: 本周期
+usage_page.previous_period: 上一周期
+usage_page.compare_previous: 对比：上一周期
+usage_page.compare_off: 对比：关闭
+usage_page.daily_granularity: 每日
+usage_page.hourly_granularity: 按小时
+usage_page.matrix_title: 活跃分布
+usage_page.matrix_caption: 近 %{weeks} 周 · 活跃 %{active} 天
+usage_page.matrix_weekly: 周矩阵
+usage_page.matrix_heatmap: 热力图
+usage_page.this_week: 本周
+usage_page.weekday_tue: 二
+usage_page.weekday_thu: 四
+usage_page.weekday_sat: 六
+usage_page.weekday_sun: 日
+usage_page.click_refresh: 点击刷新
+usage_page.kpi_balance: 订阅余额
+usage_page.quota_back: 返回
 tabs.new_session: 新建会话标签
 tabs.close: 关闭标签
 tabs.waiting: 等待你的输入

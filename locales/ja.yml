@@ -1645,6 +1645,25 @@ usage_page.cost_unknown: コストデータなし
 usage_page.connections_failed: 接続済みサービスを取得できません
 usage_page.subscriptions_caption: "%{count} サービス"
 usage_page.history_title: 履歴
+usage_page.vs_prior_period: 前期間比
+usage_page.this_period: 今期間
+usage_page.previous_period: 前期間
+usage_page.compare_previous: "比較：前期間"
+usage_page.compare_off: "比較：オフ"
+usage_page.daily_granularity: 日別
+usage_page.hourly_granularity: 時間別
+usage_page.matrix_title: アクティビティ分布
+usage_page.matrix_caption: "直近%{weeks}週間 · アクティブ%{active}日"
+usage_page.matrix_weekly: 週間マトリクス
+usage_page.matrix_heatmap: ヒートマップ
+usage_page.this_week: 今週
+usage_page.weekday_tue: 火
+usage_page.weekday_thu: 木
+usage_page.weekday_sat: 土
+usage_page.weekday_sun: 日
+usage_page.click_refresh: クリックして更新
+usage_page.kpi_balance: 残高・利用枠
+usage_page.quota_back: 戻る
 tabs.new_session: 新規セッションタブ
 tabs.close: タブを閉じる
 tabs.waiting: 入力を待っています

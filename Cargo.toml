@@ -131,13 +131,29 @@ lto = "thin"
 codegen-units = 1
 strip = true
 
-# Keep debug assertions and incremental builds for app code, but do not run
-# GPUI's text shaping and Taffy layout hot paths completely unoptimized.
+# Optimize debug builds aggressively for compile speed and minimal artifact size:
+# keep workspace crates at opt-level = 0 for fast incremental checks/builds,
+# use lightweight opt-level = 1 for dependencies to prevent multi-GB .rlib
+# bloat while staying much faster than opt-level = 2, omit debuginfo/PDBs,
+# strip symbol tables, and disable overflow checks while preserving
+# debug_assertions (Dev channel identity) and incremental compilation.
 [profile.dev]
-opt-level = 1
+opt-level = 0
+debug = 0
+strip = "symbols"
+overflow-checks = false
 
 [profile.dev.package."*"]
-opt-level = 2
+opt-level = 1
+
+[profile.dev.build-override]
+opt-level = 0
+debug = 0
+strip = "debuginfo"
+
+# Prevent test binaries from accumulating per-target incremental caches.
+[profile.test]
+incremental = false
 
 # `block` 0.1.6 declares an extern static with an uninhabited type. This fork
 # is the crates.io release plus the future-incompatibility fix only.

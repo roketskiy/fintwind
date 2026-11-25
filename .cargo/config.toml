@@ -25,7 +25,7 @@ TS_RS_LARGE_INT = "number"
 # re-evaluate this trade-off.
 [target.'cfg(target_os = "windows")']
 linker = "rust-lld"
-rustflags = ["-C", "target-feature=+crt-static"]
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=/DEBUG:NONE"]
 
 [build]
 jobs = 4

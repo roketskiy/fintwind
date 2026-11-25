@@ -501,6 +501,22 @@ fn render_sent_message_attachments(
     if attachments.is_empty() {
         return None;
     }
+    let mut gallery_items = Vec::new();
+    let mut attachment_gallery_indices = vec![None; attachments.len()];
+    for (index, attachment) in attachments.iter().enumerate() {
+        if attachment.is_image
+            && let Some(Some(image)) = attachment_images.get(index)
+        {
+            let gallery_index = gallery_items.len();
+            attachment_gallery_indices[index] = Some(gallery_index);
+            gallery_items.push(image_preview::ImagePreviewItem::from_image(
+                image.clone(),
+                SharedString::from(attachment.name.clone()),
+                (!attachment.path.as_os_str().is_empty()).then(|| attachment.path.clone()),
+                can_reveal,
+            ));
+        }
+    }
     let mut row = div()
         .max_w(px(540.0))
         .flex()
@@ -534,13 +550,13 @@ fn render_sent_message_attachments(
             .tooltip(Tooltip::text(attachment.name.clone()));
         if attachment.is_image {
             let key_menu = menu.clone();
-            if let Some(attachment_image) = attachment_image.as_ref() {
+            if let (Some(attachment_image), Some(gallery_index)) =
+                (attachment_image.as_ref(), attachment_gallery_indices[index])
+            {
                 let preview_fintwind = fintwind.clone();
                 let key_fintwind = fintwind.clone();
-                let preview_image = attachment_image.clone();
-                let key_image = attachment_image.clone();
-                let preview_name = SharedString::from(attachment.name.clone());
-                let key_name = preview_name.clone();
+                let click_gallery = gallery_items.clone();
+                let key_gallery = gallery_items.clone();
                 tile = tile.child(
                     div()
                         .id(SharedString::from(format!(
@@ -548,11 +564,13 @@ fn render_sent_message_attachments(
                         )))
                         .size_full()
                         .cursor_default()
+                        .hover(|element| element.opacity(0.85))
+                        .active(|element| element.opacity(0.72))
                         .on_click(move |_, window, cx| {
                             let _ = preview_fintwind.update(cx, |this, cx| {
-                                this.open_image_preview(
-                                    preview_image.clone(),
-                                    preview_name.clone(),
+                                this.open_image_preview_gallery(
+                                    click_gallery.clone(),
+                                    gallery_index,
                                     window,
                                     cx,
                                 );
@@ -569,9 +587,9 @@ fn render_sent_message_attachments(
                     let key = event.keystroke.key.as_str();
                     if matches!(key, "enter" | "space") {
                         let _ = key_fintwind.update(cx, |this, cx| {
-                            this.open_image_preview(
-                                key_image.clone(),
-                                key_name.clone(),
+                            this.open_image_preview_gallery(
+                                key_gallery.clone(),
+                                gallery_index,
                                 window,
                                 cx,
                             );

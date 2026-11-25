@@ -3610,11 +3610,45 @@ impl Fintwind {
                 }
                 detail_card = detail_card.child(section_view);
             }
+            let activity_images = activity
+                .image_urls
+                .iter()
+                .map(|image_url| {
+                    self.image_for_reference(image_url, None, None, cx)
+                        .or_else(|| decode_activity_image(image_url))
+                })
+                .collect::<Vec<_>>();
+            let mut gallery_items = Vec::new();
+            let mut activity_gallery_indices = vec![None; activity.image_urls.len()];
             for (image_index, image_url) in activity.image_urls.iter().enumerate() {
-                let image = self.image_for_reference(image_url, None, None, cx);
+                if let Some(image) = activity_images[image_index].as_ref() {
+                    let gallery_index = gallery_items.len();
+                    activity_gallery_indices[image_index] = Some(gallery_index);
+                    gallery_items.push(image_preview::ImagePreviewItem::from_image(
+                        image.clone(),
+                        activity_image_display_name(
+                            image_url,
+                            image.format,
+                            image_index,
+                        ),
+                        None,
+                        false,
+                    ));
+                }
+            }
+            let weak_fintwind = cx.entity().downgrade();
+            for (image_index, image_url) in activity.image_urls.iter().enumerate() {
+                let focus = self.transcript_control_focus(
+                    format!("activity-image-{id}-{image_index}"),
+                    cx,
+                );
                 detail_card = detail_card.child(render_activity_image(
                     image_url,
-                    image,
+                    activity_images[image_index].clone(),
+                    activity_gallery_indices[image_index].map(|gallery_index| {
+                        (weak_fintwind.clone(), gallery_items.clone(), gallery_index)
+                    }),
+                    focus,
                     id,
                     image_index,
                     theme,
@@ -4070,29 +4104,103 @@ fn scroll_edge_fade(
     })
 }
 
+fn activity_image_display_name(
+    image_url: &str,
+    format: gpui::ImageFormat,
+    image_index: usize,
+) -> SharedString {
+    let ext = image_preview::extension_for_image_format(format);
+    if !image_url.starts_with("data:")
+        && !fintwind_protocol::blob::is_reference(image_url)
+        && !image_url.starts_with(fintwind_protocol::attachments::ATTACHMENT_SCHEME)
+        && let Some(file_name) = Path::new(image_url)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+    {
+        return SharedString::from(file_name.to_owned());
+    }
+    SharedString::from(format!("image-{}.{ext}", image_index + 1))
+}
+
 fn render_activity_image(
     image_url: &str,
     image: Option<Arc<gpui::Image>>,
+    preview_target: Option<(
+        gpui::WeakEntity<Fintwind>,
+        Vec<image_preview::ImagePreviewItem>,
+        usize,
+    )>,
+    focus: FocusHandle,
     activity_id: Uuid,
     image_index: usize,
     theme: &Theme,
 ) -> AnyElement {
     // Daemon blobs arrive only when a visible row requests them and GPUI keeps
-    // their decoded form in memory. Only legacy inline data URLs still pay a
-    // per-render base64 decode.
+    // their decoded form in memory. Data URLs are decoded once per row build
+    // when creating the activity gallery.
     let id = SharedString::from(format!("activity-image-{activity_id}-{image_index}"));
     if let Some(image) = image {
-        return img(image)
-            .id(id)
+        let mut preview_box = div()
+            .id(id.clone())
             .w(px(ACTIVITY_IMAGE_WIDTH))
             .max_w(gpui::relative(1.0))
             .max_h(px(ACTIVITY_IMAGE_HEIGHT))
             .mt(px(8.0))
             .rounded(px(4.0))
+            .overflow_hidden()
             .border_1()
             .border_color(theme.border)
-            .object_fit(ObjectFit::Contain)
-            .into_any_element();
+            .child(
+                img(image)
+                    .w_full()
+                    .max_h(px(ACTIVITY_IMAGE_HEIGHT))
+                    .object_fit(ObjectFit::Contain),
+            );
+        if let Some((fintwind, gallery_items, gallery_index)) = preview_target {
+            let name = gallery_items[gallery_index].name.clone();
+            let click_fintwind = fintwind.clone();
+            let click_gallery = gallery_items.clone();
+            let key_fintwind = fintwind;
+            let key_gallery = gallery_items;
+            preview_box = preview_box
+                .track_focus(&focus)
+                .tab_index(0)
+                .cursor_pointer()
+                .focus_visible(|style| style.border_color(theme.accent))
+                .hover(|style| style.opacity(0.9))
+                .active(|style| style.opacity(0.78))
+                .tooltip(Tooltip::text(tr!(
+                    "attachments.open_preview",
+                    name = name.as_ref()
+                )))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(move |_, window, cx| {
+                    let _ = click_fintwind.update(cx, |this, cx| {
+                        this.open_image_preview_gallery(
+                            click_gallery.clone(),
+                            gallery_index,
+                            window,
+                            cx,
+                        );
+                    });
+                    cx.stop_propagation();
+                })
+                .on_key_down(move |event: &KeyDownEvent, window, cx| {
+                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                        let _ = key_fintwind.update(cx, |this, cx| {
+                            this.open_image_preview_gallery(
+                                key_gallery.clone(),
+                                gallery_index,
+                                window,
+                                cx,
+                            );
+                        });
+                        cx.stop_propagation();
+                    }
+                });
+        }
+        return preview_box.into_any_element();
     }
     if fintwind_protocol::blob::is_reference(image_url)
         || image_url.starts_with(fintwind_protocol::attachments::ATTACHMENT_SCHEME)
@@ -4130,7 +4238,7 @@ fn render_activity_image(
     .into_any_element()
 }
 
-fn decode_activity_image(image_url: &str) -> Option<std::sync::Arc<gpui::Image>> {
+pub(super) fn decode_activity_image(image_url: &str) -> Option<std::sync::Arc<gpui::Image>> {
     let (header, encoded) = image_url.split_once(",")?;
     let mime_type = header.strip_prefix("data:")?.split(';').next()?;
     let format = gpui::ImageFormat::from_mime_type(mime_type)?;

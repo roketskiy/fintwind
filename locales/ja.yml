@@ -1817,3 +1817,18 @@ composer.queued_messages: "送信待ち · %{count}"
 settings.watchdog: 繰り返し出力の保護
 settings.watchdog_description: モデルの返信またはツール呼び出しと結果が10回連続で同じ場合、タスクを停止します。
 errors.watchdog_repeat: 同じ出力が10回連続したため、タスクを停止しています。
+image_preview.previous: 前の画像
+image_preview.next: 次の画像
+image_preview.fit_to_window: ウィンドウに合わせる
+image_preview.fit_short: フィット
+image_preview.actual_size: 実際のサイズ (1:1)
+image_preview.rotate_left: 左に90°回転
+image_preview.rotate_right: 右に90°回転
+image_preview.copy_image: 画像をコピー
+image_preview.copied_toast: 画像をクリップボードにコピーしました
+image_preview.copy_failed: 画像をコピーできませんでした
+image_preview.save_as: 名前を付けて保存
+image_preview.saved_toast: 画像を %{path} に保存しました
+image_preview.save_failed: "画像を保存できませんでした: %{error}"
+image_preview.rotate_failed: この画像は回転できません
+image_preview.reveal_in_file_manager: ファイルマネージャーで表示

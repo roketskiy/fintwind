@@ -1614,14 +1614,10 @@ pub struct Fintwind {
     /// attachments these never leave on the `files` channel: a reference is
     /// attributed text the provider reads, not an upload.
     composer_references: Vec<quote::ComposerReference>,
-    /// Window-modal expansion of an image attachment. The path is already
-    /// cached attachment metadata; render never probes the filesystem.
-    image_preview: Option<image_preview::ImagePreviewState>,
+    /// Window-modal expansion of an image or Mermaid diagram. Held in its own
+    /// entity so pan/zoom repaints do not dirty Fintwind's cached workspace panes.
+    image_preview: Option<Entity<image_preview::ImagePreviewModal>>,
     image_preview_generation: u64,
-    /// Window-modal expansion of a Mermaid diagram (Issue #13). Holds the
-    /// cached raster plus zoom only; render never recompiles.
-    diagram_preview: Option<diagram_preview::DiagramPreviewState>,
-    diagram_preview_generation: u64,
     /// In-memory GPUI images for daemon-owned bytes. A missing entry schedules
     /// one background fetch only when a visible row asks to render it; the
     /// desktop never creates another attachment file.
@@ -2486,7 +2482,6 @@ mod command_palette;
 mod commit_dialog;
 mod components;
 mod composer;
-mod diagram_preview;
 mod drafts;
 mod file_search;
 mod git_history;
@@ -2533,7 +2528,6 @@ pub use btw::init as init_btw_keys;
 pub use command_palette::init as init_command_palette;
 pub use commit_dialog::init as init_commit_dialog_keys;
 use components::*;
-pub use diagram_preview::init as init_diagram_preview_keys;
 pub use help::init as init_help_keys;
 pub use image_preview::init as init_image_preview_keys;
 pub use mcp_market_page::init as init_mcp_market_keys;
@@ -4115,8 +4109,6 @@ impl Fintwind {
                 composer_autocomplete: autocomplete::AutocompleteUi::new(),
                 image_preview: None,
                 image_preview_generation: 0,
-                diagram_preview: None,
-                diagram_preview_generation: 0,
                 remote_images: RefCell::new(HashMap::new()),
                 event_wake_tx,
                 task_state_sync_tx,
@@ -4650,3 +4642,6 @@ mod tests;
 
 #[cfg(test)]
 mod auto_compaction_e2e;
+
+#[cfg(test)]
+mod image_preview_e2e;

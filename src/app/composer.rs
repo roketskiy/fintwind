@@ -2266,6 +2266,45 @@ impl Fintwind {
         if attachment_loading {
             row = row.child(div().w(px(64.0)).h(px(64.0)).rounded(px(8.0)).bg(theme.overlay_strong));
         }
+        let can_reveal = !self.daemon.is_remote();
+        let attachment_images = self
+            .composer_attachments
+            .iter()
+            .map(|attachment| {
+                attachment.client_preview_image.clone().or_else(|| {
+                    attachment
+                        .is_image
+                        .then(|| {
+                            attachment.blob_reference.as_deref().and_then(|reference| {
+                                self.image_for_reference(
+                                    reference,
+                                    Some(&attachment.path),
+                                    Some(attachment.name.as_ref()),
+                                    cx,
+                                )
+                            })
+                        })
+                        .flatten()
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut gallery_items = Vec::new();
+        let mut attachment_gallery_indices = vec![None; self.composer_attachments.len()];
+        for (index, attachment) in self.composer_attachments.iter().enumerate() {
+            if attachment.is_image
+                && let Some(image) = attachment_images[index].as_ref()
+            {
+                let gallery_index = gallery_items.len();
+                attachment_gallery_indices[index] = Some(gallery_index);
+                gallery_items.push(image_preview::ImagePreviewItem::from_image(
+                    image.clone(),
+                    attachment.name.clone(),
+                    (!attachment.path.as_os_str().is_empty())
+                        .then(|| attachment.path.clone()),
+                    can_reveal,
+                ));
+            }
+        }
         for (index, attachment) in self.composer_attachments.iter().enumerate() {
             let menu = self.menu_handle(format!("composer-attachment-{index}-menu"), cx);
             let icon_path = if attachment.is_dir {
@@ -2287,26 +2326,12 @@ impl Fintwind {
                 .tab_index(0)
                 .focus_visible(|style| style.border_color(theme.accent))
                 .tooltip(Tooltip::text(attachment.mention.clone()));
-            let attachment_image = attachment.client_preview_image.clone().or_else(|| {
-                attachment
-                    .is_image
-                    .then(|| {
-                        attachment.blob_reference.as_deref().and_then(|reference| {
-                            self.image_for_reference(
-                                reference,
-                                Some(&attachment.path),
-                                Some(attachment.name.as_ref()),
-                                cx,
-                            )
-                        })
-                    })
-                    .flatten()
-            });
-            let can_reveal = !self.daemon.is_remote();
+            let attachment_image = attachment_images[index].as_ref();
             if attachment.is_image {
-                if let Some(attachment_image) = attachment_image.as_ref() {
-                    let preview_image = attachment_image.clone();
-                    let preview_name = attachment.name.clone();
+                if let (Some(attachment_image), Some(gallery_index)) =
+                    (attachment_image, attachment_gallery_indices[index])
+                {
+                    let click_gallery = gallery_items.clone();
                     tile = tile.child(
                         div()
                             .id(SharedString::from(format!(
@@ -2317,9 +2342,9 @@ impl Fintwind {
                             .hover(|element| element.opacity(0.85))
                             .active(|element| element.opacity(0.72))
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                this.open_image_preview(
-                                    preview_image.clone(),
-                                    preview_name.clone(),
+                                this.open_image_preview_gallery(
+                                    click_gallery.clone(),
+                                    gallery_index,
                                     window,
                                     cx,
                                 );
@@ -2367,16 +2392,21 @@ impl Fintwind {
                 );
             }
             let key_menu = menu.clone();
-            let key_image = attachment_image.clone();
-            let key_name = attachment.name.clone();
+            let key_gallery = gallery_items.clone();
+            let key_gallery_index = attachment_gallery_indices[index];
             let is_image = attachment.is_image;
             tile = tile.on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                 let key = event.keystroke.key.as_str();
                 if is_image
                     && matches!(key, "enter" | "space")
-                    && let Some(key_image) = key_image.as_ref()
+                    && let Some(gallery_index) = key_gallery_index
                 {
-                    this.open_image_preview(key_image.clone(), key_name.clone(), window, cx);
+                    this.open_image_preview_gallery(
+                        key_gallery.clone(),
+                        gallery_index,
+                        window,
+                        cx,
+                    );
                     cx.stop_propagation();
                 } else if key == "f10" && event.keystroke.modifiers.shift {
                     key_menu.open_context_menu(window, cx);

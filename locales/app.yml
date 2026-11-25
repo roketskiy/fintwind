@@ -3828,3 +3828,33 @@ settings.busy_send_queue:
   en: Queue
 composer.queued_messages:
   en: "Queued · %{count}"
+image_preview.previous:
+  en: Previous image
+image_preview.next:
+  en: Next image
+image_preview.fit_to_window:
+  en: Fit to window
+image_preview.fit_short:
+  en: Fit
+image_preview.actual_size:
+  en: Actual size (1:1)
+image_preview.rotate_left:
+  en: Rotate left 90°
+image_preview.rotate_right:
+  en: Rotate right 90°
+image_preview.copy_image:
+  en: Copy image
+image_preview.copied_toast:
+  en: Image copied to clipboard
+image_preview.copy_failed:
+  en: Could not copy image
+image_preview.save_as:
+  en: Save as
+image_preview.saved_toast:
+  en: Saved image to %{path}
+image_preview.save_failed:
+  en: "Could not save image: %{error}"
+image_preview.rotate_failed:
+  en: Could not rotate this image
+image_preview.reveal_in_file_manager:
+  en: Show in File Manager

@@ -1922,3 +1922,18 @@ capsule.file_count: "%{count} 个文件"
 settings.watchdog: 重复输出保护
 settings.watchdog_description: 模型回复或工具调用及结果连续 10 次完全相同时停止任务。
 errors.watchdog_repeat: 检测到连续 10 次重复输出，正在停止任务。
+image_preview.previous: 上一张
+image_preview.next: 下一张
+image_preview.fit_to_window: 适应窗口
+image_preview.fit_short: 适应
+image_preview.actual_size: 原始尺寸 (1:1)
+image_preview.rotate_left: 向左旋转 90°
+image_preview.rotate_right: 向右旋转 90°
+image_preview.copy_image: 复制图片
+image_preview.copied_toast: 已复制图片到剪贴板
+image_preview.copy_failed: 复制图片失败
+image_preview.save_as: 另存为
+image_preview.saved_toast: 已保存图片到 %{path}
+image_preview.save_failed: "保存图片失败：%{error}"
+image_preview.rotate_failed: 无法旋转此图片
+image_preview.reveal_in_file_manager: 在文件管理器中显示

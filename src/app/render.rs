@@ -283,11 +283,10 @@ impl Render for Fintwind {
         if self.fps_counter_visible {
             self.tick_fps(window);
         }
-        let image_preview = self.render_image_preview(cx);
         if let Some(request) = crate::md::diagram::take_preview_request(cx) {
             self.open_diagram_preview(request, window, cx);
         }
-        let diagram_preview = self.render_diagram_preview(cx);
+        let image_preview = self.render_image_preview();
         let update_card = self.render_update_card(window, cx);
         let changelog = self.render_changelog_card(window, cx);
         // Re-armed every frame this window shows time labels; parks while
@@ -722,7 +721,6 @@ impl Render for Fintwind {
             .children(add_project_dialog)
             .children(ssh_dialog)
             .children(image_preview)
-            .children(diagram_preview)
             .child(crate::ui::menu::context_menu(
                 div().absolute().top_0().left_0(),
                 "transcript-file-menu",
@@ -748,6 +746,10 @@ impl Fintwind {
             if self.add_project_dialog.is_some() {
                 gpui::deferred(toast)
                     .with_priority(super::add_project_dialog::ADD_PROJECT_LAYER_PRIORITY + 2)
+                    .into_any_element()
+            } else if self.image_preview.is_some() {
+                gpui::deferred(toast)
+                    .with_priority(super::image_preview::IMAGE_PREVIEW_LAYER_PRIORITY + 2)
                     .into_any_element()
             } else {
                 toast.into_any_element()

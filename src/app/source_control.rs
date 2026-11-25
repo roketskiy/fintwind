@@ -68,7 +68,7 @@ impl Fintwind {
     /// and the workspace actions elsewhere in the app.
     pub(super) fn open_review_page(&mut self, source: ReviewDiffSource, cx: &mut Context<Self>) {
         if self.right_panel_diff_source != source {
-            self.reset_review_diff_state(source);
+            self.reset_review_diff_state(source, cx);
         }
         self.mode = WorkspaceMode::SourceControl;
         if !self.sidebar_visible {
@@ -99,15 +99,20 @@ impl Fintwind {
 
     /// Clear everything the review page draws and aim it at `source`. The
     /// scroll states reset too, so a new source starts at its top.
-    fn reset_review_diff_state(&mut self, source: ReviewDiffSource) {
+    fn reset_review_diff_state(&mut self, source: ReviewDiffSource, cx: &App) {
         self.right_panel_diff_selection.clear();
         self.right_panel_diff_source = source;
         self.right_panel_diff_snapshot = None;
         self.right_panel_diff_error = None;
         self.right_panel_diff_selected_file = None;
+        self.source_control_loading = None;
         self.source_control_diff_context = 3;
+        self.source_control_folded_directories
+            .borrow_mut()
+            .retain(|key| !key.starts_with("changes:"));
         *self.source_control_diff_rows.borrow_mut() = Vec::new();
         self.right_panel_diff_list_state.reset(0);
+        self.sync_source_control_rows(cx);
     }
 
     /// The transcript's "review this turn's changes" entry. The turn's diff
@@ -281,6 +286,7 @@ impl Fintwind {
             self.review_pending_file_focus = None;
             self.source_control_ignored_open = false;
             self.source_control_diff_context = 3;
+            self.sync_source_control_rows(cx);
         } else if self
             .source_control_review_files
             .for_source(&self.right_panel_diff_source)
@@ -969,7 +975,7 @@ impl Fintwind {
         // from; once the user repoints the workspace, the live view is the
         // honest thing to show.
         if self.review_is_history_snapshot() {
-            self.reset_review_diff_state(ReviewDiffSource::Uncommitted);
+            self.reset_review_diff_state(ReviewDiffSource::Uncommitted, cx);
         }
         self.refresh_source_control_status(cx);
         self.refresh_review_diff(cx);
@@ -1640,11 +1646,17 @@ impl Fintwind {
         targets
     }
 
-    /// Flattens the cached status into the virtualized list's rows: one
-    /// header per non-empty group, then that group's files arranged as a
-    /// directory tree. The filter input narrows both groups by path, and a
-    /// filter always opens every directory so its matches are visible.
-    /// Called whenever the status snapshot, the filter, or a fold changes.
+    fn source_control_uses_snapshot_tree(&self) -> bool {
+        self.source_control_review_files
+            .for_source(&self.right_panel_diff_source)
+            .is_none()
+    }
+
+    /// Flattens the cached status — or, for commit/turn/branch diffs, the
+    /// loaded diff snapshot — into the virtualized list's rows: one header per
+    /// non-empty group, then that group's files arranged as a directory tree.
+    /// The filter input narrows by path, and a filter always opens every
+    /// directory so its matches are visible.
     pub(super) fn sync_source_control_rows(&mut self, cx: &App) {
         self.source_control_untracked_ready = self.calculate_source_control_untracked_ready();
         let filter = self.right_panel_diff_filter.read(cx).content().to_owned();
@@ -1667,7 +1679,39 @@ impl Fintwind {
         let mut rows = Vec::new();
         let no_pages = HashMap::new();
         let no_incomplete = HashSet::new();
-        if let Some(status) = self.source_control_status.as_ref() {
+        if self.source_control_uses_snapshot_tree() {
+            if let Some(snapshot) = self.right_panel_diff_snapshot.as_ref() {
+                let items: Vec<_> = snapshot
+                    .files
+                    .iter()
+                    .filter(|file| {
+                        filter.is_empty() || file.path.to_ascii_lowercase().contains(&filter)
+                    })
+                    .map(|file| SourceControlTreeItem {
+                        path: file.path.as_str(),
+                        origin_path: None,
+                        letter: review_file_status_letter(file.status),
+                        untracked: false,
+                    })
+                    .collect();
+                if !items.is_empty() {
+                    rows.push(SourceControlRow::Header {
+                        group: SourceControlGroup::Changes,
+                        count: items.len(),
+                        incomplete: false,
+                    });
+                    source_control_tree_rows(
+                        &mut rows,
+                        SourceControlGroup::Changes,
+                        &items,
+                        &folded,
+                        force_open,
+                        &no_pages,
+                        &no_incomplete,
+                    );
+                }
+            }
+        } else if let Some(status) = self.source_control_status.as_ref() {
             for group in SourceControlGroup::ALL {
                 let (next_pages, incomplete) = match group {
                     SourceControlGroup::Untracked => (
@@ -1680,7 +1724,7 @@ impl Fintwind {
                     ),
                     _ => (&no_pages, &no_incomplete),
                 };
-                let entries: Vec<_> = status
+                let items: Vec<_> = status
                     .entries
                     .iter()
                     .filter(|entry| {
@@ -1690,20 +1734,21 @@ impl Fintwind {
                                 && entry.path.ends_with('/')
                                 && nested_paths.contains(entry.path.trim_end_matches('/')))
                     })
+                    .map(|entry| SourceControlTreeItem::from_status(group, entry))
                     .collect();
                 let pending_root = next_pages.contains_key("") || incomplete.contains("");
-                if !entries.is_empty() || pending_root {
+                if !items.is_empty() || pending_root {
                     rows.push(SourceControlRow::Header {
                         group,
-                        count: entries
+                        count: items
                             .iter()
-                            .filter(|entry| !entry.path.ends_with('/'))
+                            .filter(|item| !item.path.ends_with('/'))
                             .count(),
                         incomplete: group == SourceControlGroup::Untracked
                             && !self.source_control_untracked_ready,
                     });
                     source_control_tree_rows(
-                        &mut rows, group, &entries, &folded, force_open, next_pages, incomplete,
+                        &mut rows, group, &items, &folded, force_open, next_pages, incomplete,
                     );
                 }
             }
@@ -1738,14 +1783,25 @@ impl Fintwind {
                         retry: Some(ReviewTreeRetry::Ignored),
                     });
                 }
-                let entries: Vec<_> = self
+                let items: Vec<_> = self
                     .source_control_ignored
                     .as_ref()
-                    .map(|entries| entries.iter().filter(|entry| matches(entry)).collect())
+                    .map(|entries| {
+                        entries
+                            .iter()
+                            .filter(|entry| matches(entry))
+                            .map(|entry| {
+                                SourceControlTreeItem::from_status(
+                                    SourceControlGroup::Ignored,
+                                    entry,
+                                )
+                            })
+                            .collect()
+                    })
                     .unwrap_or_default();
                 let pending_root = self.source_control_ignored_next.contains_key("")
                     || self.source_control_ignored_incomplete.contains("");
-                if entries.is_empty()
+                if items.is_empty()
                     && !pending_root
                     && filter.is_empty()
                     && !self.source_control_ignored_loading
@@ -1753,11 +1809,11 @@ impl Fintwind {
                 {
                     rows.push(SourceControlRow::IgnoredEmpty);
                 }
-                if !entries.is_empty() || pending_root {
+                if !items.is_empty() || pending_root {
                     source_control_tree_rows(
                         &mut rows,
                         SourceControlGroup::Ignored,
-                        &entries,
+                        &items,
                         &folded,
                         force_open,
                         &self.source_control_ignored_next,
@@ -1856,7 +1912,7 @@ impl Fintwind {
         let mut changed = false;
         for (index, _) in directory.match_indices('/') {
             let ancestor = &directory[..index];
-            for group in SourceControlGroup::ALL {
+            for group in SourceControlGroup::REVEALABLE {
                 let key = source_control_directory_key(group, ancestor);
                 changed |= if group == SourceControlGroup::Untracked {
                     folded.insert(key)
@@ -1865,7 +1921,7 @@ impl Fintwind {
                 };
             }
         }
-        for group in SourceControlGroup::ALL {
+        for group in SourceControlGroup::REVEALABLE {
             let key = source_control_directory_key(group, directory);
             changed |= if group == SourceControlGroup::Untracked {
                 folded.insert(key)
@@ -2018,12 +2074,31 @@ impl Fintwind {
             return;
         }
         let switched_source = self.right_panel_diff_source != source;
-        self.reset_review_diff_state(source);
+        self.reset_review_diff_state(source, cx);
         self.review_pending_file_focus = Some(path);
         self.refresh_review_diff(cx);
         if switched_source {
             self.refresh_review_stats(cx);
         }
+    }
+
+    /// Selects a file within the currently loaded diff snapshot (commit, turn,
+    /// committed, or branch review) without leaving that diff source.
+    pub(super) fn open_snapshot_review_file(&mut self, path: String, cx: &mut Context<Self>) {
+        if self.reveal_source_control_file(&path) {
+            self.sync_source_control_rows(cx);
+        }
+        if let Some(snapshot) = self.right_panel_diff_snapshot.as_ref()
+            && let Some(index) = snapshot.files.iter().position(|file| file.path == path)
+        {
+            self.right_panel_diff_selected_file = Some(index);
+            self.review_pending_file_focus = None;
+            self.sync_source_control_diff_rows();
+            cx.notify();
+            return;
+        }
+        self.review_pending_file_focus = Some(path);
+        cx.notify();
     }
 
     /// Rebuilds the single-file diff rows from the cached snapshot, the
@@ -2078,7 +2153,7 @@ impl Fintwind {
             if next != current {
                 let path = files.paths[next].clone();
                 let source = self.right_panel_diff_source.clone();
-                self.reset_review_diff_state(source);
+                self.reset_review_diff_state(source, cx);
                 if self.reveal_source_control_file(&path) {
                     self.sync_source_control_rows(cx);
                 }
@@ -2891,19 +2966,25 @@ impl Fintwind {
         )
     }
 
-    /// The staged/unstaged file groups, or one of the honest empty states:
+    /// The staged/unstaged file groups (or, for commit/turn/branch snapshots,
+    /// the snapshot's changed file tree), or one of the honest empty states:
     /// no workspace, unreadable status, not a repository, or a clean tree.
     fn render_source_control_file_list(&mut self, cx: &mut Context<Self>) -> Div {
         let theme = Theme::current(cx);
         let entity = cx.entity().downgrade();
         let workspace = self.review_workspace_path().map(Path::to_path_buf);
         let has_workspace = workspace.is_some();
+        let snapshot_tree = self.source_control_uses_snapshot_tree();
+        let snapshot = self.right_panel_diff_snapshot.as_ref();
+        let status = self.source_control_status.as_ref();
+        let loading_active = if snapshot_tree {
+            self.right_panel_diff_loading && snapshot.is_none()
+        } else {
+            self.source_control_status_loading && status.is_none()
+        };
         let loading_phase = if let Some(path) = workspace {
-            let (phase, wake) = LoadingDelay::observe(
-                &mut self.source_control_loading,
-                path,
-                self.source_control_status_loading && self.source_control_status.is_none(),
-            );
+            let (phase, wake) =
+                LoadingDelay::observe(&mut self.source_control_loading, path, loading_active);
             if let Some(wake) = wake {
                 cx.spawn(async move |this, cx| {
                     cx.background_executor().timer(wake.delay()).await;
@@ -2917,9 +2998,18 @@ impl Fintwind {
             self.source_control_loading = None;
             LoadingPhase::Done
         };
-        let status = self.source_control_status.as_ref();
         let placeholder = if !has_workspace {
             Some(tr!("source_control.no_directory"))
+        } else if snapshot_tree {
+            if self.right_panel_diff_error.is_some() && snapshot.is_none() {
+                None
+            } else if self.right_panel_diff_loading && snapshot.is_none() {
+                None
+            } else if snapshot.is_some_and(|snapshot| !snapshot.files.is_empty()) {
+                None
+            } else {
+                Some(tr!("diff.no_changes"))
+            }
         } else if self.source_control_status_error.is_some() {
             None
         } else if self.source_control_status_loading && status.is_none() {
@@ -2936,6 +3026,12 @@ impl Fintwind {
         } else {
             Some(tr!("source_control.not_a_repository"))
         };
+        let show_filter = has_workspace
+            && if snapshot_tree {
+                snapshot.is_some_and(|snapshot| !snapshot.files.is_empty())
+            } else {
+                status.is_some()
+            };
         let row_count = self.source_control_rows.borrow().len();
 
         div()
@@ -2946,7 +3042,7 @@ impl Fintwind {
             .flex_col()
             // The path filter narrows the change tree and always opens the
             // directories it matches.
-            .when(has_workspace && status.is_some(), |column| {
+            .when(show_filter, |column| {
                 column.child(
                     div().px(px(12.0)).pb(px(8.0)).child(
                         TextField::new(
@@ -3044,6 +3140,7 @@ impl Fintwind {
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_tertiary)
                 .child(match group {
+                    SourceControlGroup::Changes => format!("{} {count}", tr!("diff.changed_files")),
                     SourceControlGroup::Staged => tr!("source_control.staged", count = count),
                     SourceControlGroup::Unstaged => tr!("source_control.unstaged", count = count),
                     SourceControlGroup::Untracked if incomplete => {
@@ -3055,7 +3152,7 @@ impl Fintwind {
                 .child(div().flex_1())
                 // One click moves the whole group across the staging line;
                 // discard exists on the unstaged side only and confirms first.
-                .when(writable, |header| {
+                .when(writable && group != SourceControlGroup::Changes, |header| {
                     if group == SourceControlGroup::Staged {
                         header.child(self.render_source_control_text_action(
                             "source-control-unstage-all",
@@ -3306,6 +3403,7 @@ impl Fintwind {
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_tertiary)
                 .child(match group {
+                    SourceControlGroup::Changes => format!("{} {count}", tr!("diff.changed_files")),
                     SourceControlGroup::Staged => tr!("source_control.staged", count = count),
                     SourceControlGroup::Unstaged => tr!("source_control.unstaged", count = count),
                     SourceControlGroup::Untracked if incomplete => {
@@ -3495,12 +3593,13 @@ impl Fintwind {
                 let title_id =
                     SharedString::from(format!("source-control-file-title-{}-{path}", group.key()));
                 let row_path = path.clone();
-                let selected_source = self.right_panel_diff_source
-                    == if staged {
-                        ReviewDiffSource::Staged
-                    } else {
-                        ReviewDiffSource::Unstaged
-                    };
+                let selected_source = match group {
+                    SourceControlGroup::Changes => self.source_control_uses_snapshot_tree(),
+                    SourceControlGroup::Staged => {
+                        self.right_panel_diff_source == ReviewDiffSource::Staged
+                    }
+                    _ => self.right_panel_diff_source == ReviewDiffSource::Unstaged,
+                };
                 let selected_path = self.review_pending_file_focus.as_deref().or_else(|| {
                     self.right_panel_diff_selected_file.and_then(|index| {
                         self.right_panel_diff_snapshot
@@ -3541,7 +3640,11 @@ impl Fintwind {
                     .focus_visible(|element| element.border_1().border_color(theme.accent_focus))
                     .when(group != SourceControlGroup::Ignored, |element| {
                         element.tab_index(0).on_activation(cx, move |this, _, cx| {
-                            this.open_source_control_file(staged, row_path.clone(), cx);
+                            if group == SourceControlGroup::Changes {
+                                this.open_snapshot_review_file(row_path.clone(), cx);
+                            } else {
+                                this.open_source_control_file(staged, row_path.clone(), cx);
+                            }
                         })
                     })
                     .child(source_control_guides(depth, &theme))
@@ -3594,7 +3697,12 @@ impl Fintwind {
         nested: Option<(PathBuf, Option<String>)>,
         cx: &mut Context<Self>,
     ) -> Option<Div> {
-        if self.review_is_history_snapshot() || group == SourceControlGroup::Ignored {
+        if self.review_is_history_snapshot()
+            || matches!(
+                group,
+                SourceControlGroup::Ignored | SourceControlGroup::Changes
+            )
+        {
             return None;
         }
         let busy = self.source_control_busy.is_some();
@@ -4470,12 +4578,7 @@ impl Fintwind {
             .and_then(|index| snapshot.files.get(index));
         let (path, additions, deletions, letter) = match file {
             Some(file) => {
-                let letter = match file.status {
-                    crate::review_diff::FileStatus::Added => 'A',
-                    crate::review_diff::FileStatus::Deleted => 'D',
-                    crate::review_diff::FileStatus::Binary => 'B',
-                    crate::review_diff::FileStatus::Modified => 'M',
-                };
+                let letter = review_file_status_letter(file.status);
                 (file.path.clone(), file.additions, file.deletions, letter)
             }
             None => (String::new(), 0, 0, ' '),
@@ -5626,7 +5729,7 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) {
         if self.right_panel_diff_source != source {
-            self.reset_review_diff_state(source);
+            self.reset_review_diff_state(source, cx);
         }
         self.refresh_review_diff(cx);
         self.refresh_review_stats(cx);
@@ -5740,6 +5843,7 @@ impl Fintwind {
             self.right_panel_diff_snapshot = None;
             self.right_panel_diff_loading = false;
             self.right_panel_diff_error = Some(tr!("diff.unavailable"));
+            self.sync_source_control_rows(cx);
             return;
         };
 
@@ -5931,11 +6035,25 @@ impl Fintwind {
                             }
                             fintwind.right_panel_diff_snapshot = Some(Arc::new(snapshot));
                             fintwind.right_panel_diff_error = None;
+                            if let Some(path) = fintwind
+                                .right_panel_diff_selected_file
+                                .and_then(|index| {
+                                    fintwind
+                                        .right_panel_diff_snapshot
+                                        .as_ref()
+                                        .and_then(|snapshot| snapshot.files.get(index))
+                                })
+                                .map(|file| file.path.clone())
+                            {
+                                fintwind.reveal_source_control_file(&path);
+                            }
                             fintwind.sync_source_control_diff_rows();
+                            fintwind.sync_source_control_rows(cx);
                         }
                         Err(error) => {
                             let message = error.to_string();
                             fintwind.right_panel_diff_error = Some(message);
+                            fintwind.sync_source_control_rows(cx);
                         }
                     }
                     cx.notify();
@@ -6274,6 +6392,7 @@ impl SourceControlReviewFiles {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SourceControlGroup {
+    Changes,
     Staged,
     Unstaged,
     Untracked,
@@ -6282,9 +6401,11 @@ pub(super) enum SourceControlGroup {
 
 impl SourceControlGroup {
     const ALL: [Self; 3] = [Self::Staged, Self::Unstaged, Self::Untracked];
+    const REVEALABLE: [Self; 4] = [Self::Changes, Self::Staged, Self::Unstaged, Self::Untracked];
 
     fn key(self) -> &'static str {
         match self {
+            Self::Changes => "changes",
             Self::Staged => "staged",
             Self::Unstaged => "unstaged",
             Self::Untracked => "untracked",
@@ -6294,6 +6415,7 @@ impl SourceControlGroup {
 
     fn matches(self, entry: &fintwind_client::git::WorktreeStatusEntry) -> bool {
         match self {
+            Self::Changes => false,
             Self::Staged => source_control_entry_is_staged(entry),
             Self::Unstaged => {
                 source_control_entry_is_unstaged(entry) && entry.worktree_status != '?'
@@ -6479,33 +6601,59 @@ fn source_control_nested_rows(
     }
 }
 
-impl SourceControlRow {
-    fn file(
+fn review_file_status_letter(status: crate::review_diff::FileStatus) -> char {
+    match status {
+        crate::review_diff::FileStatus::Added => 'A',
+        crate::review_diff::FileStatus::Deleted => 'D',
+        crate::review_diff::FileStatus::Binary => 'B',
+        crate::review_diff::FileStatus::Modified => 'M',
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SourceControlTreeItem<'a> {
+    path: &'a str,
+    origin_path: Option<&'a str>,
+    letter: char,
+    untracked: bool,
+}
+
+impl<'a> SourceControlTreeItem<'a> {
+    fn from_status(
         group: SourceControlGroup,
-        depth: usize,
-        entry: &fintwind_client::git::WorktreeStatusEntry,
+        entry: &'a fintwind_client::git::WorktreeStatusEntry,
     ) -> Self {
-        let letter = if group == SourceControlGroup::Staged {
-            entry.index_status
-        } else {
-            entry.worktree_status
+        Self {
+            path: &entry.path,
+            origin_path: entry.origin_path.as_deref(),
+            letter: if group == SourceControlGroup::Staged {
+                entry.index_status
+            } else {
+                entry.worktree_status
+            },
+            untracked: entry.worktree_status == '?',
+        }
+    }
+}
+
+impl SourceControlRow {
+    fn file(group: SourceControlGroup, depth: usize, item: SourceControlTreeItem<'_>) -> Self {
+        let title = match item.origin_path {
+            Some(origin) => format!("{origin} → {}", item.path),
+            None => item.path.to_owned(),
         };
-        let title = match entry.origin_path.as_deref() {
-            Some(origin) => format!("{origin} → {}", entry.path),
-            None => entry.path.clone(),
-        };
-        let name = entry
+        let name = item
             .path
             .rsplit_once('/')
-            .map_or(entry.path.as_str(), |(_, name)| name);
+            .map_or(item.path, |(_, name)| name);
         Self::File {
             group,
-            path: entry.path.clone(),
+            path: item.path.to_owned(),
             title,
             name: name.to_owned(),
             depth,
-            letter,
-            untracked: entry.worktree_status == '?',
+            letter: item.letter,
+            untracked: item.untracked,
         }
     }
 }
@@ -6522,7 +6670,7 @@ const SOURCE_CONTROL_TREE_INDENT: f32 = 16.0;
 #[derive(Default)]
 struct SourceControlTreeNode<'a> {
     directories: std::collections::BTreeMap<String, SourceControlTreeNode<'a>>,
-    files: std::collections::BTreeMap<&'a str, &'a fintwind_client::git::WorktreeStatusEntry>,
+    files: std::collections::BTreeMap<&'a str, SourceControlTreeItem<'a>>,
 }
 
 /// The fold set's key for one directory on one side of the tree.
@@ -6536,23 +6684,23 @@ fn source_control_directory_key(group: SourceControlGroup, path: &str) -> String
 fn source_control_tree_rows<'a>(
     rows: &mut Vec<SourceControlRow>,
     group: SourceControlGroup,
-    entries: &[&'a fintwind_client::git::WorktreeStatusEntry],
+    items: &[SourceControlTreeItem<'a>],
     folded: &std::collections::HashSet<String>,
     force_open: bool,
     next_pages: &HashMap<String, String>,
     incomplete: &HashSet<String>,
 ) {
     let mut root = SourceControlTreeNode::<'a>::default();
-    for entry in entries {
+    for &item in items {
         let mut node = &mut root;
-        let directory_entry = entry.path.ends_with('/');
-        let mut segments = entry.path.trim_end_matches('/').split('/').peekable();
+        let directory_entry = item.path.ends_with('/');
+        let mut segments = item.path.trim_end_matches('/').split('/').peekable();
         while let Some(segment) = segments.next() {
             if segments.peek().is_none() {
                 if directory_entry {
                     node.directories.entry(segment.to_owned()).or_default();
                 } else {
-                    node.files.insert(segment, *entry);
+                    node.files.insert(segment, item);
                 }
                 break;
             }
@@ -6623,8 +6771,8 @@ fn source_control_tree_rows<'a>(
                 }
             }
         }
-        for entry in node.files.values() {
-            rows.push(SourceControlRow::file(group, depth, entry));
+        for &item in node.files.values() {
+            rows.push(SourceControlRow::file(group, depth, item));
         }
     }
 

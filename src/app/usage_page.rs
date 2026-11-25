@@ -1322,7 +1322,7 @@ pub(super) fn dashboard_series_colors(theme: &Theme) -> [Hsla; 5] {
     } else {
         [0xfd4b23, 0x2563eb, 0x18b170, 0xe8b41c, 0xec4899]
     };
-    colors.map(|color| rgb(color).into())
+    colors.map(|color| crate::theme::mute_saturation(rgb(color).into()))
 }
 
 /// The hue series every chart on this page draws from. The treemap borrows it
@@ -1333,7 +1333,7 @@ pub(super) fn plot_colors(theme: &Theme) -> [Hsla; 5] {
     } else {
         [0x1d4ed8, 0x15803d, 0xc2410c, 0x7e22ce, 0xbe123c]
     };
-    colors.map(|color| rgb(color).into())
+    colors.map(|color| crate::theme::mute_saturation(rgb(color).into()))
 }
 
 /// Product-owned surface treatment around Ely content. Match the composer

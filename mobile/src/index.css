@@ -55,21 +55,21 @@
 
 :root {
   /* Beautiful UI foundation: cool near-white, neutral ink, hairlines, layered shadows. */
-  --background: oklch(0.985 0.001 286.376);
-  --foreground: oklch(0.23 0.006 265);
+  --background: oklch(0.985 0.0008 286.376);
+  --foreground: oklch(0.23 0.005 265);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.145 0 0);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.24 0.006 265);
+  --primary: oklch(0.24 0.005 265);
   --primary-foreground: oklch(0.985 0 0);
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.49 0.012 265);
+  --muted-foreground: oklch(0.49 0.01 265);
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
+  --destructive: oklch(0.577 0.208 27.325);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
@@ -87,28 +87,28 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
-  --bui-blue: oklch(0.53 0.19 259);
-  --bui-green: oklch(0.48 0.12 158);
+  --bui-blue: oklch(0.53 0.161 259);
+  --bui-green: oklch(0.48 0.102 158);
   /* A light Claude terracotta tint, scoped to user bubbles only. */
-  --user-message-background: color-mix(in oklab, #d97757 18%, var(--card));
+  --user-message-background: color-mix(in oklab, #cf7c61 18%, var(--card));
   --user-message-foreground: var(--foreground);
-  --bui-inset: oklch(0.967 0.003 265);
-  --bui-shadow: 0 0 0 1px oklch(0.2 0.01 265 / 4%), 0 2px 4px oklch(0.2 0.01 265 / 3%), 0 6px 16px oklch(0.2 0.01 265 / 4%);
-  --bui-shadow-raised: 0 0 0 1px oklch(0.2 0.01 265 / 6%), 0 4px 8px oklch(0.2 0.01 265 / 4%), 0 12px 40px oklch(0.2 0.01 265 / 10%);
+  --bui-inset: oklch(0.967 0.0025 265);
+  --bui-shadow: 0 0 0 1px oklch(0.2 0.0085 265 / 4%), 0 2px 4px oklch(0.2 0.0085 265 / 3%), 0 6px 16px oklch(0.2 0.0085 265 / 4%);
+  --bui-shadow-raised: 0 0 0 1px oklch(0.2 0.0085 265 / 6%), 0 4px 8px oklch(0.2 0.0085 265 / 4%), 0 12px 40px oklch(0.2 0.0085 265 / 10%);
   /* Main cards: light from above; the physical border is the only outline. */
   --bui-card-surface: linear-gradient(to bottom, oklch(1 0 0 / 70%), transparent) top / 100% 44px no-repeat, var(--card);
-  --bui-card-shadow: inset 0 1px 0 oklch(1 0 0 / 90%), inset 0 8px 12px -10px oklch(1 0 0 / 80%), 0 1px 2px oklch(0.2 0.01 265 / 5%), 0 4px 8px -4px oklch(0.2 0.01 265 / 8%), 0 10px 20px -12px oklch(0.2 0.01 265 / 12%);
+  --bui-card-shadow: inset 0 1px 0 oklch(1 0 0 / 90%), inset 0 8px 12px -10px oklch(1 0 0 / 80%), 0 1px 2px oklch(0.2 0.0085 265 / 5%), 0 4px 8px -4px oklch(0.2 0.0085 265 / 8%), 0 10px 20px -12px oklch(0.2 0.0085 265 / 12%);
   --bui-ease: cubic-bezier(0.23, 1, 0.32, 1);
 }
 
 .dark {
-  --background: oklch(0.2 0.006 265);
+  --background: oklch(0.2 0.005 265);
   --foreground: oklch(0.985 0 0);
-  --card: oklch(0.235 0.006 265);
+  --card: oklch(0.235 0.005 265);
   --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.26 0.006 265);
+  --popover: oklch(0.26 0.005 265);
   --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.94 0.003 265);
+  --primary: oklch(0.94 0.0025 265);
   --primary-foreground: oklch(0.205 0 0);
   --secondary: oklch(0.269 0 0);
   --secondary-foreground: oklch(0.985 0 0);
@@ -116,7 +116,7 @@
   --muted-foreground: oklch(0.708 0 0);
   --accent: oklch(0.269 0 0);
   --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
+  --destructive: oklch(0.704 0.162 22.216);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
@@ -127,15 +127,15 @@
   --chart-5: oklch(0.269 0 0);
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary: oklch(0.488 0.207 264.376);
   --sidebar-primary-foreground: oklch(0.985 0 0);
   --sidebar-accent: oklch(0.269 0 0);
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
-  --bui-blue: oklch(0.77 0.12 259);
-  --bui-green: oklch(0.76 0.12 158);
-  --bui-inset: oklch(0.18 0.005 265);
+  --bui-blue: oklch(0.77 0.102 259);
+  --bui-green: oklch(0.76 0.102 158);
+  --bui-inset: oklch(0.18 0.004 265);
   --bui-shadow: 0 0 0 1px oklch(1 0 0 / 5%), 0 2px 4px oklch(0 0 0 / 12%), 0 6px 16px oklch(0 0 0 / 14%);
   --bui-shadow-raised: 0 0 0 1px oklch(1 0 0 / 9%), 0 4px 8px oklch(0 0 0 / 14%), 0 12px 40px oklch(0 0 0 / 30%);
   --bui-card-surface: linear-gradient(to bottom, oklch(1 0 0 / 4%), transparent) top / 100% 44px no-repeat, var(--card);

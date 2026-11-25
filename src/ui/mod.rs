@@ -199,11 +199,11 @@ where
 /// Neutral tint for a provider icon: near-ink in either theme, so the
 /// letterform carries the identity rather than a hue.
 pub fn provider_color(theme: &Theme, _provider: &str) -> Hsla {
-    if theme.is_dark {
+    crate::theme::mute_saturation(if theme.is_dark {
         rgb(0xF3F3F3).into()
     } else {
         rgb(0x34363B).into()
-    }
+    })
 }
 
 /// Monochrome icon path for a model provider. OpenCode keeps its brand mark;

@@ -95,20 +95,27 @@ pub fn code_px(size: f32) -> Pixels {
     px((size * code_text_scale() * 4.0).round() / 4.0)
 }
 
+const PALETTE_SATURATION_FACTOR: f32 = 0.85;
+
+pub(crate) fn mute_saturation(mut color: Hsla) -> Hsla {
+    color.s *= PALETTE_SATURATION_FACTOR;
+    color
+}
+
 /// Fixed semantic colors that hold across every theme and scheme, unlike the
 /// palette-driven status colors. Mid-tones chosen to stay legible on both the
 /// light and dark canvases: the error card's rail reads red, Build reads blue,
 /// Plan reads orange.
 pub fn error_rail_color() -> Hsla {
-    rgb(0xE24947).into()
+    mute_saturation(rgb(0xE24947).into())
 }
 
 pub fn mode_build_color() -> Hsla {
-    rgb(0x3B82F6).into()
+    mute_saturation(rgb(0x3B82F6).into())
 }
 
 pub fn mode_plan_color() -> Hsla {
-    rgb(0xEA580C).into()
+    mute_saturation(rgb(0xEA580C).into())
 }
 
 fn stored_font(slot: &Mutex<Option<SharedString>>, default: &'static str) -> SharedString {
@@ -406,7 +413,7 @@ impl Theme {
     /// Card edge only; the global border keeps its own weight.
     pub fn card_border(&self) -> Hsla {
         if self.is_dark {
-            hsla(220.0 / 360.0, 0.10, 0.90, 0.08)
+            mute_saturation(hsla(220.0 / 360.0, 0.10, 0.90, 0.08))
         } else {
             hsla(0.0, 0.0, 0.12, 0.12)
         }
@@ -625,7 +632,66 @@ impl Theme {
             theme = theme.with_muted_accents().with_stronger_foregrounds();
         }
         theme.tab_strip = strip_from(theme.canvas, theme.is_dark);
-        theme
+        theme.with_desaturated_palette()
+    }
+
+    /// Slightly lower saturation across all surfaces, borders, text, status,
+    /// syntax, and accent tokens in both light and dark modes.
+    fn with_desaturated_palette(mut self) -> Self {
+        for color in [
+            &mut self.canvas,
+            &mut self.sidebar,
+            &mut self.rail,
+            &mut self.sidebar_drag_background,
+            &mut self.sidebar_item_background,
+            &mut self.surface,
+            &mut self.raised,
+            &mut self.composer,
+            &mut self.inset,
+            &mut self.tab_strip,
+            &mut self.terminal,
+            &mut self.overlay,
+            &mut self.overlay_strong,
+            &mut self.neutral_fill,
+            &mut self.on_neutral,
+            &mut self.border,
+            &mut self.border_strong,
+            &mut self.sidebar_border,
+            &mut self.text,
+            &mut self.text_secondary,
+            &mut self.text_tertiary,
+            &mut self.text_muted,
+            &mut self.text_ghost,
+            &mut self.accent,
+            &mut self.accent_text,
+            &mut self.accent_fill,
+            &mut self.accent_focus,
+            &mut self.on_accent,
+            &mut self.link,
+            &mut self.resize_handle,
+            &mut self.gauge,
+            &mut self.selection,
+            &mut self.code_wash,
+            &mut self.code_keyword,
+            &mut self.code_literal,
+            &mut self.code_string,
+            &mut self.code_number,
+            &mut self.code_type,
+            &mut self.code_function,
+            &mut self.inverse,
+            &mut self.on_inverse,
+            &mut self.warning,
+            &mut self.warning_text,
+            &mut self.success,
+            &mut self.success_text,
+            &mut self.favorite,
+            &mut self.danger,
+            &mut self.danger_text,
+            &mut self.danger_soft,
+        ] {
+            *color = mute_saturation(*color);
+        }
+        self
     }
 
     /// Strengthen the shared text/icon ramp after each family's overrides,

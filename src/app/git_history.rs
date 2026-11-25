@@ -852,7 +852,8 @@ fn graph_cell(
         rgb(0x994F00).into(),
         rgb(0x40B0A6).into(),
         rgb(0xB66DFF).into(),
-    ];
+    ]
+    .map(crate::theme::mute_saturation);
     canvas(
         |_, _, _| (),
         move |bounds, _, window, _| {

@@ -1,18 +1,18 @@
 :root {
-  --code-comment: #6e7781;
-  --code-keyword: #cf222e;
-  --code-string: #0a3069;
-  --code-number: #0550ae;
-  --code-title: #8250df;
-  --code-attribute: #953800;
+  --code-comment: #6f7780;
+  --code-keyword: #c22f39;
+  --code-string: #113162;
+  --code-number: #1251a1;
+  --code-title: #855bd4;
+  --code-attribute: #8a3b0b;
 }
 .dark {
-  --code-comment: #8b949e;
-  --code-keyword: #ff7b72;
-  --code-string: #a5d6ff;
-  --code-number: #79c0ff;
-  --code-title: #d2a8ff;
-  --code-attribute: #ffa657;
+  --code-comment: #8c949d;
+  --code-keyword: #f4847d;
+  --code-string: #acd5f8;
+  --code-number: #83bff5;
+  --code-title: #d2aff8;
+  --code-attribute: #f2a764;
 }
 .syntax-code :is(.hljs-comment, .hljs-quote) { color: var(--code-comment); }
 .syntax-code :is(.hljs-keyword, .hljs-selector-tag, .hljs-meta, .hljs-doctag) { color: var(--code-keyword); }

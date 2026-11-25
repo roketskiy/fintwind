@@ -142,8 +142,8 @@
 .bui-response-stats { display: flex; flex: 1; min-width: 0; align-items: baseline; font-size: 11.5px; line-height: 16px; color: var(--muted-foreground); white-space: nowrap; }
 .bui-response-agent { flex: none; }
 .bui-response-agent[data-mode="build"] { color: var(--bui-blue); }
-.bui-response-agent[data-mode="plan"] { color: #c2410c; }
-.dark .bui-response-agent[data-mode="plan"] { color: #fb923c; }
+.bui-response-agent[data-mode="plan"] { color: #b4471a; }
+.dark .bui-response-agent[data-mode="plan"] { color: #ed934a; }
 .bui-response-rest { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 .bui-msg-footer .bui-press {

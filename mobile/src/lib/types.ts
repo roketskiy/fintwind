@@ -78,6 +78,12 @@ export interface TodoSnapshot {
   total: number;
   truncated: boolean;
 }
+export interface BackgroundWorkEntry {
+  id: string;
+  kind: "subagent" | "process" | "monitor" | "image";
+  title: string;
+  elapsedSeconds: number;
+}
 export interface SessionDetail {
   runningTurn?: { id: string; elapsedSeconds: number } | null;
   failureReason?: string | null;
@@ -90,6 +96,7 @@ export interface SessionDetail {
   } | null;
   workspaceChanges?: { additions: number; deletions: number } | null;
   todos?: TodoSnapshot | null;
+  backgroundWork?: BackgroundWorkEntry[];
   goal?: { objective: string; status: "active" | "paused" | "blocked" | "done"; turns: number; maxTurns: number; reason: string; result: string; elapsedSeconds?: number; tools?: number } | null;
   id: string;
   projectId: string;

@@ -1,4 +1,5 @@
 import type {
+  BackgroundWorkEntry,
   CommandType,
   Permission,
   Questions,
@@ -458,6 +459,20 @@ export function parseResult(type: CommandType, data: unknown): unknown {
             throw new Error("响应格式无效");
           detail.todos = { items, completed, total, truncated };
         }
+      }
+      if (data["backgroundWork"] !== undefined) {
+        detail.backgroundWork = reqArr<BackgroundWorkEntry>(data["backgroundWork"], 64, (entry) => {
+          if (!isRecord(entry)) throw new Error("响应格式无效");
+          const kind = entry["kind"];
+          if (kind !== "subagent" && kind !== "process" && kind !== "monitor" && kind !== "image")
+            throw new Error("响应格式无效");
+          return {
+            id: reqStr(entry["id"], 256),
+            kind,
+            title: reqStr(entry["title"], 256),
+            elapsedSeconds: timestamp(entry["elapsedSeconds"]),
+          };
+        });
       }
       if (data["entries"] !== undefined)
         detail.entries = reqArr(data["entries"], 200, parseEntry);

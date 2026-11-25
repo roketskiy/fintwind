@@ -1639,7 +1639,7 @@ impl Fintwind {
                 })).collect::<Vec<_>>(),
             }));
         let (entries, entries_truncated) = remote_transcript_entries(session, &timing, &footer_stats);
-        let mut features = vec!["orderedTranscript", "composerOptions", "attachments", "sessionDeltas", "turnMetadata", "todoList", "workspaceChanges", "sessionPermissions", "steering", "contextUsage"];
+        let mut features = vec!["orderedTranscript", "composerOptions", "attachments", "sessionDeltas", "turnMetadata", "todoList", "workspaceChanges", "sessionPermissions", "steering", "contextUsage", "backgroundWork"];
         if session.provider == "opencode" { features.push("goals"); features.push("btw"); }
         let mut snapshot = json!({
             "id": session.id,
@@ -1668,6 +1668,7 @@ impl Fintwind {
             "entries": entries,
             "features": features,
             "todos": remote_todo_snapshot(session),
+            "backgroundWork": remote_background_work(self.background_work.get(&session.id)),
             "usage": remote_usage_snapshot(session.context_usage.as_ref(), self.configured_context_window(session.model.as_deref())),
             "workspaceChanges": self.workspace_path_for_session(session)
                 .and_then(|path| self.remote_workspace_changes.entries.get(path))
@@ -1918,6 +1919,43 @@ fn remote_todo_snapshot(session: &AgentSession) -> Option<Value> {
     }).collect::<Vec<_>>();
     Some(json!({"items": items, "completed": snapshot.completed,
         "total": snapshot.items.len(), "truncated": truncated}))
+}
+
+fn remote_background_work(
+    registry: Option<&super::background_work::BackgroundWorkRegistry>,
+) -> Vec<Value> {
+    let Some(registry) = registry else {
+        return Vec::new();
+    };
+    let now_ms = unix_time_millis();
+    registry
+        .ordered_items()
+        .into_iter()
+        .filter(|item| item.status.is_live())
+        .take(64)
+        .map(|item| {
+            let (kind, fallback) = match item.key.kind {
+                BackgroundWorkKind::Subagent => ("subagent", "子智能体"),
+                BackgroundWorkKind::Process => ("process", "后台进程"),
+                BackgroundWorkKind::Monitor => ("monitor", "监控"),
+                BackgroundWorkKind::Image => ("image", "图像生成"),
+            };
+            let title = if !item.title.trim().is_empty() {
+                item.title.as_str()
+            } else {
+                item.command
+                    .as_deref()
+                    .filter(|command| !command.trim().is_empty())
+                    .unwrap_or(fallback)
+            };
+            json!({
+                "id": bounded_text(&format!("{kind}:{}", item.key.provider_id), 256),
+                "kind": kind,
+                "title": bounded_text(title, 256),
+                "elapsedSeconds": super::background_work::work_elapsed_seconds(item, now_ms),
+            })
+        })
+        .collect()
 }
 
 fn remote_transcript_entries(session: &AgentSession, timing: &HashMap<Uuid, (u64, Option<u64>)>, footer_stats: &HashMap<Uuid, Value>) -> (Vec<Value>, bool) {

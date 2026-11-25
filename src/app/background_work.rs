@@ -819,7 +819,7 @@ impl BackgroundWorkRegistry {
             })
     }
 
-    fn ordered_items(&self) -> Vec<&BackgroundWorkItem> {
+    pub(super) fn ordered_items(&self) -> Vec<&BackgroundWorkItem> {
         self.order
             .iter()
             .rev()
@@ -1085,7 +1085,7 @@ pub(super) fn work_kind_icon(kind: BackgroundWorkKind) -> &'static str {
     }
 }
 
-fn work_elapsed_seconds(item: &BackgroundWorkItem, now_ms: u64) -> u64 {
+pub(super) fn work_elapsed_seconds(item: &BackgroundWorkItem, now_ms: u64) -> u64 {
     let duration_ms = if item.status.is_live() {
         now_ms.saturating_sub(item.started_at_ms)
     } else {

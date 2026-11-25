@@ -39,6 +39,7 @@ function Fixture() {
     finishTurn: fixture.finishTurn,
     nextTurn: fixture.nextTurn,
     updateUsage: fixture.updateUsage,
+    clearBackgroundWork: fixture.clearBackgroundWork,
     waitForApproval: fixture.waitForApproval,
     acceptSteer: fixture.acceptSteer,
     rejectSteer: fixture.rejectSteer,

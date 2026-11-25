@@ -1,6 +1,6 @@
 // Public client boundary substitute for the real hook/view E2E fixture.
 // It cannot open sockets, pair, read files, or call a daemon.
-import type { ClientSnapshot, CommandMap, CommandType, RuntimeMode, SessionDetail, TranscriptEntry } from "../lib/types";
+import type { BackgroundWorkEntry, ClientSnapshot, CommandMap, CommandType, RuntimeMode, SessionDetail, TranscriptEntry } from "../lib/types";
 import { checkFieldBounds } from "../lib/remote-validation";
 import { workflowEnabled, workflowDetail, workflowTasks, workflowCatalog, workflowAnswer, workflowSelectModel, workflowCounters } from "./workflow";
 
@@ -11,6 +11,12 @@ const folding = params.get("folding") === "1";
 let foldingTurn = 1;
 const usageScenario = params.get("usage");
 let usageUpdated = false;
+let backgroundItems: BackgroundWorkEntry[] | undefined = params.get("background") === "1"
+  ? [
+      { id: "subagent:ses_child_1", kind: "subagent", title: "代码审查子智能体", elapsedSeconds: 18 },
+      { id: "process:sh_1", kind: "process", title: "bun run dev -- --port 3000", elapsedSeconds: 75 },
+    ]
+  : undefined;
 const readMs = Math.min(2000, Math.max(0, Number(params.get("readMs")) || 0));
 const readTimes: { start: number; end?: number }[] = [];
 let inFlightReads = 0;
@@ -51,6 +57,7 @@ function detail(): SessionDetail {
     permission: null, questions: null, desktopRequired: false, canSend: true,
     truncated: folding && params.get("truncated") === "1",
     ...usageFixture(),
+    ...(backgroundItems !== undefined ? { backgroundWork: backgroundItems } : {}),
     entries: usageScenario === "empty" ? [] : folding ? foldingEntries() : [...historical,
       ...(params.get("footers") === "1" ? [
         { id: "live-prompt", role: "user" as const, text: "检查阶段性答复页脚", createdAt: 1793635200 },
@@ -195,6 +202,8 @@ export const fixture = {
   finishTurn: () => { activityComplete = true; turnEnded = true; },
   nextTurn: () => { if (folding) { foldingTurn++; turnEnded = false; activityComplete = false; waiting = false; } },
   updateUsage: () => { usageUpdated = true; },
+  setBackgroundWork: (items: BackgroundWorkEntry[]) => { backgroundItems = items; },
+  clearBackgroundWork: () => { backgroundItems = []; },
   waitForApproval: () => { activityComplete = true; waiting = true; },
   failRead: () => { failRead = true; },
   holdRead: () => { holdRead = true; },

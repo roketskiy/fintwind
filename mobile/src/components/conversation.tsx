@@ -521,7 +521,7 @@ export function Conversation({
             <EmptyTitle>开始新的对话</EmptyTitle>
           </EmptyHeader>
         </Empty>
-        <TodoCapsule key={session.id} todos={session.todos} changes={session.workspaceChanges} usage={session.usage} />
+        <TodoCapsule key={session.id} todos={session.todos} changes={session.workspaceChanges} usage={session.usage} backgroundWork={session.backgroundWork} />
       </div>
     );
   }
@@ -608,7 +608,7 @@ export function Conversation({
           <MessageScrollerButton />
         </MessageScroller>
       </MessageScrollerProvider>
-      <TodoCapsule key={session.id} todos={session.todos} changes={session.workspaceChanges} usage={session.usage} />
+      <TodoCapsule key={session.id} todos={session.todos} changes={session.workspaceChanges} usage={session.usage} backgroundWork={session.backgroundWork} />
     </div>
   );
 }

@@ -2014,7 +2014,7 @@ impl Fintwind {
                 .background_executor()
                 .spawn(async move {
                     let nil = Uuid::nil();
-                    let response = client.request_with_timeout(nil, nil, command, Duration::from_secs(330))?;
+                    let response = client.request_with_timeout(nil, nil, command, Duration::from_secs(1260))?;
                     let settings = match (response, action) {
                         (ResponsePayload::OpenCodeInstalled { settings }, Install) => settings,
                         (ResponsePayload::Ack, Update) => {

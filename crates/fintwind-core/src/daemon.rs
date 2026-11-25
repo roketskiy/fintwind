@@ -1697,17 +1697,13 @@ impl Backend for FintwindBackend {
                     .as_deref()
                     .and_then(crate::model::probe_provider_version);
                 let (latest_version, update_available, check_error) =
-                    if let (Some(current), Some(binary)) = (&current_version, &probe.path) {
+                    if let (Some(current), Some(_)) = (&current_version, &probe.path) {
                         match crate::opencode_management::latest_version_from(
                             crate::opencode_management::LATEST_URL,
                         ) {
                             Ok(latest) => {
                                 match crate::opencode_management::is_newer(current, &latest) {
-                                    Ok(true) => match crate::opencode_management::upgrade_manager(binary) {
-                                        Ok(_) => (Some(latest), true, None),
-                                        Err(error) => (Some(latest), false, Some(error.to_string())),
-                                    },
-                                    Ok(false) => (Some(latest), false, None),
+                                    Ok(available) => (Some(latest), available, None),
                                     Err(error) => (Some(latest), false, Some(error.to_string())),
                                 }
                             }

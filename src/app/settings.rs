@@ -1732,7 +1732,7 @@ impl Fintwind {
                         Uuid::nil(),
                         Uuid::nil(),
                         command,
-                        Duration::from_secs(330),
+                        Duration::from_secs(1260),
                     )
                 })
                 .await;

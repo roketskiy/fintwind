@@ -101,46 +101,6 @@ impl PackageManager {
         self.candidates().into_iter().find(|path| path.is_file())
     }
 
-    fn owns(&self, binary: &Path) -> bool {
-        let Ok(target) = binary.canonicalize() else {
-            return false;
-        };
-        let root = match self.kind {
-            PackageManagerKind::Npm if cfg!(windows) => self.bin.join("node_modules"),
-            PackageManagerKind::Npm => self
-                .bin
-                .parent()
-                .unwrap_or(&self.bin)
-                .join("lib/node_modules"),
-            PackageManagerKind::Bun => self
-                .bin
-                .parent()
-                .unwrap_or(&self.bin)
-                .join("install/global/node_modules"),
-        };
-        let package = root.join("@opencode/cli");
-        if !package.join("package.json").is_file() {
-            return false;
-        }
-        if self
-            .candidates()
-            .iter()
-            .filter_map(|path| path.canonicalize().ok())
-            .any(|path| path == target)
-        {
-            return true;
-        }
-        let name = if cfg!(windows) {
-            "opencode.exe"
-        } else {
-            "opencode"
-        };
-        package.join("bin")
-            .join(name)
-            .canonicalize()
-            .is_ok_and(|path| path == target)
-    }
-
     fn install_version(&self, version: &str) -> Result<()> {
         let parsed = Version::parse(version).context("invalid OpenCode version")?;
         ensure!(parsed.major >= 2, "unsupported OpenCode version");
@@ -187,7 +147,7 @@ fn package_command(executable: &Path) -> Command {
 
 fn run_command(command: &mut Command, timeout: Duration) -> Result<std::process::Output> {
     let output = crate::command_env::output_with_timeout(command, timeout)?
-        .context("package manager timed out")?;
+        .context("command timed out")?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -197,7 +157,7 @@ fn run_command(command: &mut Command, timeout: Duration) -> Result<std::process:
             stderr.trim()
         };
         bail!(
-            "package manager failed: {}",
+            "command failed: {}",
             detail.chars().take(800).collect::<String>()
         );
     }
@@ -230,32 +190,15 @@ pub fn install_with(manager: &PackageManager, version: &str) -> Result<PathBuf> 
 }
 
 pub fn upgrade(binary: &Path, version: &str) -> Result<String> {
-    let manager = upgrade_manager(binary)?;
-    upgrade_with(&manager, binary, version)
-}
-
-pub(crate) fn upgrade_manager(binary: &Path) -> Result<PackageManager> {
-    [PackageManagerKind::Npm, PackageManagerKind::Bun]
-        .into_iter()
-        .filter_map(|kind| PackageManager::discover(kind).ok())
-        .find(|manager| manager.owns(binary))
-        .context(
-            "the selected OpenCode is not managed by the current npm or Bun global installation",
-        )
-}
-
-pub fn upgrade_with(manager: &PackageManager, binary: &Path, version: &str) -> Result<String> {
-    ensure!(
-        manager.owns(binary),
-        "the selected OpenCode is not managed by this package manager"
-    );
     let before = crate::model::probe_provider_version(binary)
         .context("could not read the current OpenCode version")?;
     ensure!(
         is_newer(&before, version)?,
         "the requested version is not newer than the installed version"
     );
-    manager.install_version(version)?;
+    let mut command = package_command(binary);
+    command.args(["upgrade", version]);
+    run_command(&mut command, Duration::from_secs(1200))?;
     let after = crate::model::probe_provider_version(binary)
         .context("could not verify the updated OpenCode version")?;
     ensure!(

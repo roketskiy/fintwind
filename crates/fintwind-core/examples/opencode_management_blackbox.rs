@@ -1,4 +1,4 @@
-//! Package-manager behavior against an isolated fake npm and loopback server.
+//! OpenCode management against isolated fake executables and a loopback server.
 //! The fixture never starts a daemon or invokes the user's npm or OpenCode.
 
 use anyhow::{Context, Result, ensure};
@@ -26,6 +26,17 @@ fn main() -> Result<()> {
             std::fs::read_to_string(executable.with_extension("fixture-version"))
                 .unwrap_or_else(|_| "2.0.0".into())
         );
+        return Ok(());
+    }
+    if args.get(1).is_some_and(|arg| arg == "upgrade") {
+        let version = args.get(2).context("missing upgrade version")?;
+        ensure!(args.len() == 3, "unexpected upgrade arguments");
+        if executable.with_extension("fixture-fail").is_file() {
+            anyhow::bail!("fixture upgrade failed");
+        }
+        if !executable.with_extension("fixture-unchanged").is_file() {
+            std::fs::write(executable.with_extension("fixture-version"), version)?;
+        }
         return Ok(());
     }
     if args.get(1).is_some_and(|arg| arg == "install") {
@@ -118,17 +129,19 @@ fn run() -> Result<()> {
         checks.push("installation uses the chosen package manager and verifies the resulting CLI");
         ensure!(opencode_management::install_with(&manager, &latest).is_err());
         checks.push("installation refuses an existing executable");
-        let other = root.join("other.exe");
-        std::fs::copy(&target, &other)?;
-        ensure!(opencode_management::upgrade_with(&manager, &other, "2.1.0").is_err());
-        ensure!(model::probe_provider_version(&target).as_deref() == Some("2.0.0"));
-        checks.push("update refuses an executable outside the selected manager's bin directory");
-        ensure!(opencode_management::upgrade_with(&manager, &target, "1.0.0").is_err());
+        ensure!(opencode_management::upgrade(&target, "1.0.0").is_err());
         ensure!(model::probe_provider_version(&target).as_deref() == Some("2.0.0"));
         checks.push("update refuses a downgrade");
-        let version = opencode_management::upgrade_with(&manager, &target, "2.1.0")?;
+        std::fs::write(target.with_extension("fixture-fail"), "")?;
+        ensure!(opencode_management::upgrade(&target, "2.1.0").is_err());
+        std::fs::remove_file(target.with_extension("fixture-fail"))?;
+        std::fs::write(target.with_extension("fixture-unchanged"), "")?;
+        ensure!(opencode_management::upgrade(&target, "2.1.0").is_err());
+        std::fs::remove_file(target.with_extension("fixture-unchanged"))?;
+        checks.push("update reports command failure and an unchanged executable");
+        let version = opencode_management::upgrade(&target, "2.1.0")?;
         ensure!(version == "2.1.0");
-        checks.push("explicit update uses the manager and rechecks the selected executable");
+        checks.push("explicit update invokes and rechecks the selected executable");
         let bun_root = root.join("bun-global");
         let bun_bin = bun_root.join("bin");
         std::fs::create_dir_all(&bun_bin)?;
@@ -137,8 +150,8 @@ fn run() -> Result<()> {
         std::fs::write(bun.with_extension("fixture-bin"), bun_bin.to_string_lossy().as_bytes())?;
         let bun_manager = PackageManager::new(PackageManagerKind::Bun, bun, bun_bin);
         let bun_target = opencode_management::install_with(&bun_manager, "2.0.0")?;
-        ensure!(opencode_management::upgrade_with(&bun_manager, &bun_target, "2.1.0")? == "2.1.0");
-        checks.push("Bun installation and update use trusted lifecycle scripts");
+        ensure!(opencode_management::upgrade(&bun_target, "2.1.0")? == "2.1.0");
+        checks.push("Bun installation uses trusted lifecycle scripts and the CLI handles updates");
         Ok(checks)
     })();
     stop.store(true, Ordering::Release);

@@ -234,6 +234,13 @@ impl Fintwind {
         result: anyhow::Result<Option<String>>,
         cx: &mut Context<Self>,
     ) {
+        let workspace_path = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .and_then(|session| self.workspace_path_for_session(session))
+            .map(Path::to_path_buf);
         let Some(state) = self.btw_states.get_mut(&session_id).filter(|state| {
             state
                 .request
@@ -269,6 +276,7 @@ impl Fintwind {
                         Some(px(0.0)),
                         cx,
                     )
+                    .with_workspace_path(workspace_path.as_deref())
                     .with_height(gpui::relative(1.0));
                     view.set_source(&answer, (1, 1), false, cx);
                     view

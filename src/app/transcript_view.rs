@@ -1613,6 +1613,7 @@ impl Fintwind {
         MarkdownCtx::new(row, palette, metrics, selection.clone())
             .with_link_handler(self.markdown_link_handler.clone())
             .with_streaming_animation(animate_streaming)
+            .with_workspace_path(self.selected_workspace_path())
     }
 
     /// The menu handle for `id`, created on first use.
@@ -3234,6 +3235,7 @@ impl Fintwind {
             if reasoning.content.len() > md::virtualized::THRESHOLD
                 || self.reasoning_views.borrow().contains_key(&id)
             {
+                let workspace_path = self.selected_workspace_path().map(Path::to_path_buf);
                 let view = self
                     .reasoning_views
                     .borrow_mut()
@@ -3250,6 +3252,7 @@ impl Fintwind {
                                     .map(|viewport| -viewport.scroll_handle.offset().y),
                                 cx,
                             )
+                            .with_workspace_path(workspace_path.as_deref())
                         })
                     })
                     .clone();
@@ -3637,20 +3640,19 @@ impl Fintwind {
                 }
             }
             let weak_fintwind = cx.entity().downgrade();
+            let workspace_path = self.selected_workspace_path();
             for (image_index, image_url) in activity.image_urls.iter().enumerate() {
-                let focus = self.transcript_control_focus(
-                    format!("activity-image-{id}-{image_index}"),
-                    cx,
-                );
+                let image_id = format!("activity-image-{id}-{image_index}");
+                let focus = self.transcript_control_focus(image_id.clone(), cx);
                 detail_card = detail_card.child(render_activity_image(
                     image_url,
+                    workspace_path,
                     activity_images[image_index].clone(),
                     activity_gallery_indices[image_index].map(|gallery_index| {
                         (weak_fintwind.clone(), gallery_items.clone(), gallery_index)
                     }),
                     focus,
-                    id,
-                    image_index,
+                    SharedString::from(image_id),
                     theme,
                 ));
             }
@@ -4125,6 +4127,7 @@ fn activity_image_display_name(
 
 fn render_activity_image(
     image_url: &str,
+    workspace_path: Option<&Path>,
     image: Option<Arc<gpui::Image>>,
     preview_target: Option<(
         gpui::WeakEntity<Fintwind>,
@@ -4132,14 +4135,12 @@ fn render_activity_image(
         usize,
     )>,
     focus: FocusHandle,
-    activity_id: Uuid,
-    image_index: usize,
+    id: SharedString,
     theme: &Theme,
 ) -> AnyElement {
     // Daemon blobs arrive only when a visible row requests them and GPUI keeps
     // their decoded form in memory. Data URLs are decoded once per row build
     // when creating the activity gallery.
-    let id = SharedString::from(format!("activity-image-{activity_id}-{image_index}"));
     if let Some(image) = image {
         let mut preview_box = div()
             .id(id.clone())
@@ -4224,7 +4225,10 @@ fn render_activity_image(
 
     match decode_activity_image(image_url) {
         Some(image) => img(image),
-        None => img(image_url.to_owned()),
+        None => match crate::file_target::resolve_image(image_url, workspace_path) {
+            Some(path) => img(path),
+            None => img(image_url.to_owned()),
+        },
     }
     .id(id)
     .w(px(ACTIVITY_IMAGE_WIDTH))

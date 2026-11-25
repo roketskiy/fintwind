@@ -326,6 +326,7 @@ pub struct ReasoningView {
     selection: TranscriptSelection,
     link_handler: LinkHandler,
     row_id: String,
+    workspace_path: Option<Arc<std::path::Path>>,
     initial_scroll: Option<gpui::Pixels>,
     height: gpui::Length,
     release_notes: bool,
@@ -363,10 +364,16 @@ impl ReasoningView {
             selection,
             link_handler,
             row_id,
+            workspace_path: None,
             initial_scroll,
             height: px(400.0).into(),
             release_notes: false,
         }
+    }
+
+    pub fn with_workspace_path(mut self, path: Option<&std::path::Path>) -> Self {
+        self.workspace_path = path.map(Arc::from);
+        self
     }
 
     /// Fit another Markdown surface, such as the release-notes card, while
@@ -507,6 +514,7 @@ impl Render for ReasoningView {
                                 this.selection.clone(),
                             )
                             .with_link_handler(this.link_handler.clone())
+                            .with_workspace_path(this.workspace_path.as_deref())
                             .with_streaming_animation(false);
                             ctx.release_notes = this.release_notes;
                             render::virtual_row(

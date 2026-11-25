@@ -1986,7 +1986,8 @@ impl Fintwind {
                     selection.clone(),
                 )
                 .with_link_handler(self.markdown_link_handler.clone())
-                .with_streaming_animation(message.streaming && !cx.reduce_motion());
+                .with_streaming_animation(message.streaming && !cx.reduce_motion())
+                .with_workspace_path(self.selected_workspace_path());
                 let menu = self.menu_handle(format!("background-message-{}", message.id), cx);
                 let user_message_toggle_focus = (message.role == MessageRole::User).then(|| {
                     self.transcript_control_focus(format!("user-message-toggle-{}", message.id), cx)

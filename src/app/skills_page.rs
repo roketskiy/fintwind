@@ -1279,7 +1279,7 @@ impl Fintwind {
             let mut cache = self.skills_detail_markdown.borrow_mut();
             let primary_dir = skill.primary().dir.clone();
             if !matches!(cache.as_ref(), Some((cached, _)) if cached == &primary_dir) {
-                *cache = Some((primary_dir, MarkdownView::new()));
+                *cache = Some((primary_dir.clone(), MarkdownView::new()));
             }
             let (_, view) = cache.as_mut().expect("entry ensured above");
             view.set_text(&skill.body, false);
@@ -1288,7 +1288,8 @@ impl Fintwind {
                 &palette,
                 MarkdownMetrics::compact(),
                 self.skills_selection.clone(),
-            );
+            )
+            .with_workspace_path(Some(primary_dir.as_path()));
             div()
                 .mt(px(18.0))
                 .pt(px(14.0))

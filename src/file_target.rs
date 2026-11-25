@@ -95,6 +95,41 @@ pub(crate) fn resolve(target: &str, workspace: Option<&Path>) -> Option<PathBuf>
     }
 }
 
+/// Resolve a local image target (path, `file:` URL, `~/` path, or
+/// percent-encoded Markdown path) against `workspace`.
+pub(crate) fn resolve_image(target: &str, workspace: Option<&Path>) -> Option<PathBuf> {
+    let target = target.trim();
+    if target.is_empty() {
+        return None;
+    }
+    if let Some(rest) = target
+        .strip_prefix("~/")
+        .or_else(|| target.strip_prefix("~\\"))
+    {
+        let rest = rest.trim_start_matches(['/', '\\']);
+        let home = dirs::home_dir()?;
+        let decoded = rest.contains('%').then(|| decode(rest)).flatten();
+        let path = parse(decoded.as_deref().unwrap_or(rest), true)?;
+        return (!path.has_root()).then(|| home.join(path));
+    }
+    if target
+        .get(..5)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("file:"))
+    {
+        return resolve(target, workspace);
+    }
+    if target.contains("://") {
+        return None;
+    }
+    if target.contains('%')
+        && let Some(decoded) = decode(target)
+        && let Some(resolved) = resolve(&decoded, workspace)
+    {
+        return Some(resolved);
+    }
+    resolve(target, workspace)
+}
+
 fn decode(value: &str) -> Option<String> {
     let mut output = Vec::with_capacity(value.len());
     let mut bytes = value.bytes();

@@ -1,7 +1,9 @@
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
+use std::path::Path;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
@@ -31,6 +33,8 @@ mod math_text;
 
 #[cfg(test)]
 mod copy_e2e;
+#[cfg(test)]
+mod local_image_e2e;
 #[cfg(test)]
 mod selection_scroll_e2e;
 
@@ -689,6 +693,7 @@ pub struct Ctx<'a> {
     reference_catalog: Option<Rc<crate::mentions::Catalog>>,
     privacy: Option<Rc<OnceCell<History>>>,
     row: Rc<str>,
+    workspace_path: Option<Arc<Path>>,
     palette: &'a Palette,
     metrics: Metrics,
     selection: TranscriptSelection,
@@ -716,6 +721,7 @@ impl<'a> Ctx<'a> {
             reference_catalog: None,
             privacy: None,
             row: row.into(),
+            workspace_path: None,
             palette,
             metrics,
             selection,
@@ -750,6 +756,11 @@ impl<'a> Ctx<'a> {
         self
     }
 
+    pub fn with_workspace_path(mut self, path: Option<&Path>) -> Self {
+        self.workspace_path = path.map(Arc::from);
+        self
+    }
+
     pub fn with_streaming_animation(mut self, animate: bool) -> Self {
         self.animate_streaming = animate;
         self
@@ -772,6 +783,7 @@ impl<'a> Ctx<'a> {
             reference_catalog: self.reference_catalog.clone(),
             privacy: self.privacy.clone(),
             row: self.row.clone(),
+            workspace_path: self.workspace_path.clone(),
             palette: self.palette,
             metrics: self.metrics,
             selection: self.selection.clone(),
@@ -1896,7 +1908,8 @@ fn checkbox(checked: bool, ctx: &Ctx) -> AnyElement {
         .into_any_element()
 }
 
-/// An inline image. Data URLs decode in place; anything else is handed to GPUI
+/// An inline image. Data URLs decode in place, local paths and `file:` URLs
+/// load asynchronously from disk via GPUI, and anything else is handed to GPUI
 /// to load. The alt text renders beneath as a caption when there is one, so a
 /// failed or slow load still says what it was.
 fn render_image(url: &str, alt: &str, ctx: &Ctx) -> AnyElement {
@@ -1904,9 +1917,13 @@ fn render_image(url: &str, alt: &str, ctx: &Ctx) -> AnyElement {
 
     let key = ctx.next_key();
     let id = SharedString::from(format!("image-{}-{}", key.row, key.index));
+    let debug_id = id.clone();
     let image = match decode_data_url(url) {
         Some(decoded) => img(decoded).id(id),
-        None => img(url.to_owned()).id(id),
+        None => match crate::file_target::resolve_image(url, ctx.workspace_path.as_deref()) {
+            Some(path) => img(path).id(id),
+            None => img(url.to_owned()).id(id),
+        },
     };
     div()
         .w_full()
@@ -1916,6 +1933,7 @@ fn render_image(url: &str, alt: &str, ctx: &Ctx) -> AnyElement {
         .gap(px(4.0))
         .child(
             image
+                .debug_selector(move || debug_id.to_string())
                 .max_w(relative(1.0))
                 .max_h(px(MAX_HEIGHT))
                 .rounded(px(6.0))

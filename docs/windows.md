@@ -96,9 +96,9 @@ You can also choose an executable, including a portable `opencode-cli.exe`, in
 **Settings → General → Runtime environment**. The selected path applies to
 subsequent session starts and background operations. Running sessions keep
 their existing process. Restore automatic detection from the same setting.
-The same section can check the version and install OpenCode using npm or Bun.
-In-app updates apply only to installations managed by the current npm or Bun;
-portable and other installations must be updated separately.
+The same section can check the version, install OpenCode using npm or Bun,
+and update an installed OpenCode using its built-in `upgrade` command.
+Updating does not restart running OpenCode processes.
 
 If the CLI is installed but not detected, make sure `opencode --version` works
 in a new PowerShell window, or select its executable in settings.

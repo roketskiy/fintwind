@@ -18,6 +18,32 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+### 新功能
+
+- 重构用量仪表盘并整合订阅余额卡片：顶部合并为 4 张指标卡片（总 Tokens、生成 Tokens、平均缓存命中率与订阅余额），点击前三项可切换主趋势图指标；订阅余额卡片支持分页浏览、点击查看多窗口或余额详情及独立刷新；趋势图支持对比上一周期；底部提供渠道分布（按模型、提供商、项目与全量构成切换）与活跃分布（6 周周矩阵与 26 周热力图切换）（[206a48fb](https://github.com/roketskiy/fintwind/commit/206a48fbc207a26018e901cdeb72952871231db6)）。
+- 重构图片预览器并统一 Mermaid 图表查看：重写为独立预览浮层，支持多图切换（`←`/`→`）、缩放与适应窗口或 1:1 切换（`Ctrl+=`/`Ctrl+-`/`Ctrl+0`/`Ctrl+1`、滚轮与触控板双指缩放）、放大拖拽平移、左右 90° 旋转（`R`/`Shift+R`）、复制图片（`Ctrl+C`）、另存为 PNG（`Ctrl+S`）及在文件管理器中显示，覆盖对话图片、活动卡片工具图片与 Mermaid 图表（[ef79d07f](https://github.com/roketskiy/fintwind/commit/ef79d07f8286fe0af70330d8ecd22cdc51f62497)）。
+- 会话历史支持加载本地图片：对话与活动卡片中的图片支持从磁盘异步读取工作区相对路径、`~/` 路径、`file:` URL 及百分号编码的 Markdown 路径（[728fce8a](https://github.com/roketskiy/fintwind/commit/728fce8a99025c9b545ed6826574cf536087eb46)）。
+- 会话内容与公式中的链接支持悬停查看目标地址，并通过右键菜单复制链接（[d0d11855](https://github.com/roketskiy/fintwind/commit/d0d11855b85c9096cc983c2ab9e7255c4b50f224)）。
+- 手机远控改用 WebRTC 直连并增强移动端功能：远控 v2 通过 `/signal/v2` 加密信令与仅 STUN 的 WebRTC 数据通道直连，退役业务中继；桌面侧边栏常驻远控入口并改造配对页面（提供二维码与可切换的配对链接及凭据提醒）；手机端支持 `@` 文件提及搜索、`/btw` 临时旁问抽屉、待办胶囊展示会话后台任务及实时耗时、上下文压缩中与已压缩状态、以及对话尾标轮次统计与每秒运行计时（[2d13554f](https://github.com/roketskiy/fintwind/commit/2d13554f6e32b03de6337cd34758f46992cbc1e8)、[030c1e89](https://github.com/roketskiy/fintwind/commit/030c1e89efa29f807c1c23d799a4a8282f83acd7)、[c937472c](https://github.com/roketskiy/fintwind/commit/c937472c75aba8a927eb366a4862aad0e7688986)、[19b53e31](https://github.com/roketskiy/fintwind/commit/19b53e317e6be1d6498ed5f0e72c910d8c0d4f6b)、[0808de60](https://github.com/roketskiy/fintwind/commit/0808de60f70da34cb3204265f008ab3b98e74796)、[cd9e597d](https://github.com/roketskiy/fintwind/commit/cd9e597dc500242cc0a4d0e1f0f1969f66542e31)、[0081ece5](https://github.com/roketskiy/fintwind/commit/0081ece5b358ceb2104d7541b346beb76525140c)、[2f19e713](https://github.com/roketskiy/fintwind/commit/2f19e713c473dd8d2cae796dad68538b69abc550)）。
+
+### 改进
+
+- 审阅页查看单个提交的更改时，在左侧栏显示该提交的更改文件树（[3a0ace93](https://github.com/roketskiy/fintwind/commit/3a0ace93886f892428a8038eaa138f26c21fe8e1)）。
+- OpenCode 应用内更新改用 OpenCode 内置的 `upgrade` 命令直接升级（[a401b0ba](https://github.com/roketskiy/fintwind/commit/a401b0ba62b2117340333d500bf4107c97cf5b94)）。
+- 优化手机远控断线重连稳定性；移动端会话配置改用独立操作状态并读取确认生效；收紧移动端行高并扩展触控命中区（[22390b70](https://github.com/roketskiy/fintwind/commit/22390b7094651cf33e592f25fd5e33a93ff19d9b)、[8a73501e](https://github.com/roketskiy/fintwind/commit/8a73501e6fb8a8e2ce1816ed757552d8e5768dd7)、[a0a2c1dc](https://github.com/roketskiy/fintwind/commit/a0a2c1dc5565406a8be068def1b24d72096b8d3c)）。
+- 输入框斜杠命令展开移入后台按工作区缓存执行，并发现工作区自定义命令（上限 512）（[a86b5571](https://github.com/roketskiy/fintwind/commit/a86b5571a5e921ce6c9ce83130d6857c6e2c948e)）。
+- 轻微降低桌面端与移动端浅色、深色主题的配色饱和度（[14da7a1d](https://github.com/roketskiy/fintwind/commit/14da7a1d2bd37d75359a33d7bf5df66405591fa8)）。
+
+### 修复
+
+- 修复最大化窗口无法还原的问题（[b48d58b0](https://github.com/roketskiy/fintwind/commit/b48d58b03f2c5efe76d7b9f2e81f03d0f82fc369)）。
+- 修复斜杠命令调用技能问题，并完善移动端 `/` 命令分发（支持 `/compact`、`/goal` 等处理，未知命令直接报错而不再当作普通文本发送）（[e79f88fb](https://github.com/roketskiy/fintwind/commit/e79f88fb03ffcd785c5ad50d257b7d17270342a9)、[157ea92c](https://github.com/roketskiy/fintwind/commit/157ea92ca676b25b67d107e1c7f0b35050cbcd0a)）。
+- 隐藏开关控件在鼠标点击时显示的焦点高亮，仅保留键盘聚焦样式（[76e1c014](https://github.com/roketskiy/fintwind/commit/76e1c0148d473a4f0095b7f918e967d31be591cd)）。
+
+### 兼容性
+
+继续使用 OpenCode 2（`@opencode/cli`）作为后端，不适用于 OpenCode 1.x，本版支持到 OpenCode 2.4.1。
+
 ## [0.3.3]
 
 ```

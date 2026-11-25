@@ -112,6 +112,7 @@ export const remoteClient = {
   subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
   getSnapshot: () => snapshot,
   start: () => phase("connected"), stop: () => phase("idle"), reconnect: () => phase("connected"), forget: async () => phase("unpaired"),
+  resume: async () => snapshot.connection === "connected",
   async command<K extends CommandType>(type: K, _fields: CommandMap[K]["fields"]): Promise<CommandMap[K]["result"]> {
     let result: unknown;
     if (type === "listWorkspaces") result = { workspaces: [{ id: "fixture-project", name: "Fixture" }, ...(workflowEnabled ? [{ id: "other-project", name: "Other workspace" }] : [])], selectedProjectId: "fixture-project", ...(workflowEnabled && params.get("legacy") !== "1" ? { features: ["taskActivity"] } : {}) };

@@ -65,9 +65,9 @@ impl PeerConnectionEventHandler for ConnectionHandler {
 
 struct Peer {
     connection: Arc<dyn PeerConnection>,
-    channels: Option<mpsc::Receiver<Arc<dyn DataChannel>>>,
+    channels: mpsc::Receiver<Arc<dyn DataChannel>>,
     gathered: watch::Receiver<bool>,
-    states: Option<mpsc::Receiver<RTCPeerConnectionState>>,
+    states: mpsc::Receiver<RTCPeerConnectionState>,
 }
 
 impl Peer {
@@ -97,9 +97,9 @@ impl Peer {
             .build().await.context("could not create direct connection")?;
         Ok(Self {
             connection: Arc::new(connection),
-            channels: Some(channels),
+            channels,
             gathered,
-            states: Some(states),
+            states,
         })
     }
 
@@ -120,7 +120,7 @@ impl Peer {
     }
 
     async fn close(&self) {
-        let _ = self.connection.close().await;
+        let _ = tokio::time::timeout(CONNECT_TIMEOUT, self.connection.close()).await;
     }
 }
 
@@ -130,9 +130,13 @@ struct ActiveConnection {
 }
 
 impl ActiveConnection {
-    async fn close(self) -> anyhow::Result<()> {
-        let _ = self.connection.close().await;
-        self.task.await.context("remote session task stopped")?
+    fn retire(self) {
+        // Stop accepting operations on the old channel before switching to
+        // the new one, without making its transport cleanup a prerequisite.
+        self.task.abort();
+        tokio::spawn(async move {
+            let _ = tokio::time::timeout(CONNECT_TIMEOUT, self.connection.close()).await;
+        });
     }
 }
 
@@ -140,11 +144,55 @@ impl ActiveConnection {
 enum Link {
     Offline,
     Connecting(tokio::task::JoinHandle<anyhow::Result<Signal>>),
-    Ready {
-        signal: Option<Signal>,
-        #[allow(clippy::type_complexity)]
-        reading: Option<tokio::task::JoinHandle<anyhow::Result<(Signal, Option<Incoming>)>>>,
-    },
+    Ready(Signal),
+}
+
+struct PendingPeer {
+    cancel: tokio::sync::oneshot::Sender<()>,
+    task: tokio::task::JoinHandle<anyhow::Result<Option<PreparedPeer>>>,
+}
+
+struct PreparedPeer {
+    peer: Peer,
+    offer: Offer,
+    sdp: String,
+    offer_hash: String,
+    answer_hash: String,
+}
+
+impl PendingPeer {
+    fn start(stun_url: String, offer: Offer) -> Self {
+        let (cancel, cancelled) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let mut peer = Peer::new(stun_url).await?;
+            let answer = tokio::select! {
+                _ = cancelled => {
+                    peer.close().await;
+                    return Ok(None);
+                }
+                result = tokio::time::timeout(NEGOTIATE_TIMEOUT, peer.answer(&offer)) => {
+                    result.context("ICE answer gathering timed out").and_then(|answer| answer)
+                }
+            };
+            match answer {
+                Ok((sdp, offer_hash, answer_hash)) => Ok(Some(PreparedPeer { peer, offer, sdp, offer_hash, answer_hash })),
+                Err(error) => {
+                    peer.close().await;
+                    Err(error)
+                }
+            }
+        });
+        Self { cancel, task }
+    }
+
+    fn retire(self) {
+        let _ = self.cancel.send(());
+        tokio::spawn(async move {
+            if let Ok(Ok(Some(prepared))) = self.task.await {
+                prepared.peer.close().await;
+            }
+        });
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -186,13 +234,12 @@ async fn run_transport(
     let session = Session::new(secret, session_events, cancelled.clone(), mutations);
     let mut accepted = HashSet::<[u8; 32]>::new();
     let mut active: Option<ActiveConnection> = None;
+    let mut pending: Option<PendingPeer> = None;
     let mut link = Link::Offline;
     let mut retry_at = tokio::time::Instant::now();
     let mut retry_delay = INITIAL_RETRY;
     let mut joined = false;
     let mut reported = RemoteStatus::Connecting;
-    let mut terminal_error = None;
-    let mut cancelled_error = None;
     let urls = match config.signal_url().and_then(|signal| config.stun_url(stun_port).map(|stun| (signal, stun))) {
         Ok(urls) => urls,
         Err(error) => {
@@ -218,7 +265,10 @@ async fn run_transport(
         }
         if active.as_ref().is_some_and(|connection| connection.task.is_finished()) {
             let connection = active.take().unwrap();
-            let result = connection.close().await;
+            let result = connection.task.await.context("remote session task stopped").and_then(|result| result);
+            tokio::spawn(async move {
+                let _ = tokio::time::timeout(CONNECT_TIMEOUT, connection.connection.close()).await;
+            });
             while let Ok(event) = session_receiver.try_recv() {
                 if matches!(event, RemoteEvent::Status(RemoteStatus::Connected)) {
                     reported = RemoteStatus::Connected;
@@ -229,6 +279,7 @@ async fn run_transport(
                 }
             }
             match result {
+                _ if pending.is_some() => publish(&events, &mut reported, RemoteStatus::Connecting).await,
                 Ok(()) => publish(&events, &mut reported, RemoteStatus::Waiting).await,
                 Err(error) => {
                     if !cancelled.load(Ordering::Acquire) {
@@ -277,7 +328,7 @@ async fn run_transport(
                 let result = task.await.context("signaling task stopped").and_then(|result| result);
                 match result {
                     Ok(signal) => {
-                        link = Link::Ready { signal: Some(signal), reading: None };
+                        link = Link::Ready(signal);
                         retry_delay = INITIAL_RETRY;
                         joined = false;
                     }
@@ -289,74 +340,72 @@ async fn run_transport(
                     }
                 }
             }
-            Link::Ready { signal, reading } => {
-                if reading.is_none() {
-                    let Some(mut owned) = signal.take() else {
-                        terminal_error = Some(anyhow::anyhow!("signaling socket unavailable"));
-                        break;
-                    };
-                    let completed = wake.clone();
-                    let task = tokio::spawn(async move {
-                        let result = owned.next().await.map(|incoming| (owned, incoming));
-                        completed.notify_one();
-                        result
-                    });
-                    *reading = Some(task);
-                }
-                if reading.as_ref().is_some_and(|task| task.is_finished()) {
-                    let task = reading.take().unwrap();
-                    let result = task.await.context("signaling read task stopped").and_then(|result| result);
-                    match result {
-                        Ok((returned_signal, incoming)) => {
-                            *signal = Some(returned_signal);
-                            match incoming {
-                                Some(Incoming::Joined) => {
-                                    joined = true;
-                                    if active.is_none() { publish(&events, &mut reported, RemoteStatus::Waiting).await; }
-                                }
-                                Some(Incoming::PeerOnline(online)) => {
-                                    if joined && online && active.is_none() { publish(&events, &mut reported, RemoteStatus::Waiting).await; }
-                                }
-                                Some(Incoming::Offer(offer)) => {
-                                    if accepted.contains(&offer.attempt) { continue; }
-                                    accepted.insert(offer.attempt);
-                                    if let Some(previous) = active.take() {
-                                        let _ = previous.close().await;
-                                    }
-                                    let Some(open_signal) = signal.as_mut() else {
-                                        terminal_error = Some(anyhow::anyhow!("signaling socket unavailable"));
-                                        break;
-                                    };
-                                    match start_peer(open_signal, &urls.1, offer, session.clone(), cancelled.clone(), wake.clone()).await {
-                                        Ok(connection) => {
-                                            active = Some(connection);
-                                            publish(&events, &mut reported, RemoteStatus::Connecting).await;
-                                        }
-                                        Err(error) => {
-                                            if cancelled.load(Ordering::Acquire) {
-                                                cancelled_error = Some(error);
-                                            } else {
-                                                publish(&events, &mut reported, RemoteStatus::Failed(safe_failure(&error))).await;
-                                            }
-                                            if cancelled.load(Ordering::Acquire) { break; }
-                                        }
-                                    }
-                                }
-                                None => {}
+            Link::Ready(signal) => {
+                tokio::select! {
+                    incoming = signal.next() => match incoming {
+                        Ok(Some(Incoming::Joined)) => {
+                            joined = true;
+                            if active.is_none() { publish(&events, &mut reported, RemoteStatus::Waiting).await; }
+                        }
+                        Ok(Some(Incoming::PeerOnline(online))) => {
+                            if !online && let Some(previous) = pending.take() { previous.retire(); }
+                            if joined && active.is_none() && pending.is_none() {
+                                publish(&events, &mut reported, RemoteStatus::Waiting).await;
                             }
                         }
+                        Ok(Some(Incoming::Offer(offer))) => {
+                            if !accepted.insert(offer.attempt) { continue; }
+                            if let Some(previous) = pending.take() { previous.retire(); }
+                            pending = Some(PendingPeer::start(urls.1.clone(), offer));
+                            if active.is_none() { publish(&events, &mut reported, RemoteStatus::Connecting).await; }
+                        }
+                        Ok(None) => {}
                         Err(error) => {
+                            if let Some(previous) = pending.take() { previous.retire(); }
                             link = Link::Offline;
                             retry_at = tokio::time::Instant::now() + retry_delay;
                             retry_delay = (retry_delay * 2).min(MAX_RETRY);
                             if active.is_none() { publish(&events, &mut reported, RemoteStatus::Failed(safe_failure(&error))).await; }
                         }
+                    },
+                    result = async { (&mut pending.as_mut().unwrap().task).await }, if pending.is_some() => {
+                        pending = None;
+                        match result.context("peer negotiation task stopped").and_then(|result| result) {
+                            Ok(Some(mut prepared)) => {
+                                let sent = tokio::time::timeout(CONNECT_TIMEOUT, signal.send_answer(&mut prepared.offer, &prepared.sdp)).await;
+                                if !matches!(sent, Ok(Ok(()))) {
+                                    tokio::spawn(async move { prepared.peer.close().await; });
+                                    link = Link::Offline;
+                                    retry_at = tokio::time::Instant::now() + retry_delay;
+                                    retry_delay = (retry_delay * 2).min(MAX_RETRY);
+                                    if active.is_none() { publish(&events, &mut reported, RemoteStatus::Failed("信令连接失败，正在重试".into())).await; }
+                                    continue;
+                                }
+                                if let Some(previous) = active.take() { previous.retire(); }
+                                active = Some(start_session(prepared, session.clone(), cancelled.clone(), wake.clone()));
+                                publish(&events, &mut reported, RemoteStatus::Connecting).await;
+                            }
+                            Err(error) if active.is_none() => {
+                                publish(&events, &mut reported, RemoteStatus::Failed(safe_failure(&error))).await;
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ = wake.notified() => {},
+                    event = session_receiver.recv() => {
+                        if let Some(event) = event {
+                            if matches!(event, RemoteEvent::Status(RemoteStatus::Connected)) && active.is_some() {
+                                reported = RemoteStatus::Connected;
+                            }
+                            if events.send(event).await.is_err() { cancelled.store(true, Ordering::Release); }
+                        }
                     }
                 }
+                continue;
             }
             _ => {}
         }
-        if matches!(&link, Link::Ready { signal: Some(_), reading: None }) {
+        if matches!(&link, Link::Ready(_)) {
             continue;
         }
         tokio::select! {
@@ -380,81 +429,41 @@ async fn run_transport(
             } => {},
         }
     }
-    if let Some(connection) = active.take() { let _ = connection.close().await; }
+    if let Some(previous) = pending.take() { previous.retire(); }
+    if let Some(connection) = active.take() {
+        connection.task.abort();
+        let _ = tokio::time::timeout(CONNECT_TIMEOUT, connection.connection.close()).await;
+    }
     while let Ok(event) = session_receiver.try_recv() {
         if events.send(event).await.is_err() { break; }
     }
     match link {
         Link::Connecting(task) => task.abort(),
-        Link::Ready { signal, reading } => {
-            if let Some(task) = reading { task.abort(); }
-            if let Some(mut signal) = signal { signal.close().await; }
-        }
+        Link::Ready(mut signal) => { let _ = tokio::time::timeout(CONNECT_TIMEOUT, signal.close()).await; }
         Link::Offline => {}
     }
     drop(session);
     while let Some(event) = session_receiver.recv().await {
         if events.send(event).await.is_err() { break; }
     }
-    if let Some(error) = terminal_error.or(cancelled_error) {
-        publish(&events, &mut reported, RemoteStatus::Failed(safe_failure(&error))).await;
-    }
 }
 
-async fn start_peer(
-    signal: &mut Signal,
-    stun_url: &str,
-    mut offer: Offer,
+fn start_session(
+    prepared: PreparedPeer,
     session: Arc<Session>,
     cancelled: Arc<AtomicBool>,
     wake: Arc<Notify>,
-) -> anyhow::Result<ActiveConnection> {
-    let mut peer = Peer::new(stun_url.to_owned()).await?;
-    if cancelled.load(Ordering::Acquire) {
-        peer.close().await;
-        bail!("remote control stopped");
-    }
-    let answer = match await_cancelled(&cancelled, NEGOTIATE_TIMEOUT, peer.answer(&offer)).await {
-        Ok(Some(answer)) => answer,
-        Ok(None) => { peer.close().await; bail!("remote control stopped"); }
-        Err(error) => { peer.close().await; return Err(error); }
-    };
-    let sent = match await_cancelled(&cancelled, CONNECT_TIMEOUT, signal.send_answer(&mut offer, &answer.0)).await {
-        Ok(result) => result,
-        Err(error) => { peer.close().await; return Err(error); }
-    };
-    if !matches!(sent, Some(())) {
-        peer.close().await;
-        bail!("signaling answer failed");
-    }
-    let channels = peer.channels.take().context("channel receiver unavailable")?;
-    let states = peer.states.take().context("state receiver unavailable")?;
-    let connection = peer.connection.clone();
+) -> ActiveConnection {
+    let PreparedPeer { peer, offer, offer_hash, answer_hash, .. } = prepared;
+    let Peer { connection, channels, states, .. } = peer;
     let session_peer = connection.clone();
     let attempt_text = offer.attempt_text;
     let task = tokio::spawn(async move {
-        let result = run_session(session, channels, states, session_peer, cancelled, attempt_text, answer.1, answer.2).await;
+        let result = run_session(session, channels, states, session_peer, cancelled, attempt_text, offer_hash, answer_hash).await;
         wake.notify_one();
         result
     });
-    Ok(ActiveConnection { connection, task })
-}
-
-async fn await_cancelled<T>(
-    cancelled: &AtomicBool,
-    timeout: Duration,
-    operation: impl std::future::Future<Output = anyhow::Result<T>>,
-) -> anyhow::Result<Option<T>> {
-    let mut operation = Box::pin(operation);
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        if cancelled.load(Ordering::Acquire) { return Ok(None); }
-        tokio::select! {
-            result = &mut operation => return result.map(Some),
-            _ = tokio::time::sleep_until(deadline) => bail!("remote operation timed out"),
-            _ = tokio::time::sleep(TICK) => {}
-        }
-    }
+    ActiveConnection { connection, task }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -522,7 +531,7 @@ async fn run_session(
     }
     drop(opening);
     let health_channel = channel.clone();
-    let health = tokio::spawn(async move {
+    let health = async move {
         let mut disconnected_since = None;
         loop {
             match states.recv().await {
@@ -553,10 +562,11 @@ async fn run_session(
                 None => break,
             }
         }
-    });
-    let result = session.run(channel, attempt_text, offer_hash, answer_hash).await;
-    health.abort();
-    result
+    };
+    tokio::select! {
+        result = session.run(channel, attempt_text, offer_hash, answer_hash) => result,
+        () = health => Ok(()),
+    }
 }
 
 async fn publish(events: &mpsc::Sender<RemoteEvent>, reported: &mut RemoteStatus, status: RemoteStatus) {

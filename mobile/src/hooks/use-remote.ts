@@ -164,6 +164,7 @@ export function useRemote() {
       fetching = true;
       try {
         if (selection.page === "conversation" && selection.sessionId) {
+          const current = remoteClient.command("getSession", { sessionId: selection.sessionId });
           if (!workspaceCache.current || Date.now() - workspaceCache.current.at >= 30000) {
             void remoteClient.command("listWorkspaces", {}).then((result) => {
               if (!active || epoch !== generation.current) return;
@@ -171,9 +172,7 @@ export function useRemote() {
               setData((value) => ({ ...value, workspaces: result.workspaces }));
             }).catch(() => { /* Session reads report their own error; workspace labels are optional. */ });
           }
-          const detail = await remoteClient.command("getSession", {
-            sessionId: selection.sessionId,
-          });
+          const detail = await current;
           if (!active || epoch !== generation.current) return;
           refreshInterval = sessionInterval(detail);
           setData((value) =>
@@ -256,7 +255,12 @@ export function useRemote() {
     void refresh();
     const onVisible = () => {
       if (document.hidden) { stopWatching(); window.clearTimeout(timer); }
-      else { streamUnavailable = false; streamFailures = 0; void refresh(); }
+      else void remoteClient.resume().then((alive) => {
+        if (!alive || !active || document.hidden) return;
+        streamUnavailable = false;
+        streamFailures = 0;
+        void refresh();
+      });
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {

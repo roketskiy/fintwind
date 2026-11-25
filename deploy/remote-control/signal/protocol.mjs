@@ -113,6 +113,8 @@ export function forwardSignalFrame(sender, envelope) {
     return { type: 'signal', version: VERSION, sender, attempt: envelope.attempt, seq: envelope.seq, data: envelope.data };
 }
 
-export function errorFrame(message) {
-    return { type: 'error', version: VERSION, message };
+export function errorFrame(message, retryAfterMs) {
+    const frame = { type: 'error', version: VERSION, message };
+    if (retryAfterMs !== undefined) frame.retryAfterMs = retryAfterMs;
+    return frame;
 }

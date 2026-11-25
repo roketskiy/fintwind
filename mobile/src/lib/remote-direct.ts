@@ -25,9 +25,18 @@ export interface DirectConnection {
   close(): void;
 }
 
+export const SIGNAL_RETRY_MESSAGE = "连接尝试过于频繁，稍后自动重试。";
+
+export class SignalRateLimited extends Error {
+  constructor(readonly retryAfterMs: number) {
+    super(SIGNAL_RETRY_MESSAGE);
+  }
+}
+
 interface Options {
   route: string;
   secret: CryptoKey;
+  signal: AbortSignal;
   onMessage(text: string): void;
   onDisconnect(error: Error): void;
 }
@@ -37,6 +46,7 @@ export async function connectDirect(options: Options): Promise<DirectConnection>
   const attemptBytes = crypto.getRandomValues(new Uint8Array(32));
   const attempt = encodeBase64Url(attemptBytes);
   const [phoneKey, desktopKey] = await deriveSignalKeys(options.secret, attemptBytes);
+  options.signal.throwIfAborted();
   const socket = new WebSocket(`wss://${window.location.host}/signal/v2`);
   let peer: RTCPeerConnection;
   try {
@@ -64,7 +74,6 @@ export async function connectDirect(options: Options): Promise<DirectConnection>
   let receiver: MessageReassembler | null = null;
   let settled = false;
   let peerOnline = false;
-  let negotiating = false;
   let negotiationStarted = false;
   let signallingReady = false;
   let answerReceived = false;
@@ -110,6 +119,9 @@ export async function connectDirect(options: Options): Promise<DirectConnection>
     window.clearTimeout(timer);
     timer = window.setTimeout(() => fail(new Error("无法建立直连，请切换网络后重试")), duration);
   };
+  const abort = () => fail(new Error("连接已取消"));
+  options.signal.addEventListener("abort", abort, { once: true });
+  cleanups.push(() => options.signal.removeEventListener("abort", abort));
   armTimeout(SIGNAL_TIMEOUT_MS);
   const sendJson = (value: Record<string, unknown>): void => {
     if (socket.readyState !== WebSocket.OPEN) throw new Error("信令连接不可用");
@@ -118,43 +130,32 @@ export async function connectDirect(options: Options): Promise<DirectConnection>
   const waitForGathering = (): Promise<void> => {
     if (peer.iceGatheringState === "complete") return Promise.resolve();
     return new Promise((resolve, reject) => {
-      const finish = (): void => {
+      const finish = (error?: Error): void => {
         window.clearTimeout(gatheringTimer);
         peer.removeEventListener("icegatheringstatechange", change);
-        peer.removeEventListener("connectionstatechange", connectionChange);
-        resolve();
+        if (error) reject(error);
+        else resolve();
       };
       const change = (): void => {
         if (peer.iceGatheringState === "complete") finish();
       };
-      const connectionChange = (): void => {
-        if (peer.connectionState === "failed" || peer.connectionState === "closed") {
-          window.clearTimeout(gatheringTimer);
-          peer.removeEventListener("icegatheringstatechange", change);
-          peer.removeEventListener("connectionstatechange", connectionChange);
-          reject(new Error("无法建立直连，请切换网络后重试"));
-        }
-      };
       const gatheringTimer = window.setTimeout(() => {
-        peer.removeEventListener("icegatheringstatechange", change);
-        peer.removeEventListener("connectionstatechange", connectionChange);
-        reject(new Error("网络地址探测超时"));
+        finish(new Error("网络地址探测超时"));
       }, 10000);
       peer.addEventListener("icegatheringstatechange", change);
-      peer.addEventListener("connectionstatechange", connectionChange);
+      cleanups.push(() => finish(new Error("连接已取消")));
       change();
-      connectionChange();
     });
   };
-  const negotiate = async (): Promise<void> => {
-    if (!peerOnline || !signallingReady || negotiating || negotiationStarted) return;
-    negotiating = true;
+  // Local ICE gathering can run while the WebSocket is opening and joining.
+  const prepared = (async () => {
     const offer = await peer.createOffer();
     if (!offer.sdp) throw new Error("无法创建直连请求");
     await peer.setLocalDescription(offer);
+    if (failed) throw new Error("直连已中断");
     await waitForGathering();
     const localSdp = peer.localDescription?.sdp;
-    if (!localSdp || failed || !signallingReady) throw new Error("直连已中断");
+    if (!localSdp || failed) throw new Error("直连已中断");
     const offerHash = await sha256Hex(localSdp);
     const data = await sealSignal(
       phoneKey,
@@ -162,10 +163,15 @@ export async function connectDirect(options: Options): Promise<DirectConnection>
       `fintwind.direct.v2|${routeHash}|${attempt}|phone`,
       { kind: "offer", sdp: localSdp },
     );
-    if (failed || !signallingReady) throw new Error("直连已中断");
-    sendJson({ type: "signal", version: 2, attempt, seq: 0, data });
-    armTimeout(DIRECT_TIMEOUT_MS);
-    const receiveAnswer = async (text: string): Promise<void> => {
+    return { offerHash, data };
+  })();
+  void prepared.catch((error: unknown) => fail(error instanceof Error ? error : new Error("无法创建直连请求")));
+  const negotiate = async (): Promise<void> => {
+    if (negotiationStarted) return;
+    negotiationStarted = true;
+    const { offerHash, data } = await prepared;
+    if (failed || !peerOnline) return;
+    answerHandler = async (text: string): Promise<void> => {
       const answerSdp = await openSignal(
         desktopKey,
         0,
@@ -180,8 +186,8 @@ export async function connectDirect(options: Options): Promise<DirectConnection>
       established = { attempt, offerHash, answerHash };
       openChannel();
     };
-    answerHandler = receiveAnswer;
-    negotiationStarted = true;
+    sendJson({ type: "signal", version: 2, attempt, seq: 0, data });
+    armTimeout(DIRECT_TIMEOUT_MS);
   };
   let established: { attempt: string; offerHash: string; answerHash: string } | null = null;
   let answerHandler: ((data: string) => Promise<void>) | null = null;
@@ -224,6 +230,13 @@ export async function connectDirect(options: Options): Promise<DirectConnection>
         throw new Error("信令格式无效");
       const value: unknown = JSON.parse(event.data);
       if (!isRecord(value) || value["version"] !== 2) throw new Error("信令版本无效");
+      if (value["type"] === "error") {
+        const retry = value["retryAfterMs"];
+        if (typeof retry === "number" && Number.isFinite(retry) && retry > 0)
+          throw new SignalRateLimited(Math.min(retry, 30000));
+        if (value["message"] === "Attempt rate limited") throw new SignalRateLimited(15000);
+        throw new Error("信令服务拒绝连接");
+      }
       if (!signallingReady) {
         if (value["type"] !== "joined" || Object.keys(value).length !== 2)
           throw new Error("信令握手无效");
@@ -242,6 +255,7 @@ export async function connectDirect(options: Options): Promise<DirectConnection>
         return;
       }
       if (value["type"] !== "signal") throw new Error("信令类型无效");
+      if (value["sender"] === "desktop" && value["attempt"] !== attempt) return;
       if (
         Object.keys(value).length !== 6 || value["sender"] !== "desktop" ||
         value["attempt"] !== attempt || value["seq"] !== 0 ||
@@ -284,7 +298,7 @@ export async function connectDirect(options: Options): Promise<DirectConnection>
       fail(new Error("直连已关闭"));
     else if (peer.connectionState === "disconnected")
       armTimeout(10000);
-    else if (peer.connectionState === "connected") {
+    else if (peer.connectionState === "connected" && settled) {
       window.clearTimeout(timer);
       timer = 0;
     }

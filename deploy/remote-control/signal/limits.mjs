@@ -8,7 +8,7 @@ export const MAP_CAP = 4096;
 export const PENDING_PER_IP = 2;
 export const PENDING_GLOBAL = 64;
 export const UPGRADE_PER_MIN = 30;
-export const UPGRADE_BURST = 10;
+export const UPGRADE_BURST = 20;
 export const WINDOW_MS = 60_000;
 
 function sweepExpired(map, nowMs) {

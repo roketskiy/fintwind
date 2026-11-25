@@ -12,6 +12,8 @@ export const ROOM_IDLE_MS = 30_000;
 
 // A connection that never joins, or a room whose peer never arrives, is cut.
 export const JOIN_TIMEOUT_MS = 10_000;
+const ATTEMPTS_PER_SECOND = 4 / 60;
+const ATTEMPT_BURST = 16;
 
 const OPPOSITE = Object.freeze({ desktop: 'phone', phone: 'desktop' });
 
@@ -42,7 +44,7 @@ export class Room {
         this.expiresAt = nowMs + ROOM_TTL_MS;
         this.lastActivity = nowMs;
         this.attempt = null;
-        this.attempts = new Bucket(4 / 60, 4);
+        this.attempts = new Bucket(ATTEMPTS_PER_SECOND, ATTEMPT_BURST);
         this.sentRoles = new Set();
         this.members = new Map();
     }
@@ -60,14 +62,23 @@ export class Room {
         return nowMs >= this.expiresAt || nowMs - this.lastActivity >= ROOM_IDLE_MS;
     }
 
+    clearPhoneAttempt() {
+        this.attempt = null;
+        this.sentRoles.clear();
+    }
+
     // Accept one signal for an attempt. A new attempt id starts a fresh
     // generation and resets the per-role set; within one attempt each role may
     // send exactly once. Returns whether the offer/answer exchange is complete.
     acceptSignal(role, attempt, nowMs) {
         if (this.expired(nowMs)) return { ok: false, code: CLOSE.ROOM_LIMIT, message: 'Room expired' };
         if (attempt !== this.attempt) {
-            if (role !== 'phone' || !this.attempts.take(1, nowMs)) {
-                return { ok: false, code: CLOSE.ROOM_LIMIT, message: 'Attempt rate limited' };
+            // An answer can cross a page close or replacement. It belongs to
+            // the old phone socket, not to the newly joined phone or the room.
+            if (role === 'desktop') return { ok: true, ignored: true };
+            if (!this.attempts.take(1, nowMs)) {
+                const retryAfterMs = Math.ceil((1 - this.attempts.tokens) * 1000 / ATTEMPTS_PER_SECOND);
+                return { ok: false, code: CLOSE.ROOM_LIMIT, message: 'Attempt rate limited', retryAfterMs };
             }
             this.attempt = attempt;
             this.sentRoles = new Set();

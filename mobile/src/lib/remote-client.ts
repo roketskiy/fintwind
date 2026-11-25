@@ -16,7 +16,7 @@ import {
   validHash,
   validToken,
 } from "./remote-crypto";
-import { connectDirect, type DirectConnection } from "./remote-direct";
+import { connectDirect, SIGNAL_RETRY_MESSAGE, SignalRateLimited, type DirectConnection } from "./remote-direct";
 import { MESSAGE_MAX_BYTES } from "./remote-framing";
 import {
   REVISION_RE,
@@ -32,8 +32,11 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const COMMAND_TIMEOUT_MS = 120000;
 const HANDSHAKE_TIMEOUT_MS = 60000;
+const RESUME_TIMEOUT_MS = 2000;
+const PAGE_HANDOFF_MS = 750;
 const RECONNECT_BASE_MS = 1500;
 const RECONNECT_MAX_MS = 30000;
+const SIGNAL_RETRY_KEY = "fintwind-signal-retry";
 const READ_CACHE_MAX_ITEMS = 8;
 const READ_CACHE_MAX_BYTES = 2 * 1024 * 1024;
 const READ_CACHE_ITEM_MAX_BYTES = 512 * 1024;
@@ -75,7 +78,9 @@ export class RemoteClient {
   };
   private started = false;
   private connection: DirectConnection | null = null;
-  private connecting: Promise<DirectConnection> | null = null;
+  private attempt: AbortController | null = null;
+  private resumeProbe: Promise<boolean> | null = null;
+  private retryNotBefore = 0;
   private sendKey: CryptoKey | null = null;
   private receiveKey: CryptoKey | null = null;
   private phoneNonce: Uint8Array | null = null;
@@ -134,21 +139,16 @@ export class RemoteClient {
     if (this.started || this.forgetting) return;
     this.started = true;
     this.reconnectDelay = RECONNECT_BASE_MS;
-    this.onlineHandler = () => {
-      if (!this.started) return;
-      if (this.snapshot.connection === "offline") this.reconnect();
-    };
+    this.onlineHandler = () => { void this.resume(); };
     this.offlineHandler = () => {
       if (!this.started) return;
       window.clearTimeout(this.reconnectTimer);
       this.reconnectTimer = 0;
+      this.invalidateTransport();
       this.setPhase("offline", "网络已断开，等待恢复。");
     };
     this.visibilityHandler = () => {
-      if (!this.started || document.hidden || navigator.onLine === false) return;
-      if (!this.ready && !this.connecting && (this.reconnectTimer || this.snapshot.connection === "reconnecting" || this.snapshot.connection === "offline")) {
-        this.reconnect();
-      }
+      if (!document.hidden) void this.resume();
     };
     window.addEventListener("online", this.onlineHandler);
     window.addEventListener("offline", this.offlineHandler);
@@ -160,6 +160,7 @@ export class RemoteClient {
       this.route = "";
       this.secret = null;
       this.pairPromise = null;
+      this.retryNotBefore = 0;
       this.readCache.clear();
       this.readCacheBytes = 0;
       this.unresolved.clear();
@@ -170,16 +171,14 @@ export class RemoteClient {
   }
 
   stop(): void {
-    if (!this.started && this.connection === null && this.connecting === null && this.reconnectTimer === 0) return;
+    if (!this.started) return;
     this.started = false;
     this.sessionWatch = null;
     this.lease?.release();
     this.lease = null;
     this.invalidateTransport();
     window.clearTimeout(this.reconnectTimer);
-    window.clearTimeout(this.handshakeTimer);
     this.reconnectTimer = 0;
-    this.handshakeTimer = 0;
     if (this.onlineHandler)
       window.removeEventListener("online", this.onlineHandler);
     if (this.offlineHandler)
@@ -191,14 +190,6 @@ export class RemoteClient {
     this.visibilityHandler = null;
     if (this.storageHandler) window.removeEventListener("storage", this.storageHandler);
     this.storageHandler = null;
-    const owned = this.connection;
-    const ownedConnecting = this.connecting;
-    this.connection = null;
-    this.connecting = null;
-    owned?.close();
-    if (ownedConnecting) {
-      void ownedConnecting.then((connection) => connection.close(), () => {});
-    }
     this.setPhase("idle", null);
   }
 
@@ -207,21 +198,48 @@ export class RemoteClient {
       this.start();
       return;
     }
-    this.invalidateTransport();
-    window.clearTimeout(this.reconnectTimer);
-    window.clearTimeout(this.handshakeTimer);
-    this.reconnectTimer = 0;
-    this.handshakeTimer = 0;
-    const owned = this.connection;
-    const ownedConnecting = this.connecting;
-    this.connection = null;
-    this.connecting = null;
-    owned?.close();
-    if (ownedConnecting) {
-      void ownedConnecting.then((connection) => connection.close(), () => {});
+    if (this.attempt) return;
+    if (Date.now() < this.retryNotBefore) {
+      this.scheduleReconnect(0);
+      return;
     }
+    window.clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = 0;
+    this.invalidateTransport();
     this.reconnectDelay = RECONNECT_BASE_MS;
     this.connectNow();
+  }
+
+  resume(): Promise<boolean> {
+    if (!this.started || document.hidden || navigator.onLine === false) return Promise.resolve(false);
+    if (!this.ready) {
+      if (this.snapshot.connection === "reconnecting" || this.snapshot.connection === "offline") this.reconnect();
+      return Promise.resolve(false);
+    }
+    if (this.resumeProbe) return this.resumeProbe;
+    const generation = this.transportGeneration;
+    let timer = 0;
+    const deadline = new Promise<boolean>((resolve) => {
+      timer = window.setTimeout(() => resolve(false), RESUME_TIMEOUT_MS);
+    });
+    // A transport state alone cannot prove the authenticated peer is reachable.
+    const probe = Promise.race([this.command("listWorkspaces", {}).then(() => true, () => false), deadline]).then((alive) => {
+      if (generation !== this.transportGeneration) return false;
+      if (!alive) {
+        if (document.hidden) {
+          this.invalidateTransport();
+          this.setPhase("reconnecting", null);
+        } else {
+          this.reconnect();
+        }
+      }
+      return alive;
+    }).finally(() => {
+      window.clearTimeout(timer);
+      if (this.resumeProbe === probe) this.resumeProbe = null;
+    });
+    this.resumeProbe = probe;
+    return probe;
   }
 
   async forget(): Promise<void> {
@@ -236,20 +254,31 @@ export class RemoteClient {
     this.route = "";
     this.secret = null;
     this.pairPromise = null;
+    this.rememberRetry(0);
     localStorage.removeItem("fintwind-paired-route");
     localStorage.removeItem("fintwind-page");
     this.setPhase("unpaired", null);
     } finally { this.forgetting = false; }
   }
 
-  private claimBrowser(route: string, generation: number): Promise<boolean> {
+  private claimBrowser(route: string, attempt: AbortSignal): Promise<boolean> {
     if (this.lease?.route === route) return Promise.resolve(true);
     if (!navigator.locks) return Promise.reject(new Error("此浏览器不支持安全的多页面保护，请更新浏览器。"));
+    // A closed tab may still be releasing its lock while the next page loads.
+    const waiting = new AbortController();
+    const abort = () => waiting.abort();
+    const timer = window.setTimeout(abort, PAGE_HANDOFF_MS);
+    attempt.addEventListener("abort", abort, { once: true });
+    const cleanup = () => {
+      window.clearTimeout(timer);
+      attempt.removeEventListener("abort", abort);
+    };
     return new Promise((resolve) => {
-      void navigator.locks.request(`fintwind-phone:${route}`, { ifAvailable: true }, async (lock) => {
-        if (!lock || generation !== this.transportGeneration || !this.started) { resolve(false); return; }
+      void navigator.locks.request(`fintwind-phone:${route}`, { signal: waiting.signal }, async () => {
+        cleanup();
+        if (attempt.aborted || !this.started) { resolve(false); return; }
         await new Promise<void>((release) => { this.lease = { route, release }; resolve(true); });
-      }).catch(() => resolve(false));
+      }).catch(() => { cleanup(); resolve(false); });
     });
   }
 
@@ -584,13 +613,30 @@ export class RemoteClient {
 
   private failCurrentConnection(connection: DirectConnection, message: string): void {
     if (this.connection !== connection) return;
-    this.setPhase("error", message);
-    connection.close();
-    this.connectionLost(connection, message);
+    this.connectionLost(message);
+  }
+
+  private loadRetry(): void {
+    try {
+      const saved = localStorage.getItem(SIGNAL_RETRY_KEY);
+      if (!saved) return;
+      const { route, until } = JSON.parse(saved);
+      const now = Date.now();
+      if (route === this.route && typeof until === "number" && until > now && until <= now + RECONNECT_MAX_MS)
+        this.retryNotBefore = until;
+    } catch { /* Backoff still works in the current page. */ }
+  }
+
+  private rememberRetry(until: number): void {
+    this.retryNotBefore = until;
+    try {
+      if (until) localStorage.setItem(SIGNAL_RETRY_KEY, JSON.stringify({ route: this.route, until }));
+      else localStorage.removeItem(SIGNAL_RETRY_KEY);
+    } catch { /* Backoff still works in the current page. */ }
   }
 
   private async connectNow(): Promise<void> {
-    if (!this.started) return;
+    if (!this.started || this.attempt) return;
     if (window.location.protocol !== "https:") {
       this.setPhase("error", "远程控制需要 HTTPS");
       return;
@@ -605,34 +651,31 @@ export class RemoteClient {
       this.setPhase(this.route ? "reconnecting" : "connecting", null);
     }
     const generation = ++this.transportGeneration;
-    this.interruptInflight();
-    this.ready = false;
-    this.sendKey = null;
-    this.receiveKey = null;
-    this.phoneNonce = null;
-    this.handshake = "hello";
-    this.sendSeq = 0;
-    this.receiveSeq = 0;
-    this.sendQueue = Promise.resolve();
-    this.receiveQueue = Promise.resolve();
+    const attempt = new AbortController();
+    this.attempt = attempt;
     let pair: SavedPairing;
     try {
       pair = await this.pairing();
       if (generation !== this.transportGeneration || !this.started) return;
-      if (!(await this.claimBrowser(pair.route, generation))) {
-        if (generation === this.transportGeneration && this.started) this.setPhase("error", "此电脑已在另一个页面打开，请返回原页面。");
+      if (!(await this.claimBrowser(pair.route, attempt.signal))) {
+        if (generation === this.transportGeneration) {
+          this.attempt = null;
+          this.setPhase("error", "此电脑已在另一个页面打开，请返回原页面。");
+        }
         return;
       }
       if (generation !== this.transportGeneration || !this.started) return;
       if (this.route && this.route !== pair.route) this.clearRouteState(this.route, pair.route);
       this.route = pair.route;
       this.secret = pair.material;
+      this.loadRetry();
       if (this.unresolved.size === 0) {
         this.unresolved = this.loadUnresolved(this.route);
         this.refreshSnapshot();
       }
     } catch (error) {
       if (generation !== this.transportGeneration || !this.started) return;
+      this.attempt = null;
       this.lease?.release();
       this.lease = null;
       const message = error instanceof Error ? error.message : "配对信息无效";
@@ -645,19 +688,20 @@ export class RemoteClient {
       return;
     }
     if (generation !== this.transportGeneration || !this.started) return;
-    const previous = this.connection;
-    const previousConnecting = this.connecting;
-    this.connection = null;
-    this.connecting = null;
-    previous?.close();
-    if (previousConnecting) {
-      void previousConnecting.then((connection) => connection.close(), () => {});
+    if (Date.now() < this.retryNotBefore) {
+      this.attempt = null;
+      this.setPhase("reconnecting", SIGNAL_RETRY_MESSAGE);
+      this.scheduleReconnect(0);
+      return;
     }
-    let connecting: Promise<DirectConnection>;
+    this.handshakeTimer = window.setTimeout(() => {
+      if (generation === this.transportGeneration && !this.ready) this.connectionLost("连接超时，请重试");
+    }, HANDSHAKE_TIMEOUT_MS);
     try {
-      connecting = connectDirect({
+      const connection = await connectDirect({
         route: this.route,
         secret: this.secret,
+        signal: attempt.signal,
         onMessage: (text) => {
           const target = this.connection;
           if (!target || generation !== this.transportGeneration) return;
@@ -668,68 +712,37 @@ export class RemoteClient {
         },
         onDisconnect: (error) => {
           if (generation !== this.transportGeneration) return;
-          this.connectionLost(this.connection ?? connecting, error.message);
+          this.connectionLost(error.message);
         },
       });
-    } catch {
-      this.setPhase("error", "连接失败");
-      this.scheduleReconnect();
-      return;
-    }
-    this.connecting = connecting;
-    window.clearTimeout(this.handshakeTimer);
-    this.handshakeTimer = window.setTimeout(() => {
-      if (
-        (this.connecting === connecting || this.connection !== null) &&
-        !this.ready &&
-        generation === this.transportGeneration
-      ) {
-        this.invalidateTransport();
-        this.connecting = null;
-        this.connection = null;
-        this.setPhase("error", "连接超时，请重试");
-        void connecting.then((connection) => connection.close(), () => {});
-        this.scheduleReconnect();
-      }
-    }, HANDSHAKE_TIMEOUT_MS);
-    void connecting.then(async (connection) => {
-      if (generation !== this.transportGeneration || !this.started || this.connecting !== connecting) {
+      if (generation !== this.transportGeneration) {
         connection.close();
         return;
       }
-      if (this.snapshot.connection === "offline") this.setPhase("connecting", null);
-      this.connecting = null;
       this.connection = connection;
-      try {
-        const nonceBytes = crypto.getRandomValues(new Uint8Array(32));
-        this.phoneNonce = nonceBytes;
-        await connection.send(
-          JSON.stringify({
-            type: "hello",
-            version: 2,
-            nonce: encodeBase64Url(nonceBytes),
-          }),
-        );
-      } catch {
-        this.failCurrentConnection(connection, "连接握手失败");
-        return;
-      }
-      if (generation === this.transportGeneration && this.connection === connection)
-        this.setPhase("connecting", null);
-    }).catch((error: unknown) => {
-      if (generation !== this.transportGeneration || !this.started || this.connecting !== connecting) return;
-      this.connecting = null;
-      window.clearTimeout(this.handshakeTimer);
-      this.handshakeTimer = 0;
-      this.interruptInflight();
+      this.setPhase("connecting", null);
+      const nonceBytes = crypto.getRandomValues(new Uint8Array(32));
+      this.phoneNonce = nonceBytes;
+      await connection.send(JSON.stringify({ type: "hello", version: 2, nonce: encodeBase64Url(nonceBytes) }));
+    } catch (error: unknown) {
+      if (generation !== this.transportGeneration) return;
+      if (error instanceof SignalRateLimited) this.rememberRetry(Date.now() + error.retryAfterMs);
       const message = error instanceof Error ? error.message : "无法建立直连";
-      this.setPhase("reconnecting", message);
-      this.scheduleReconnect();
-    });
+      this.connectionLost(message);
+    }
   }
 
   private invalidateTransport(): void {
     this.transportGeneration += 1;
+    window.clearTimeout(this.handshakeTimer);
+    this.handshakeTimer = 0;
+    const attempt = this.attempt;
+    const connection = this.connection;
+    this.attempt = null;
+    this.connection = null;
+    this.resumeProbe = null;
+    attempt?.abort();
+    connection?.close();
     this.ready = false;
     this.sendKey = null;
     this.receiveKey = null;
@@ -742,17 +755,8 @@ export class RemoteClient {
     this.interruptInflight();
   }
 
-  private connectionLost(connection: DirectConnection | Promise<DirectConnection>, message: string): void {
-    const ownsConnection = this.connection === connection;
-    const ownsConnecting = this.connecting === connection;
-    if (!ownsConnection && !ownsConnecting) return;
-    if ("then" in connection)
-      void connection.then((owned) => owned.close(), () => {});
-    window.clearTimeout(this.handshakeTimer);
-    this.handshakeTimer = 0;
+  private connectionLost(message: string): void {
     this.invalidateTransport();
-    this.connection = null;
-    this.connecting = null;
     if (!this.started) return;
     if (typeof window.navigator !== "undefined" && window.navigator.onLine === false)
       this.setPhase("offline", "网络已断开，等待恢复。");
@@ -761,18 +765,17 @@ export class RemoteClient {
     this.scheduleReconnect();
   }
 
-  private scheduleReconnect(): void {
+  private scheduleReconnect(delay = this.reconnectDelay): void {
     if (!this.started) return;
     window.clearTimeout(this.reconnectTimer);
     this.reconnectTimer = 0;
     if (navigator.onLine === false || document.hidden) return;
-    const delay = this.reconnectDelay;
-    this.reconnectDelay = Math.min(delay * 2, RECONNECT_MAX_MS);
+    if (delay) this.reconnectDelay = Math.min(this.reconnectDelay * 2, RECONNECT_MAX_MS);
     this.reconnectTimer = window.setTimeout(() => {
       this.reconnectTimer = 0;
-      if (!this.started) return;
+      if (!this.started || document.hidden || navigator.onLine === false) return;
       this.connectNow();
-    }, delay);
+    }, Math.max(delay, this.retryNotBefore - Date.now()));
   }
 
   private interruptInflight(): void {
@@ -857,8 +860,8 @@ export class RemoteClient {
           offerHash: connection.offerHash,
           answerHash: connection.answerHash,
         }));
-        this.handshake = "ready";
         if (generation !== this.transportGeneration || this.connection !== connection) return;
+        this.handshake = "ready";
         return;
       }
       if (this.handshake === "ready") {
@@ -869,9 +872,11 @@ export class RemoteClient {
           throw new Error("连接校验失败");
         window.clearTimeout(this.handshakeTimer);
         this.handshakeTimer = 0;
+        this.attempt = null;
         this.handshake = "authenticated";
         this.ready = true;
         this.reconnectDelay = RECONNECT_BASE_MS;
+        if (this.retryNotBefore) this.rememberRetry(0);
         this.setPhase("connected", null);
         return;
       }

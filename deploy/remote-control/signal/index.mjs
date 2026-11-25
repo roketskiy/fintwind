@@ -66,9 +66,9 @@ function sendJson(ws, frame) {
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(frame));
 }
 
-function closeWith(ws, code, message) {
+function closeWith(ws, code, message, retryAfterMs) {
     try {
-        sendJson(ws, errorFrame(message));
+        sendJson(ws, errorFrame(message, retryAfterMs));
     } catch {}
     try {
         ws.close(code, message);
@@ -94,6 +94,7 @@ function detach(conn, notify) {
     if (!room) return;
     if (room.member(role) === conn) {
         room.members.delete(role);
+        if (role === 'phone') room.clearPhoneAttempt();
         if (notify) announcePresence(room, role, false);
         rooms.removeIfEmpty(room);
     }
@@ -224,9 +225,10 @@ function handleSignal(conn, frame) {
             }
             rooms.removeIfEmpty(room);
         }
-        closeWith(conn.ws, accepted.code, accepted.message);
+        closeWith(conn.ws, accepted.code, accepted.message, accepted.retryAfterMs);
         return;
     }
+    if (accepted.ignored) return;
 
     const peer = room.member(oppositeRole(conn.role));
     if (peer && peer.joined && peer.ws.readyState === WebSocket.OPEN) {

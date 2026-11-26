@@ -199,7 +199,8 @@ fn sample_impl(sampler: &mut Sampler) -> Result<Sample, String> {
     // never seeds the walk, so a PID reused by an unrelated process cannot
     // be claimed on PID alone.
     fn owned_tree() -> &'static Mutex<HashMap<u32, (u32, Option<u64>)>> {
-        static TREE: OnceLock<Mutex<HashMap<u32, (u32, Option<u64>)>>> = OnceLock::new();
+        type OwnedTreeMap = Mutex<HashMap<u32, (u32, Option<u64>)>>;
+        static TREE: OnceLock<OwnedTreeMap> = OnceLock::new();
         TREE.get_or_init(|| Mutex::new(HashMap::new()))
     }
     let self_pid = std::process::id();

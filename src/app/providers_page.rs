@@ -2852,6 +2852,7 @@ impl Fintwind {
     /// The caller supplies `toggle`, so the editor and each add-form draft
     /// share the same control; `hint` is off on repeated draft rows, where
     /// the same sentence would read as noise.
+    #[allow(clippy::too_many_arguments)]
     fn render_modality_row(
         &self,
         theme: &Theme,

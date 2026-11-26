@@ -737,8 +737,8 @@ fn desktop_ssh_project_streams(test_app: &mut TestAppContext) {
                         std::thread::sleep(Duration::from_millis(20));
                     }
                     cx.read_entity(&picker, |app, _| {
-                        assert!(app.ssh.connection_errors.get(&profile_id).is_none(), "deployment connection error: {:?}", app.ssh.connection_errors.get(&profile_id));
-                        assert!(app.ssh.backend_errors.get(&profile_id).is_none(), "deployment backend error: {:?}", app.ssh.backend_errors.get(&profile_id));
+                        assert!(!app.ssh.connection_errors.contains_key(&profile_id), "deployment connection error: {:?}", app.ssh.connection_errors.get(&profile_id));
+                        assert!(!app.ssh.backend_errors.contains_key(&profile_id), "deployment backend error: {:?}", app.ssh.backend_errors.get(&profile_id));
                         assert_eq!(app.active_ssh_workspace(), Some(restored.clone()));
                     });
                     assert_ne!(managed_port(), previous_port, "managed daemon did not restart on a new port");

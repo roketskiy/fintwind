@@ -499,6 +499,8 @@ pub enum FieldMode {
 /// overlay scrollbar instead of growing the card.
 const COMPOSER_MAX_HEIGHT: Pixels = px(300.);
 
+type QuoteSelectionCallback = Rc<dyn Fn(&mut Window, &mut App)>;
+
 pub struct ComposerInput {
     reference_catalog: Rc<crate::mentions::Catalog>,
     references: Vec<crate::mentions::Span>,
@@ -565,7 +567,7 @@ pub struct ComposerInput {
     /// that sit in the right panel. The text field owns context menus, but the
     /// composer state it feeds lives on the root entity, so the callback is
     /// supplied by whoever builds the editor rather than wired inside.
-    quote_selection: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+    quote_selection: Option<QuoteSelectionCallback>,
     blink_cursor: Entity<BlinkCursor>,
     _subscriptions: Vec<Subscription>,
 }

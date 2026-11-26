@@ -159,7 +159,7 @@ pub(crate) fn request_form_list(
 ) -> anyhow::Result<Value> {
     let remembered = form_list_paths().lock().get(&port).copied();
     let order: [&str; 2] = match remembered {
-        Some(path) if path == "/api/form/request" => ["/api/form/request", "/api/form"],
+        Some("/api/form/request") => ["/api/form/request", "/api/form"],
         _ => FORM_LIST_PATHS,
     };
     let mut not_found = None;
@@ -880,11 +880,13 @@ fn http_request(
         port,
         method,
         path,
-        body,
-        timeout,
-        directory_header,
-        usize::MAX,
-        None,
+        HttpRequestOptions {
+            body,
+            timeout,
+            directory_header,
+            max_bytes: usize::MAX,
+            cancelled: None,
+        },
     )
 }
 
@@ -907,8 +909,18 @@ pub(crate) fn request_json_on_port_bounded(
     timeout: Duration,
     max_bytes: usize,
 ) -> anyhow::Result<Value> {
-    let response =
-        http_request_with_limit(port, "GET", path, None, timeout, None, max_bytes, None)?;
+    let response = http_request_with_limit(
+        port,
+        "GET",
+        path,
+        HttpRequestOptions {
+            body: None,
+            timeout,
+            directory_header: None,
+            max_bytes,
+            cancelled: None,
+        },
+    )?;
     serde_json::from_slice(&response).context("OpenCode returned invalid reconciliation JSON")
 }
 
@@ -927,25 +939,38 @@ pub(crate) fn request_json_on_port_cancellable(
         port,
         method,
         path,
-        body.as_deref(),
-        timeout,
-        None,
-        8 * 1024 * 1024,
-        Some(cancelled),
+        HttpRequestOptions {
+            body: body.as_deref(),
+            timeout,
+            directory_header: None,
+            max_bytes: 8 * 1024 * 1024,
+            cancelled: Some(cancelled),
+        },
     )?;
     serde_json::from_slice(&response).context("OpenCode returned invalid generation JSON")
+}
+
+struct HttpRequestOptions<'a> {
+    body: Option<&'a [u8]>,
+    timeout: Duration,
+    directory_header: Option<&'a str>,
+    max_bytes: usize,
+    cancelled: Option<&'a AtomicBool>,
 }
 
 fn http_request_with_limit(
     port: u16,
     method: &str,
     path: &str,
-    body: Option<&[u8]>,
-    timeout: Duration,
-    directory_header: Option<&str>,
-    max_bytes: usize,
-    cancelled: Option<&AtomicBool>,
+    options: HttpRequestOptions<'_>,
 ) -> anyhow::Result<Vec<u8>> {
+    let HttpRequestOptions {
+        body,
+        timeout,
+        directory_header,
+        max_bytes,
+        cancelled,
+    } = options;
     if cancelled.is_some_and(|flag| flag.load(Ordering::Acquire)) {
         bail!(tr!("btw.cancelled"));
     }

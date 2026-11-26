@@ -1201,8 +1201,10 @@ fn opencode_subagent_restore_status() {
         .request(session, runtime, Command::Start { options })
         .unwrap();
     let events = harness.client.subscribe(session, runtime);
-    let mut report = Fact::default();
-    report.server_log = Some(fixture.server_log.clone());
+    let mut report = Fact {
+        server_log: Some(fixture.server_log.clone()),
+        ..Default::default()
+    };
     for round in 0..4 {
         harness
             .client
@@ -1474,7 +1476,6 @@ fn start_harness(root: &Path) -> Harness {
             server_shutdown,
             ServerOptions {
                 allow_shutdown: true,
-                ..ServerOptions::default()
             },
         )
         .expect("the test daemon should serve cleanly");

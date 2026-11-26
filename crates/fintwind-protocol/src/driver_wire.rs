@@ -614,7 +614,7 @@ mod tests {
             }),
             BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Activity {
                 key: key.clone(),
-                activity: activity.clone(),
+                activity: Box::new(activity.clone()),
             }),
             BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Snapshot {
                 key: key.clone(),

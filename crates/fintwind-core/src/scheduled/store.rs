@@ -42,6 +42,8 @@ pub(crate) struct ScheduledStore {
     state: Arc<StateStore>,
 }
 
+type StoredTaskRow = (u64, bool, Option<u64>, StoredTask);
+
 impl ScheduledStore {
     pub(crate) fn new(state: Arc<StateStore>) -> Self {
         Self { state }
@@ -478,7 +480,7 @@ impl ScheduledStore {
         &self,
         connection: &Connection,
         id: ScheduledTaskId,
-    ) -> Result<Option<(u64, bool, Option<u64>, StoredTask)>> {
+    ) -> Result<Option<StoredTaskRow>> {
         let row = connection
             .query_row(
                 "SELECT revision, enabled, next_due_at, data FROM scheduled_tasks WHERE id = ?1",

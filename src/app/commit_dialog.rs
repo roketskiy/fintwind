@@ -357,6 +357,7 @@ impl Fintwind {
         cx.notify();
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn spawn_commit_message_generation(
         &mut self,
         id: Uuid,
@@ -445,6 +446,7 @@ impl Fintwind {
         .detach();
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn spawn_git_action(
         &mut self,
         id: Uuid,

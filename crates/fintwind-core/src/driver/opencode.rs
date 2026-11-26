@@ -3467,7 +3467,7 @@ fn child_activity_event(
     let _ = events.send(DriverEvent::BackgroundWork(
         BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Activity {
             key: key.clone(),
-            activity,
+            activity: Box::new(activity),
         }),
     ));
 }
@@ -3537,6 +3537,7 @@ fn handle_shell_lifecycle_event(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn dispatch_server_event(
     value: &Value,
     root: &str,
@@ -3971,9 +3972,11 @@ fn handle_child_event(
                     Some(id.to_owned()),
                     activity_kind,
                     title,
-                    arguments,
-                    None,
-                    payload.get("input"),
+                    activity::ToolPayloads {
+                        arguments,
+                        output: None,
+                        image_source: payload.get("input"),
+                    },
                     false,
                     false,
                 );
@@ -3988,9 +3991,11 @@ fn handle_child_event(
                     Some(id.to_owned()),
                     kind,
                     title,
-                    payload.get("input"),
-                    None,
-                    Some(payload),
+                    activity::ToolPayloads {
+                        arguments: payload.get("input"),
+                        output: None,
+                        image_source: Some(payload),
+                    },
                     false,
                     false,
                 );
@@ -4016,9 +4021,11 @@ fn handle_child_event(
                     Some(id.to_owned()),
                     activity_kind,
                     title,
-                    payload.get("input"),
-                    output.as_ref(),
-                    Some(payload),
+                    activity::ToolPayloads {
+                        arguments: payload.get("input"),
+                        output: output.as_ref(),
+                        image_source: Some(payload),
+                    },
                     failed,
                     true,
                 );
@@ -4075,6 +4082,7 @@ fn handle_child_event(
         _ => {}
     }
 }
+#[allow(clippy::too_many_arguments)]
 fn handle_event(
     value: &Value,
     events: &impl DriverEventSink,
@@ -4790,9 +4798,11 @@ fn tool_called(payload: &Value, events: &impl DriverEventSink, state: &mut OpenC
         Some(id.to_owned()),
         kind,
         title,
-        arguments,
-        None,
-        payload.get("input"),
+        activity::ToolPayloads {
+            arguments,
+            output: None,
+            image_source: payload.get("input"),
+        },
         false,
         false,
     );
@@ -4873,9 +4883,11 @@ fn tool_progress(payload: &Value, events: &impl DriverEventSink, state: &mut Ope
         Some(id.to_owned()),
         kind,
         title,
-        payload.get("input"),
-        None,
-        Some(payload),
+        activity::ToolPayloads {
+            arguments: payload.get("input"),
+            output: None,
+            image_source: Some(payload),
+        },
         false,
         false,
     );
@@ -5024,9 +5036,11 @@ fn tool_finished(
         Some(id.to_owned()),
         kind,
         title,
-        payload.get("input"),
-        output.as_ref(),
-        Some(payload),
+        activity::ToolPayloads {
+            arguments: payload.get("input"),
+            output: output.as_ref(),
+            image_source: Some(payload),
+        },
         failed,
         true,
     );
@@ -5500,14 +5514,16 @@ mod tests {
         );
     }
 
-    fn harness() -> (
+    type TestHarness = (
         Sender<DriverEvent>,
         crossbeam_channel::Receiver<DriverEvent>,
         Sender<CommandMessage>,
         crossbeam_channel::Receiver<CommandMessage>,
         Mutex<bool>,
         OpenCodeStreamState,
-    ) {
+    );
+
+    fn harness() -> TestHarness {
         let (events, event_rx) = unbounded();
         let (commands, command_rx) = unbounded();
         (

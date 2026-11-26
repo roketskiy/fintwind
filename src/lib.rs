@@ -390,29 +390,26 @@ pub fn run() {
                 println!("{}", crate::app::ssh_page::SSH_PROJECT_READY);
             }
 
-            cx.on_system_notification_response({
-                let window = window;
-                move |response, cx| {
-                    let Some(session_id) = crate::app::task_id_from_notification_tag(&response.tag)
-                    else {
-                        return;
-                    };
-                    window
-                        .update(cx, |root_view, window, cx| {
-                            // The kit Root wraps Fintwind; reach the app view
-                            // through the root AnyView rather than assuming
-                            // the window root type.
-                            if let Ok(fintwind) = root_view.downcast::<Fintwind>() {
-                                fintwind.update(cx, |fintwind, cx| {
-                                    fintwind.open_task_from_notification(session_id, cx);
-                                });
-                            }
-                            window.activate_window();
-                            cx.activate(true);
-                        })
-                        .ok();
-                    cx.dismiss_system_notification(&response.tag);
-                }
+            cx.on_system_notification_response(move |response, cx| {
+                let Some(session_id) = crate::app::task_id_from_notification_tag(&response.tag)
+                else {
+                    return;
+                };
+                window
+                    .update(cx, |root_view, window, cx| {
+                        // The kit Root wraps Fintwind; reach the app view
+                        // through the root AnyView rather than assuming
+                        // the window root type.
+                        if let Ok(fintwind) = root_view.downcast::<Fintwind>() {
+                            fintwind.update(cx, |fintwind, cx| {
+                                fintwind.open_task_from_notification(session_id, cx);
+                            });
+                        }
+                        window.activate_window();
+                        cx.activate(true);
+                    })
+                    .ok();
+                cx.dismiss_system_notification(&response.tag);
             });
 
             window

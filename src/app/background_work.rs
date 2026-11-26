@@ -397,7 +397,7 @@ impl BackgroundWorkRegistry {
             BackgroundWorkTranscriptEvent::Activity { key, activity } => {
                 Self::upsert_background_activity(
                     self.transcripts.entry(key).or_default(),
-                    activity,
+                    *activity,
                 );
             }
             BackgroundWorkTranscriptEvent::Snapshot { key, transcript } => {
@@ -2386,6 +2386,9 @@ fn render_git_tools_section(
         .child(commit)
 }
 
+type EnvironmentRowAction = Rc<dyn Fn(&mut Window, &mut App)>;
+
+#[allow(clippy::too_many_arguments)]
 fn render_environment_action_row(
     id: &'static str,
     focus: &FocusHandle,
@@ -2414,7 +2417,7 @@ fn render_environment_action_row(
     } else {
         icon(icon_path, 14.0, icon_foreground).into_any_element()
     };
-    let action: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(action);
+    let action: EnvironmentRowAction = Rc::new(action);
     let key_action = action.clone();
     div()
         .id(id)
@@ -2920,7 +2923,7 @@ mod tests {
         registry.apply(BackgroundWorkEvent::Transcript(
             BackgroundWorkTranscriptEvent::Activity {
                 key: key.clone(),
-                activity: running,
+                activity: Box::new(running),
             },
         ));
         let mut settled = reasoning_activity("call_1", true);
@@ -2928,7 +2931,7 @@ mod tests {
         registry.apply(BackgroundWorkEvent::Transcript(
             BackgroundWorkTranscriptEvent::Activity {
                 key: key.clone(),
-                activity: settled,
+                activity: Box::new(settled),
             },
         ));
         let transcript = &registry.transcripts[&key];
@@ -2961,13 +2964,13 @@ mod tests {
         registry.apply(BackgroundWorkEvent::Transcript(
             BackgroundWorkTranscriptEvent::Activity {
                 key: key.clone(),
-                activity: ActivityItem::new(
+                activity: Box::new(ActivityItem::new(
                     Some("call_1".into()),
                     ActivityKind::Search,
                     "Search",
                     None,
                     true,
-                ),
+                )),
             },
         ));
         registry.apply(BackgroundWorkEvent::Transcript(

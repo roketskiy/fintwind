@@ -2104,7 +2104,7 @@ pub enum BackgroundWorkTranscriptEvent {
     },
     Activity {
         key: BackgroundWorkKey,
-        activity: ActivityItem,
+        activity: Box<ActivityItem>,
     },
     Snapshot {
         key: BackgroundWorkKey,
@@ -2203,6 +2203,7 @@ impl BackgroundWorkItem {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
+#[allow(clippy::large_enum_variant)]
 pub enum BackgroundWorkEvent {
     Upsert(BackgroundWorkItem),
     OutputDelta {

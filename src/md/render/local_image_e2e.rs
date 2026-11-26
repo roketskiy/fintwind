@@ -5,7 +5,7 @@
 use std::io::Cursor;
 use std::path::PathBuf;
 
-use gpui::{Context, ListAlignment, ListState, Render, TestAppContext, list, prelude::*, px};
+use gpui::{Context, ListAlignment, ListState, Render, TestAppContext, list, px};
 
 use super::*;
 

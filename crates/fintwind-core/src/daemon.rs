@@ -52,7 +52,7 @@ pub struct FintwindBackend {
     composer_drafts: ComposerDraftStore,
     attachments: AttachmentStore,
     usage_index: crate::usage_index::UsageIndex,
-    checkpoint_capture_locks: Mutex<HashMap<(PathBuf, Uuid, usize), Arc<Mutex<()>>>>,
+    checkpoint_capture_locks: Mutex<HashMap<CheckpointCaptureKey, Arc<Mutex<()>>>>,
     pub(crate) scheduled_store: Arc<ScheduledStore>,
     pub(crate) scheduled_stop: Arc<AtomicBool>,
     pub(crate) scheduled_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
@@ -69,6 +69,8 @@ pub struct FintwindBackend {
     self_weak: OnceLock<Weak<Self>>,
 }
 
+type CheckpointCaptureKey = (PathBuf, Uuid, usize);
+
 pub(crate) struct ScheduledPreparation {
     pub session_id: Uuid,
     pub runtime_id: Uuid,
@@ -84,7 +86,7 @@ pub(crate) enum ScheduledAdmission {
         submission_id: Uuid,
         reason: String,
     },
-    Admitted(ScheduledPreparation),
+    Admitted(Box<ScheduledPreparation>),
 }
 
 impl FintwindBackend {
@@ -375,12 +377,12 @@ impl FintwindBackend {
         if created {
             channel.notify_catalog();
         }
-        Ok(ScheduledAdmission::Admitted(ScheduledPreparation {
+        Ok(ScheduledAdmission::Admitted(Box::new(ScheduledPreparation {
             session_id,
             runtime_id,
             submission,
             admission,
-        }))
+        })))
     }
 
     fn scheduled_announce(
@@ -2516,11 +2518,10 @@ impl Backend for FintwindBackend {
             Command::OpenTerminal { cwd, cols, rows } => {
                 ensure_shell_environment();
                 let terminal = crate::terminal::DaemonTerminal::open(&cwd, cols, rows, events)?;
-                let previous = self
+                let _previous = self
                     .terminals
                     .lock()
                     .insert(session_id, (runtime_id, terminal));
-                drop(previous);
                 Ok(ResponsePayload::Ack)
             }
             Command::WriteTerminal { data } => {
@@ -2550,7 +2551,7 @@ impl Backend for FintwindBackend {
                 Ok(ResponsePayload::Ack)
             }
             Command::CloseTerminal => {
-                let removed = {
+                let _removed = {
                     let mut terminals = self.terminals.lock();
                     if let Some((active_runtime_id, _)) = terminals.get(&session_id)
                         && *active_runtime_id != runtime_id {
@@ -2560,7 +2561,6 @@ impl Backend for FintwindBackend {
                         }
                     terminals.remove(&session_id)
                 };
-                drop(removed);
                 Ok(ResponsePayload::Ack)
             }
             Command::ListScheduledTasks => Ok(ResponsePayload::ScheduledTasks {

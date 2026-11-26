@@ -173,7 +173,7 @@ impl ScheduledTasksView {
             },
             None => ScheduledTaskEdit::Create { draft },
         };
-        self.send(ScheduledRequest::Save(edit), Mutation::SaveEditor, cx);
+        self.send(ScheduledRequest::Save(Box::new(edit)), Mutation::SaveEditor, cx);
     }
 
     pub(super) fn request_delete(

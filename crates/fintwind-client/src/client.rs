@@ -198,12 +198,12 @@ impl DaemonClient {
         let request_id = Uuid::new_v4();
         let (response, response_rx) = bounded(1);
         self.inner.pending.lock().insert(request_id, response);
-        let message = ClientMessage::Request(Request {
+        let message = ClientMessage::Request(Box::new(Request {
             request_id,
             session_id,
             runtime_id,
             command,
-        });
+        }));
         if self
             .inner
             .outgoing
@@ -244,7 +244,7 @@ impl DaemonClient {
         }
         self.inner
             .outgoing
-            .send(Outgoing::Message(ClientMessage::Request(Request {
+            .send(Outgoing::Message(ClientMessage::Request(Box::new(Request {
                 // The nil request id is reserved for fire-and-forget controls;
                 // the daemon executes them in the runtime mailbox but does
                 // not allocate or send a response.
@@ -252,7 +252,7 @@ impl DaemonClient {
                 session_id,
                 runtime_id,
                 command,
-            })))
+            }))))
             .map_err(|_| anyhow!("fintwind daemon connection is closed"))
     }
 
@@ -349,7 +349,7 @@ fn run_client(
                     } => {
                         if let Some(pending) = inner.pending.lock().remove(&request_id) {
                             let result = match outcome {
-                                ResponseOutcome::Ok { payload } => Ok(payload),
+                                ResponseOutcome::Ok { payload } => Ok(*payload),
                                 ResponseOutcome::Error { error } => Err(error),
                             };
                             let _ = pending.send(result);

@@ -1435,7 +1435,7 @@ fn session_day_split(
 
     days.sort_by_key(|share| share.timestamp);
     hours.sort_by_key(|share| share.timestamp);
-    models.sort_by(|a, b| b.total.cmp(&a.total));
+    models.sort_by_key(|a| std::cmp::Reverse(a.total));
     Ok(Some(SessionSplit {
         days,
         hours,
@@ -2682,9 +2682,11 @@ fn tool_item(part: &Value) -> ActivityItem {
         source_id,
         kind,
         name.to_owned(),
-        state.get("input"),
-        output.as_ref(),
-        state.get("metadata"),
+        super::activity::ToolPayloads {
+            arguments: state.get("input"),
+            output: output.as_ref(),
+            image_source: state.get("metadata"),
+        },
         failed,
         true,
     );

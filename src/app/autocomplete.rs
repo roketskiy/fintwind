@@ -779,6 +779,7 @@ impl Fintwind {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_autocomplete_row(
         &self,
         index: usize,

@@ -1483,10 +1483,7 @@ mod tests {
             "silence must not recycle a live connection"
         );
         feed.cancel();
-        assert!(matches!(
-            feed.recv_timeout(Duration::from_millis(500)),
-            Err(_)
-        ));
+        assert!(feed.recv_timeout(Duration::from_millis(500)).is_err());
     }
 
     #[test]
@@ -1681,10 +1678,7 @@ mod tests {
             settled <= before + 1,
             "the reader kept reconnecting after the last cancellation"
         );
-        assert!(matches!(
-            feed.recv_timeout(Duration::from_millis(500)),
-            Err(_)
-        ));
+        assert!(feed.recv_timeout(Duration::from_millis(500)).is_err());
     }
 
     #[test]

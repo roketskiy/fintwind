@@ -417,10 +417,7 @@ fn run_capture(command: &mut Command, timeout: Duration) -> anyhow::Result<Captu
 fn read_bounded(mut reader: impl Read, limit: usize) -> Vec<u8> {
     let mut kept = Vec::new();
     let mut chunk = [0u8; 8192];
-    loop {
-        let Ok(read) = reader.read(&mut chunk) else {
-            break;
-        };
+    while let Ok(read) = reader.read(&mut chunk) {
         if read == 0 {
             break;
         }

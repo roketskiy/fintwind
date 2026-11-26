@@ -83,6 +83,7 @@ enum InlinePiece {
 
 /// A markdown block. Containers nest.
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::enum_variant_names)]
 pub enum Block {
     Paragraph {
         runs: Vec<InlineRun>,

@@ -101,7 +101,9 @@ fn main() -> Result<()> {
                 .with_context(|| format!("rasterize {name}"))?;
             let bytes = image.as_bytes(0).context("missing raster frame")?;
             let ink = bytes
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .filter(|pixel| {
                     pixel[3] > 0
                         && [pixel[2], pixel[1], pixel[0]]

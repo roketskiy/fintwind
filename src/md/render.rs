@@ -634,7 +634,7 @@ impl MarkdownView {
                 let changed = !history.is_empty();
                 let _ = pending.set(history);
                 if changed {
-                    let _ = cx.update(|cx| cx.notify(pane));
+                    cx.update(|cx| cx.notify(pane));
                 }
             });
             PrivacyScan {
@@ -871,6 +871,7 @@ impl<'a> Ctx<'a> {
 /// it first — underneath the glyphs — while the text's prepaint has already
 /// filled in the shared [`TextLayout`]. That ordering is what lets a pure-paint
 /// pass read real glyph geometry without a second layout pass.
+#[allow(clippy::too_many_arguments)]
 fn text_element_with_selection(
     flat: &FlatText,
     runs: Vec<TextRun>,

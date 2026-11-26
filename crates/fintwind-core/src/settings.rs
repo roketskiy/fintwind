@@ -185,7 +185,7 @@ mod tests {
         assert_eq!(settings.extra.get("future"), Some(&Value::from(42)));
         assert_eq!(
             settings.extra.get("disabled_providers"),
-            Some(&Value::from(serde_json::json!(["claude"])))
+            Some(&serde_json::json!(["claude"]))
         );
         let migrated: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(migrated["disabled_providers"][0], "claude");

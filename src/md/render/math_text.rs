@@ -112,7 +112,7 @@ impl LayoutCache {
 
 #[derive(Clone, Debug)]
 enum Content {
-    Text(ShapedLine),
+    Text(Box<ShapedLine>),
     Formula(usize),
     Break,
 }
@@ -140,9 +140,11 @@ struct Flow {
     size: Size<Pixels>,
 }
 
+type CachedFlow = Rc<RefCell<Option<(Bounds<Pixels>, Rc<Flow>)>>>;
+
 #[derive(Clone, Default)]
 pub struct Geometry(
-    Rc<RefCell<Option<(Bounds<Pixels>, Rc<Flow>)>>>,
+    CachedFlow,
     Rc<RefCell<FormulaScroll>>,
 );
 
@@ -1072,7 +1074,7 @@ fn text_tokens(
                     width: f32::from(line.width()),
                     ascent: f32::from(line.ascent) + leading,
                     descent: f32::from(line.descent) + leading,
-                    content: Content::Text(line),
+                    content: Content::Text(Box::new(line)),
                 });
                 start = end;
             }
@@ -1162,12 +1164,12 @@ fn arrange(tokens: &[Token], width: f32, line_height: f32, align: TextAlign) -> 
                     remainder = Some(Token {
                         range: middle..token.range.end,
                         width: f32::from(right.width()),
-                        content: Content::Text(right),
+                        content: Content::Text(Box::new(right)),
                         ..token.clone()
                     });
                     token.range.end = middle;
                     token.width = f32::from(left.width());
-                    token.content = Content::Text(left);
+                    token.content = Content::Text(Box::new(left));
                 }
             }
             ascent = ascent.max(token.ascent);

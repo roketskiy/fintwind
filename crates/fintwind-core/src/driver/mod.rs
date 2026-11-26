@@ -36,27 +36,27 @@ pub struct DriverEventSender {
 }
 
 impl DriverEventSender {
-    pub fn send(&self, event: DriverEvent) -> Result<(), SendError<DriverEvent>> {
-        self.events.send(event)?;
+    pub fn send(&self, event: DriverEvent) -> Result<(), Box<SendError<DriverEvent>>> {
+        self.events.send(event).map_err(Box::new)?;
         let _ = self.wake.try_send(());
         Ok(())
     }
 }
 
 pub(crate) trait DriverEventSink {
-    fn send(&self, event: DriverEvent) -> Result<(), SendError<DriverEvent>>;
+    fn send(&self, event: DriverEvent) -> Result<(), Box<SendError<DriverEvent>>>;
 }
 
 impl DriverEventSink for DriverEventSender {
-    fn send(&self, event: DriverEvent) -> Result<(), SendError<DriverEvent>> {
+    fn send(&self, event: DriverEvent) -> Result<(), Box<SendError<DriverEvent>>> {
         DriverEventSender::send(self, event)
     }
 }
 
 #[cfg(test)]
 impl DriverEventSink for Sender<DriverEvent> {
-    fn send(&self, event: DriverEvent) -> Result<(), SendError<DriverEvent>> {
-        Sender::send(self, event)
+    fn send(&self, event: DriverEvent) -> Result<(), Box<SendError<DriverEvent>>> {
+        Sender::send(self, event).map_err(Box::new)
     }
 }
 

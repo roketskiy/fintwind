@@ -99,11 +99,13 @@ struct Cached {
     next_manual: i64,
 }
 
+type QuotaCacheMap = Mutex<HashMap<(String, String), Arc<Mutex<Cached>>>>;
+
 /// Per-server/provider caches serialize duplicate reads without blocking other vendors.
 /// Neither credential material nor raw responses are retained in this cache.
 #[derive(Default)]
 pub struct QuotaService {
-    entries: Mutex<HashMap<(String, String), Arc<Mutex<Cached>>>>,
+    entries: QuotaCacheMap,
     pub(crate) local: fintwind_client::local_quota::LocalQuotaCache,
 }
 
@@ -969,10 +971,7 @@ fn zhipu_envelope_ok(body: &Value) -> bool {
     if body["success"].as_bool() == Some(false) {
         return false;
     }
-    match body["code"].as_i64() {
-        Some(200) | None if body["error"].is_null() => true,
-        _ => false,
-    }
+    matches!(body["code"].as_i64(), Some(200) | None if body["error"].is_null())
 }
 
 /// Zhipu/Z.ai base account report: the cash left to spend. A refused key is

@@ -629,6 +629,7 @@ pub fn serve(
     Ok(())
 }
 
+#[allow(clippy::result_large_err)]
 fn handle_connection(
     stream: TcpStream,
     expected_token: &str,
@@ -737,7 +738,7 @@ fn handle_connection(
         match socket.read() {
             Ok(Message::Text(text)) => match serde_json::from_str(text.as_ref()) {
                 Ok(ClientMessage::Request(request)) => {
-                    dispatcher.dispatch(request, outgoing.clone(), subscriber_id);
+                    dispatcher.dispatch(*request, outgoing.clone(), subscriber_id);
                 }
                 Ok(ClientMessage::Shutdown) => {
                     if options.allow_shutdown {
@@ -777,6 +778,7 @@ fn handle_connection(
 /// endpoint is selected before this callback and uses its own isolated
 /// credential. Neither transport accepts the other transport's credential
 /// or message protocol.
+#[allow(clippy::result_large_err)]
 fn validate_handshake(
     request: &HandshakeRequest,
     response: HandshakeResponse,
@@ -870,13 +872,11 @@ fn run_runtime_mailbox(
             if starts_runtime {
                 active_runtime_id =
                     matches!(&handled.outcome, ResponseOutcome::Ok { .. }).then_some(runtime_id);
-            } else if let ResponseOutcome::Ok {
-                payload:
-                    ResponsePayload::SessionRuntime {
-                        runtime_id: Some(attached_runtime_id),
-                        ..
-                    },
-            } = &handled.outcome
+            } else if let ResponseOutcome::Ok { payload } = &handled.outcome
+                && let ResponsePayload::SessionRuntime {
+                    runtime_id: Some(attached_runtime_id),
+                    ..
+                } = payload.as_ref()
             {
                 // A replacement mailbox can rediscover a provider runtime
                 // that survived its previous actor worker.
@@ -893,13 +893,8 @@ fn run_runtime_mailbox(
                 }
             } else if !runtime_id.is_nil()
                 && active_runtime_id.is_none()
-                && !matches!(
-                    &handled.outcome,
-                    ResponseOutcome::Ok {
-                        payload: ResponsePayload::SessionRuntime { .. }
-                    }
-                )
-                && matches!(&handled.outcome, ResponseOutcome::Ok { .. })
+                && let ResponseOutcome::Ok { payload } = &handled.outcome
+                && !matches!(payload.as_ref(), ResponsePayload::SessionRuntime { .. })
             {
                 // Recover the supervisor state if a previous mailbox worker
                 // exited unexpectedly while the backend runtime stayed alive.
@@ -998,7 +993,9 @@ fn handle_request(
         let mut sink = hub.event_sink(session_id, runtime_id);
         sink.source_subscriber_id = Some(source_subscriber_id);
         let outcome = match backend.handle(request, sink) {
-            Ok(payload) => ResponseOutcome::Ok { payload },
+            Ok(payload) => ResponseOutcome::Ok {
+                payload: Box::new(payload),
+            },
             Err(error) => ResponseOutcome::Error {
                 error: RpcError::from(error),
             },
@@ -1013,21 +1010,19 @@ fn handle_request(
     }
     if executed {
         match (&task_catalog_action, &outcome) {
-            (
-                TaskCatalogAction::Load,
-                ResponseOutcome::Ok {
-                    payload:
-                        ResponsePayload::TaskState {
-                            projects, sessions, ..
-                        },
-                },
-            ) => hub.replace_task_catalog(projects, sessions),
-            (
-                TaskCatalogAction::Save { projects },
-                ResponseOutcome::Ok {
-                    payload: ResponsePayload::TaskStateSaved { sessions },
-                },
-            ) => hub.task_state_saved(source_subscriber_id, projects, sessions),
+            (TaskCatalogAction::Load, ResponseOutcome::Ok { payload }) => {
+                if let ResponsePayload::TaskState {
+                    projects, sessions, ..
+                } = payload.as_ref()
+                {
+                    hub.replace_task_catalog(projects, sessions);
+                }
+            }
+            (TaskCatalogAction::Save { projects }, ResponseOutcome::Ok { payload }) => {
+                if let ResponsePayload::TaskStateSaved { sessions } = payload.as_ref() {
+                    hub.task_state_saved(source_subscriber_id, projects, sessions);
+                }
+            }
             (TaskCatalogAction::Changed, ResponseOutcome::Ok { .. }) => {
                 hub.task_state_changed(source_subscriber_id);
             }
@@ -1255,7 +1250,6 @@ mod tests {
                 server_shutdown,
                 ServerOptions {
                     allow_shutdown: true,
-                    ..ServerOptions::default()
                 },
             )
             .unwrap()
@@ -1371,7 +1365,6 @@ mod tests {
                 server_shutdown,
                 ServerOptions {
                     allow_shutdown: true,
-                    ..ServerOptions::default()
                 },
             )
             .unwrap()
@@ -1438,7 +1431,6 @@ mod tests {
                 server_shutdown,
                 ServerOptions {
                     allow_shutdown: true,
-                    ..ServerOptions::default()
                 },
             )
             .unwrap()
@@ -1512,7 +1504,6 @@ mod tests {
                 server_shutdown,
                 ServerOptions {
                     allow_shutdown: true,
-                    ..ServerOptions::default()
                 },
             )
             .unwrap()
@@ -1630,7 +1621,6 @@ mod tests {
                 server_shutdown,
                 ServerOptions {
                     allow_shutdown: true,
-                    ..ServerOptions::default()
                 },
             )
             .unwrap()

@@ -58,7 +58,7 @@ pub enum ClientMessage {
         #[serde(default)]
         resume_from: Vec<ReplayCursor>,
     },
-    Request(Request),
+    Request(Box<Request>),
     Shutdown,
 }
 
@@ -613,7 +613,7 @@ pub enum ServerMessage {
     rename_all_fields = "camelCase"
 )]
 pub enum ResponseOutcome {
-    Ok { payload: ResponsePayload },
+    Ok { payload: Box<ResponsePayload> },
     Error { error: RpcError },
 }
 

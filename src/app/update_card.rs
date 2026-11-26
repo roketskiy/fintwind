@@ -375,10 +375,10 @@ impl Fintwind {
                 motion::spin_slow(icon("icons/loader-circle.svg", 14.0, theme.text_secondary)),
             ),
             UpdatePhase::Downloading => (
-                if asset.size > 0 {
+                if let Some(percent) = card.downloaded_bytes.saturating_mul(100).checked_div(asset.size) {
                     tr!(
                         "update.downloading_progress",
-                        percent = (card.downloaded_bytes.saturating_mul(100) / asset.size).min(100)
+                        percent = percent.min(100)
                     )
                 } else {
                     tr!(

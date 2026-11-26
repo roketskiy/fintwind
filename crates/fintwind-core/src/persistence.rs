@@ -1817,14 +1817,11 @@ fn message_fingerprint(message: &Message, position: usize) -> u64 {
     }
 
     let bytes = message.content.as_bytes();
-    let mut chunks = bytes.chunks_exact(8);
-    for chunk in &mut chunks {
-        fold(u64::from_le_bytes(
-            chunk.try_into().expect("chunks_exact yields 8 bytes"),
-        ));
+    let (chunks, remainder) = bytes.as_chunks::<8>();
+    for chunk in chunks {
+        fold(u64::from_le_bytes(*chunk));
     }
     let mut tail = [0u8; 8];
-    let remainder = chunks.remainder();
     tail[..remainder.len()].copy_from_slice(remainder);
     fold(u64::from_le_bytes(tail));
     fold(bytes.len() as u64);

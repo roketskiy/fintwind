@@ -866,6 +866,7 @@ impl Fintwind {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_sidebar_body(
         &self,
         width: f32,

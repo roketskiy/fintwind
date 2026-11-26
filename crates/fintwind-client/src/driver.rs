@@ -21,8 +21,8 @@ impl DriverEventSender {
         let _ = self.wake.try_send(());
     }
 
-    pub fn send(&self, event: DriverEvent) -> Result<(), SendError<DriverEvent>> {
-        self.events.send(event)?;
+    pub fn send(&self, event: DriverEvent) -> Result<(), Box<SendError<DriverEvent>>> {
+        self.events.send(event).map_err(Box::new)?;
         let _ = self.wake.try_send(());
         Ok(())
     }

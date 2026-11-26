@@ -8,28 +8,34 @@ use crate::model::{ActivityItem, ActivityKind};
 
 const MAX_ACTIVITY_CHARS: usize = 16_000;
 
+pub(super) struct ToolPayloads<'a> {
+    pub arguments: Option<&'a Value>,
+    pub output: Option<&'a Value>,
+    pub image_source: Option<&'a Value>,
+}
+
 pub(super) fn tool_activity(
     source_id: Option<String>,
     kind: ActivityKind,
     title: String,
-    arguments: Option<&Value>,
-    output: Option<&Value>,
-    image_source: Option<&Value>,
+    payloads: ToolPayloads<'_>,
     failed: bool,
     complete: bool,
 ) -> ActivityItem {
-    let raw_arguments = arguments;
-    let arguments = arguments
+    let raw_arguments = payloads.arguments;
+    let arguments = payloads
+        .arguments
         .filter(|value| !value.is_null())
         .and_then(format_json);
-    let formatted_output = output
+    let formatted_output = payloads
+        .output
         .filter(|value| !value.is_null())
         .and_then(format_output);
     let mut image_urls = Vec::new();
-    if let Some(value) = output {
+    if let Some(value) = payloads.output {
         collect_image_urls(value, &mut image_urls);
     }
-    if let Some(value) = image_source {
+    if let Some(value) = payloads.image_source {
         collect_image_urls(value, &mut image_urls);
     }
     let mut seen = HashSet::new();
@@ -46,7 +52,7 @@ pub(super) fn tool_activity(
     ActivityItem::new(source_id, kind, title, detail, complete)
         .with_arguments(arguments)
         .with_activity_source(raw_arguments)
-        .with_tool_metadata(image_source)
+        .with_tool_metadata(payloads.image_source)
         .with_output(formatted_output)
         .with_image_urls(image_urls)
         .with_failed(failed)
@@ -64,35 +70,6 @@ pub(super) fn input_title(value: Option<&Value>) -> Option<String> {
         .map(str::trim)
         .filter(|title| !title.is_empty())
         .map(str::to_owned)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn title_supports_direct_and_provider_wrapped_arguments() {
-        assert_eq!(
-            input_title(Some(&serde_json::json!({"title": "Inspect app"}))).as_deref(),
-            Some("Inspect app")
-        );
-        assert_eq!(
-            input_title(Some(&serde_json::json!({
-                "tool_name": "read",
-                "arguments": {"path": "src/main.rs", "title": "Inspect wrapped app"}
-            })))
-            .as_deref(),
-            Some("Inspect wrapped app")
-        );
-        assert_eq!(
-            input_title(Some(&serde_json::json!({
-                "tool_name": "read",
-                "tool_input": {"path": "src/main.rs", "title": "Verify nested title"}
-            })))
-            .as_deref(),
-            Some("Verify nested title")
-        );
-    }
 }
 
 pub(super) fn format_json(value: &Value) -> Option<String> {
@@ -209,4 +186,33 @@ fn non_empty_text(value: String) -> Option<String> {
     let mut truncated = value.chars().take(MAX_ACTIVITY_CHARS).collect::<String>();
     truncated.push_str(&tr!("activity.output_truncated"));
     Some(truncated)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn title_supports_direct_and_provider_wrapped_arguments() {
+        assert_eq!(
+            input_title(Some(&serde_json::json!({"title": "Inspect app"}))).as_deref(),
+            Some("Inspect app")
+        );
+        assert_eq!(
+            input_title(Some(&serde_json::json!({
+                "tool_name": "read",
+                "arguments": {"path": "src/main.rs", "title": "Inspect wrapped app"}
+            })))
+            .as_deref(),
+            Some("Inspect wrapped app")
+        );
+        assert_eq!(
+            input_title(Some(&serde_json::json!({
+                "tool_name": "read",
+                "tool_input": {"path": "src/main.rs", "title": "Verify nested title"}
+            })))
+            .as_deref(),
+            Some("Verify nested title")
+        );
+    }
 }

@@ -1968,6 +1968,7 @@ impl Fintwind {
         .detach();
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn finish_message_rewind(
         &mut self,
         edit: MessageEdit,

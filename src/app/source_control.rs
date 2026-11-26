@@ -2261,12 +2261,14 @@ impl Fintwind {
         let conflicts = matches!(primary, SourceControlPrimary::Conflicts);
         let can_commit = enabled && !conflicts && staged && has_message;
         let can_stage_commit = enabled && !conflicts && has_message && untracked_ready && dirty;
-        let (primary_label, primary_icon, primary_ready, primary_action): (
+        type PrimaryAction = (
             String,
             &'static str,
             bool,
-            fn(&mut Self, &mut Context<Self>),
-        ) = match primary {
+            fn(&mut Fintwind, &mut Context<Fintwind>),
+        );
+        let (primary_label, primary_icon, primary_ready, primary_action): PrimaryAction =
+            match primary {
             SourceControlPrimary::Commit => (
                 tr!("source_control.commit"),
                 "icons/check.svg",
@@ -2767,7 +2769,12 @@ impl Fintwind {
             &handle,
             MenuAlign::BelowRight,
             move |_| {
-                let actions: [(_, _, fn(&mut Self, &mut Context<Self>)); 3] = [
+                type RepoAction = (
+                    String,
+                    &'static str,
+                    fn(&mut Fintwind, &mut Context<Fintwind>),
+                );
+                let actions: [RepoAction; 3] = [
                     (
                         tr!("source_control.fetch"),
                         "icons/download.svg",
@@ -3001,18 +3008,17 @@ impl Fintwind {
         let placeholder = if !has_workspace {
             Some(tr!("source_control.no_directory"))
         } else if snapshot_tree {
-            if self.right_panel_diff_error.is_some() && snapshot.is_none() {
-                None
-            } else if self.right_panel_diff_loading && snapshot.is_none() {
-                None
-            } else if snapshot.is_some_and(|snapshot| !snapshot.files.is_empty()) {
+            if ((self.right_panel_diff_error.is_some() || self.right_panel_diff_loading)
+                && snapshot.is_none())
+                || snapshot.is_some_and(|snapshot| !snapshot.files.is_empty())
+            {
                 None
             } else {
                 Some(tr!("diff.no_changes"))
             }
-        } else if self.source_control_status_error.is_some() {
-            None
-        } else if self.source_control_status_loading && status.is_none() {
+        } else if self.source_control_status_error.is_some()
+            || (self.source_control_status_loading && status.is_none())
+        {
             None
         } else if let Some(status) = status {
             if status.entries.is_empty()

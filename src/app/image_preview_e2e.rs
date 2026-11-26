@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use gpui::{
     ClipboardEntry, Context, Entity, FocusHandle, Modifiers, MouseButton, Render, RenderImage,
-    StyleRefinement, TestAppContext, Window, div, prelude::*, px,
+    StyleRefinement, TestAppContext, Window, div, px,
 };
 
 use super::image_preview::{
@@ -154,7 +154,7 @@ fn make_png_bytes(width: u32, height: u32, rgba: [u8; 4]) -> Vec<u8> {
 
 fn make_render_image(width: u32, height: u32, rgba: [u8; 4]) -> Arc<RenderImage> {
     let mut buffer = image::RgbaImage::from_pixel(width, height, image::Rgba(rgba));
-    for pixel in buffer.chunks_exact_mut(4) {
+    for pixel in buffer.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
     Arc::new(RenderImage::new(vec![image::Frame::new(buffer)]))

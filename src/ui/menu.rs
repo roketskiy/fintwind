@@ -168,7 +168,7 @@ impl MenuItem {
         }
     }
 
-    fn click_handler(self) -> Option<Rc<dyn Fn(&mut Window, &mut App)>> {
+    fn click_handler(self) -> Option<MenuClickHandler> {
         match self {
             Self::Entry {
                 disabled: false,
@@ -1006,11 +1006,14 @@ struct MenuCard {
     items: Rc<dyn Fn(&mut App) -> Vec<MenuItem>>,
 }
 
+type MenuClickHandler = Rc<dyn Fn(&mut Window, &mut App)>;
+type MenuItemsBuilder = Rc<dyn Fn(&mut App) -> Vec<MenuItem>>;
+
 impl RenderOnce for MenuCard {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = Theme::current(cx);
         let _ = window;
-        let item_builder: Rc<dyn Fn(&mut App) -> Vec<MenuItem>> = {
+        let item_builder: MenuItemsBuilder = {
             let handle = self.handle.clone();
             let base_items = self.items.clone();
             Rc::new(move |cx| {
@@ -1141,7 +1144,7 @@ fn row(
     highlighted: bool,
     theme: &Theme,
     handle: ContextMenuHandle,
-    on_click: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+    on_click: Option<MenuClickHandler>,
 ) -> gpui::Stateful<gpui::Div> {
     let hover = theme.overlay;
     let highlight = theme.overlay_strong;
@@ -1208,7 +1211,7 @@ fn next_highlight(focusable: &[usize], current: Option<usize>, key: &str) -> Opt
 fn on_menu_key(
     handle: &ContextMenuHandle,
     focusable: &[usize],
-    items: &Rc<dyn Fn(&mut App) -> Vec<MenuItem>>,
+    items: &MenuItemsBuilder,
     event: &KeyDownEvent,
     window: &mut Window,
     cx: &mut App,

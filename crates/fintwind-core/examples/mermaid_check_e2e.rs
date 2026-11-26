@@ -281,11 +281,13 @@ fn read_reply(
     }
 }
 
+type MermaidCheckOutcome = (bool, Option<String>, Option<f64>, Option<f64>);
+
 /// One `check` round trip on an authenticated connection.
 fn check(
     socket: &mut tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>,
     source: &str,
-) -> anyhow::Result<(bool, Option<String>, Option<f64>, Option<f64>)> {
+) -> anyhow::Result<MermaidCheckOutcome> {
     send(socket, &MermaidCheckMessage::Check {
         request_id: Uuid::new_v4(),
         source: source.to_owned(),

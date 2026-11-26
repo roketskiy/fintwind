@@ -67,7 +67,7 @@ enum Failure {
 
 enum ScheduledRequest {
     Reload,
-    Save(ScheduledTaskEdit),
+    Save(Box<ScheduledTaskEdit>),
     Delete {
         id: ScheduledTaskId,
         expected_revision: u64,
@@ -82,7 +82,7 @@ enum ScheduledWake {
     },
     Saved {
         generation: u64,
-        result: Result<ScheduledTask, Failure>,
+        result: Box<Result<ScheduledTask, Failure>>,
     },
     Deleted {
         generation: u64,
@@ -528,11 +528,11 @@ fn perform_request(client: &DaemonClient, request: ScheduledRequest) -> Schedule
         },
         ScheduledRequest::Save(edit) => ScheduledWake::Saved {
             generation: 0,
-            result: saved_task(client, Command::SaveScheduledTask { edit }),
+            result: Box::new(saved_task(client, Command::SaveScheduledTask { edit: *edit })),
         },
         ScheduledRequest::RunNow(id) => ScheduledWake::Saved {
             generation: 0,
-            result: saved_task(client, Command::RunScheduledTaskNow { id }),
+            result: Box::new(saved_task(client, Command::RunScheduledTaskNow { id })),
         },
         ScheduledRequest::Delete {
             id,
@@ -563,7 +563,7 @@ fn refused_request(request: ScheduledRequest) -> ScheduledWake {
         },
         ScheduledRequest::Save(_) | ScheduledRequest::RunNow(_) => ScheduledWake::Saved {
             generation: 0,
-            result: Err(Failure::Disconnected),
+            result: Box::new(Err(Failure::Disconnected)),
         },
         ScheduledRequest::Delete { .. } => ScheduledWake::Deleted {
             generation: 0,
@@ -1021,7 +1021,7 @@ impl ScheduledTasksView {
             }
             ScheduledWake::Saved { result, .. } => {
                 let mutation = self.mutation.take();
-                match result {
+                match *result {
                     Ok(task) => {
                         if let Some(existing) =
                             self.tasks.iter_mut().find(|entry| entry.id == task.id)
@@ -1097,11 +1097,11 @@ impl ScheduledTasksView {
             target: task.target.clone(),
         };
         self.send(
-            ScheduledRequest::Save(ScheduledTaskEdit::Update {
+            ScheduledRequest::Save(Box::new(ScheduledTaskEdit::Update {
                 id,
                 expected_revision: task.revision,
                 draft,
-            }),
+            })),
             Mutation::UpdateTask,
             cx,
         );

@@ -425,7 +425,9 @@ mod tests {
             dark.image
                 .as_bytes(0)
                 .unwrap()
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .any(|pixel| pixel[3] > 0)
         );
         assert_ne!(dark.image.as_bytes(0), light.image.as_bytes(0));

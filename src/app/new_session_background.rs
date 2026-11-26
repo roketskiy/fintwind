@@ -306,8 +306,8 @@ fn render_field(size: FieldSize, seconds: f32, colors: ThemeColors) -> RgbaImage
             ) - 0.5)
                 * 18.0
                 * light.clamp(0.0, 1.0);
-            for channel in 0..3 {
-                pixel.0[channel] = (pixel.0[channel] as f32 + grain).clamp(0.0, 255.0) as u8;
+            for channel in &mut pixel.0[..3] {
+                *channel = (*channel as f32 + grain).clamp(0.0, 255.0) as u8;
             }
         }
     }

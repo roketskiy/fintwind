@@ -576,6 +576,7 @@ fn window_action(
         .on_click(cx.listener(move |this, _, window, cx| run(this, window, cx)))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn ssh_wait_button(
     cx: &mut Context<Fintwind>,
     theme: Theme,

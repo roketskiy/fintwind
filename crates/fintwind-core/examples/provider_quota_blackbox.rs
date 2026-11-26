@@ -493,6 +493,8 @@ fn main() -> Result<()> {
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::time::Duration;
+    type RecordedRun = (Vec<String>, Vec<String>, Vec<(String, String)>);
+
     struct FixtureLocal {
         files: Mutex<HashMap<PathBuf, Vec<u8>>>,
         reads: Mutex<usize>,
@@ -502,7 +504,7 @@ fn main() -> Result<()> {
         runs: Mutex<VecDeque<CommandOutput>>,
         tui: Mutex<VecDeque<TuiTranscript>>,
         tui_ran: Mutex<Vec<(String, PathBuf)>>,
-        ran: Mutex<Vec<(Vec<String>, Vec<String>, Vec<(String, String)>)>>,
+        ran: Mutex<Vec<RecordedRun>>,
         https: Mutex<VecDeque<Result<QuotaResponse, String>>>,
         requested: Mutex<Vec<(String, String)>>,
         home: PathBuf,

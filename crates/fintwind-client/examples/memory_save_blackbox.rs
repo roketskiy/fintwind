@@ -120,21 +120,21 @@ fn main() -> anyhow::Result<()> {
             };
             let outcome = match request.command {
                 Command::GetSettings => ResponseOutcome::Ok {
-                    payload: ResponsePayload::Settings {
+                    payload: Box::new(ResponsePayload::Settings {
                         settings: DaemonSettings::default(),
-                    },
+                    }),
                 },
                 Command::UpdateSettings { .. } => ResponseOutcome::Ok {
-                    payload: ResponsePayload::Ack,
+                    payload: Box::new(ResponsePayload::Ack),
                 },
                 Command::LoadTaskState => ResponseOutcome::Ok {
-                    payload: ResponsePayload::TaskState {
+                    payload: Box::new(ResponsePayload::TaskState {
                         projects: vec![peer_project.clone()],
                         sessions: Vec::new(),
                         default_cwd: peer_project.path.clone(),
                         projectless_root: None,
                         projectless_legacy_root: None,
-                    },
+                    }),
                 },
                 Command::SaveTaskStateCheckpoint {
                     sessions,
@@ -174,12 +174,12 @@ fn main() -> anyhow::Result<()> {
                             );
                         }
                         ResponseOutcome::Ok {
-                            payload: ResponsePayload::TaskStateSaved {
+                            payload: Box::new(ResponsePayload::TaskStateSaved {
                                 sessions: sessions
                                     .iter()
                                     .map(AgentSession::list_projection)
                                     .collect(),
-                            },
+                            }),
                         }
                     }
                 }

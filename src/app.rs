@@ -1426,6 +1426,12 @@ impl SessionTabState {
     }
 }
 
+type ModelPickerLoading =
+    RefCell<Option<crate::ui::loading::LoadingDelay<(Option<PathBuf>, ModelPickerTab)>>>;
+type SkillsRemoteLoading =
+    RefCell<Option<crate::ui::loading::LoadingDelay<(Uuid, PathBuf, Option<bool>)>>>;
+type AssistantFooterCache = RefCell<HashMap<usize, (Option<SharedString>, Option<u64>)>>;
+
 pub struct Fintwind {
     /// Owns the headless provider process for exactly as long as the desktop
     /// app entity. Debug builds can replace it independently after a rebuild;
@@ -1520,8 +1526,7 @@ pub struct Fintwind {
     model_picker_highlight: Option<usize>,
     model_picker_scroll: ScrollHandle,
     model_picker_scrollbar: Rc<ScrollbarState>,
-    model_picker_loading:
-        RefCell<Option<crate::ui::loading::LoadingDelay<(Option<PathBuf>, ModelPickerTab)>>>,
+    model_picker_loading: ModelPickerLoading,
     branch_search: Entity<ComposerInput>,
     branch_create_input: Entity<ComposerInput>,
     branch_picker_mode: BranchPickerMode,
@@ -1926,8 +1931,7 @@ pub struct Fintwind {
     skills_scan_pending: bool,
     skills_remote_pending: HashMap<(Uuid, PathBuf), Option<bool>>,
     skills_remote_errors: HashMap<(Uuid, PathBuf), (Option<bool>, String)>,
-    skills_remote_loading:
-        RefCell<Option<crate::ui::loading::LoadingDelay<(Uuid, PathBuf, Option<bool>)>>>,
+    skills_remote_loading: SkillsRemoteLoading,
     skills_scan_error: Option<String>,
     skills_loading: RefCell<Option<crate::ui::loading::LoadingDelay<Option<Uuid>>>>,
     /// When the current catalog landed, for the reopen-staleness check.
@@ -2343,7 +2347,7 @@ pub struct Fintwind {
     /// every visible row on every frame, and the underlying turn walk and
     /// answer join are O(session). Footers exist only for settled turns,
     /// whose parts are immutable, and settling moves the fingerprint.
-    assistant_footer_cache: RefCell<HashMap<usize, (Option<SharedString>, Option<u64>)>>,
+    assistant_footer_cache: AssistantFooterCache,
     /// The row-kinds fingerprint `assistant_footer_cache` was built under.
     assistant_footer_fingerprint: Cell<Option<u64>>,
     /// Settled-turn stats line per message index, rebuilt when the row-kinds

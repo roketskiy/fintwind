@@ -367,8 +367,13 @@ impl<G> SelectionRegistry<G> {
         let (start, end) = if a <= b { (a, b) } else { (b, a) };
         let mut spans = Vec::new();
         let last = self.entries.len().saturating_sub(1);
-        for index in start.0..=end.0.min(last) {
-            let entry = &self.entries[index];
+        for (index, entry) in self
+            .entries
+            .iter()
+            .enumerate()
+            .take(end.0.min(last) + 1)
+            .skip(start.0)
+        {
             let from = if index == start.0 { start.1 } else { 0 };
             let to = if index == end.0 {
                 end.1

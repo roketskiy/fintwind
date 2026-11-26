@@ -78,7 +78,7 @@ fintwind 不设账号也不提供云端同步。应用状态保存在本机 SQLi
 
 桌面端通过 [`fintwind-client`](crates/fintwind-client) 与 [`fintwind-daemon`](crates/fintwind-daemon) 使用 [`fintwind-protocol`](crates/fintwind-protocol) 通信，[`fintwind-core`](crates/fintwind-core) 负责存储、Git 与 OpenCode 集成；SSH 远端通过隧道复用同一协议。
 
-从源码构建需要 Windows、MSVC C++ 工具链与 Windows SDK、[Rust 1.97+](https://www.rust-lang.org/tools/install) 及 [Bun](https://bun.sh/)，规范与打包流程见 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [RELEASING.md](RELEASING.md)。
+从源码构建需要 Windows、MSVC C++ 工具链与 Windows SDK、[Rust 1.100+](https://www.rust-lang.org/tools/install) 及 [Bun](https://bun.sh/)，规范与打包流程见 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [RELEASING.md](RELEASING.md)。
 
 ```sh
 bun install

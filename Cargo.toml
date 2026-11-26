@@ -2,8 +2,8 @@
 name = "fintwind"
 version = "0.3.4"
 edition = "2024"
-# Ondine (crates/fintwind-diagram) requires 1.97; CI pins the same toolchain.
-rust-version = "1.97"
+# std `try_update` requires 1.100; CI pins the same toolchain.
+rust-version = "1.100"
 description = "A native Windows desktop app for OpenCode"
 license = "GPL-3.0-only"
 

@@ -2,7 +2,7 @@ use crate::theme::{code_px, ui_px};
 use crate::ui::ActivationExt;
 use crate::ui::loading::{LoadingDelay, LoadingPhase};
 
-use gpui::{Context, Div, IntoElement, Window, div, prelude::*, px, relative};
+use gpui::{Context, Div, IntoElement, Window, div, px, relative};
 
 use super::right_panel::file_icon_for_path;
 

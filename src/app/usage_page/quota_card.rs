@@ -3,7 +3,6 @@
 //! readings across connected providers, with click-to-inspect multi-window
 //! breakdown, pagination beyond three providers, and inline refresh.
 
-use chrono::Datelike as _;
 use ely_gpui_component::{
     motion::Spinner,
     primitives::{Icon, IconName},

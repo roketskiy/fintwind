@@ -90,7 +90,7 @@ This is an independent [GPL-3.0-only](LICENSE) fork of [waku](https://github.com
 
 The desktop client ([`fintwind-client`](crates/fintwind-client)) talks to [`fintwind-daemon`](crates/fintwind-daemon) over a versioned WebSocket protocol ([`fintwind-protocol`](crates/fintwind-protocol)), backed by [`fintwind-core`](crates/fintwind-core) for storage, Git, and OpenCode integration. SSH hosts tunnel the same protocol to a Linux daemon on the server.
 
-Building from source requires Windows, MSVC C++ toolchain with Windows SDK, [Rust 1.97+](https://www.rust-lang.org/tools/install), and [Bun](https://bun.sh/). See [CONTRIBUTING.md](CONTRIBUTING.md) and [RELEASING.md](RELEASING.md) for setup, checks, and packaging.
+Building from source requires Windows, MSVC C++ toolchain with Windows SDK, [Rust 1.100+](https://www.rust-lang.org/tools/install), and [Bun](https://bun.sh/). See [CONTRIBUTING.md](CONTRIBUTING.md) and [RELEASING.md](RELEASING.md) for setup, checks, and packaging.
 
 ```sh
 bun install

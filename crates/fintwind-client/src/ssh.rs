@@ -164,7 +164,7 @@ pub fn save_general_setting(
         }
         NetworkProxy if value.is_empty() => None,
         NetworkProxy => Some(
-            fintwind_protocol::http::normalize_proxy_url(value)
+            fintwind_http::normalize_proxy_url(value)
                 .context("invalid proxy address")?
                 .into(),
         ),

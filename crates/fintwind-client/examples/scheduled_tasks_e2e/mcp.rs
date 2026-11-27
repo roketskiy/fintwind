@@ -316,6 +316,9 @@ fn require_catalog(arguments: &Arguments, title: &str, visible: bool) -> anyhow:
     if first["catalogVisible"] != visible {
         bail!("scheduled MCP catalog visibility did not match the setting: {first}");
     }
+    if !visible && !result_for(arguments, title)?.contains("Unknown tool") {
+        bail!("disabled scheduled MCP did not refuse the tool call");
+    }
     Ok(())
 }
 
@@ -363,7 +366,6 @@ fn result_for(arguments: &Arguments, title: &str) -> anyhow::Result<String> {
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .find(|entry| {
             entry["kind"] == "mcp"
-                && entry["catalogVisible"] == true
                 && entry["prompt"]
                     .as_str()
                     .is_some_and(|prompt| prompt.contains(title))

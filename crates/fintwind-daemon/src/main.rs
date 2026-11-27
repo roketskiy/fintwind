@@ -48,32 +48,32 @@ fn main() -> anyhow::Result<()> {
         std::fs::create_dir_all(directory).context("could not create daemon data directory")?;
         (
             directory.join("app.db"),
-            fintwind_core::DaemonSettingsStore::open(directory.join("daemon.json"))
+            fintwind_daemon::DaemonSettingsStore::open(directory.join("daemon.json"))
                 .context("could not load isolated daemon settings")?,
         )
     } else {
-        let task_path = fintwind_core::persistence::StateStore::default_path();
-        let settings = fintwind_core::DaemonSettingsStore::open_with_legacy(
-            fintwind_core::DaemonSettings::default_path(),
+        let task_path = fintwind_daemon::persistence::StateStore::default_path();
+        let settings = fintwind_daemon::DaemonSettingsStore::open_with_legacy(
+            fintwind_daemon::DaemonSettings::default_path(),
             [task_path.with_file_name("settings.json")],
         )
         .context("could not load daemon settings")?;
         (task_path, settings)
     };
-    let task_store = fintwind_core::persistence::StateStore::daemon(task_path);
-    let backend = Arc::new(fintwind_core::daemon::FintwindBackend::new(
+    let task_store = fintwind_daemon::persistence::StateStore::daemon(task_path);
+    let backend = Arc::new(fintwind_daemon::daemon::FintwindBackend::new(
         settings, task_store,
     )?);
     // Readiness means the isolated stores and backend actually opened. A failed
     // data directory must neither fall back nor announce a usable daemon.
     println!("{}", serde_json::to_string(&ready)?);
     std::io::stdout().flush()?;
-    fintwind_core::serve(
+    fintwind_daemon::serve(
         listener,
         token,
         backend,
         shutdown,
-        fintwind_core::ServerOptions {
+        fintwind_daemon::ServerOptions {
             allow_shutdown: arguments.parent_pid.is_some(),
         },
     )

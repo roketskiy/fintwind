@@ -17,12 +17,24 @@ const _LOCALE_SOURCES: [&str; 3] = [
     include_str!("../../../locales/ja.yml"),
 ];
 
+#[macro_export]
 macro_rules! tr {
     ($key:expr) => {
-        crate::i18n::translate($key)
+        $crate::i18n::translate($key)
     };
-    ($key:expr, $($args:tt)*) => {
-        rust_i18n::t!($key, $($args)*).into_owned()
+    ($key:expr, $($name:ident = $value:expr),+ $(,)?) => {
+        $crate::i18n::translate_args(
+            $key,
+            &[$((stringify!($name), &format!("{}", $value))),+],
+        )
+    };
+}
+
+/// Borrow or return a translation string cleanly across standalone UI crates.
+#[macro_export]
+macro_rules! tr_cow {
+    ($key:expr) => {
+        $crate::i18n::translate($key)
     };
 }
 
@@ -33,7 +45,6 @@ pub mod composer;
 mod driver_wire;
 pub mod git;
 pub mod goal;
-pub mod http;
 pub mod i18n;
 pub mod identity;
 pub mod mermaid;

@@ -1,6 +1,6 @@
 """Exercise the real daemon/client/OpenCode completion path with a local model.
 
-Build first: cargo test --locked -p fintwind-core --test opencode_recovery --no-run
+Build first: cargo test --locked -p fintwind-daemon --test opencode_recovery --no-run
 Run: python scripts/opencode-protocol-e2e.py
 """
 

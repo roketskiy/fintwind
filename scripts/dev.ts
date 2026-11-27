@@ -114,7 +114,11 @@ function targetForChange(directory: string, filename: string | Buffer | null): B
   const relativePath = filename.toString().replaceAll("\\", "/");
   if (
     relativePath.startsWith("fintwind-daemon/") ||
-    relativePath.startsWith("fintwind-core/")
+    relativePath.startsWith("fintwind-driver/") ||
+    relativePath.startsWith("fintwind-scheduled/") ||
+    relativePath.startsWith("fintwind-workspace/") ||
+    relativePath.startsWith("fintwind-storage/") ||
+    relativePath.startsWith("fintwind-git/")
   ) {
     return "daemon";
   }

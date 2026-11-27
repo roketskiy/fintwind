@@ -1,0 +1,38 @@
+[package]
+name = "fintwind-driver"
+version = "0.1.0"
+edition = "2024"
+description = "OpenCode and native AI provider drivers, server pool, and session lifecycle"
+license = "GPL-3.0-only"
+
+[dependencies]
+anyhow = "1.0"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+crossbeam-channel = "0.5"
+dirs = "6.0"
+parking_lot = "0.12"
+semver = "1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+smol = "2"
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+url = "2"
+uuid = { version = "1.18", features = ["v4", "serde"] }
+fintwind-diagram = { path = "../fintwind-diagram" }
+fintwind-env = { path = "../fintwind-env" }
+fintwind-git = { path = "../fintwind-git" }
+fintwind-http = { path = "../fintwind-http" }
+fintwind-opencode-config = { path = "../fintwind-opencode-config" }
+fintwind-protocol = { path = "../fintwind-protocol" }
+fintwind-quota = { path = "../fintwind-quota" }
+fintwind-scheduled = { path = "../fintwind-scheduled" }
+fintwind-storage = { path = "../fintwind-storage" }
+fintwind-workspace = { path = "../fintwind-workspace" }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+fintwind-client = { path = "../fintwind-client" }
+rusqlite = { version = "0.37", features = ["bundled"] }

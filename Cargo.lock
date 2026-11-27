@@ -2620,8 +2620,6 @@ name = "fintwind"
 version = "0.3.4"
 dependencies = [
  "ab_glyph",
- "aho-corasick",
- "alacritty_terminal",
  "anyhow",
  "base64 0.22.1",
  "chrono",
@@ -2629,28 +2627,36 @@ dependencies = [
  "dirs 6.0.0",
  "ely-gpui-component",
  "embed-resource",
- "fancy-regex",
  "fintwind-client",
  "fintwind-diagram",
+ "fintwind-diff",
+ "fintwind-env",
+ "fintwind-git",
+ "fintwind-http",
+ "fintwind-input",
+ "fintwind-integrations-ui",
+ "fintwind-markdown",
+ "fintwind-opencode-config",
+ "fintwind-preview-ui",
  "fintwind-protocol",
+ "fintwind-providers-ui",
+ "fintwind-quota",
  "fintwind-remote",
- "futures",
+ "fintwind-scheduled-ui",
+ "fintwind-scm-ui",
+ "fintwind-ssh-ui",
+ "fintwind-terminal-ui",
+ "fintwind-ui",
+ "fintwind-usage-ui",
  "futures-lite",
  "gpui-kit",
  "gpui-pre",
  "gpui-pre-platform",
  "image",
  "nucleo-matcher",
- "parking_lot",
- "pulldown-cmark",
  "qrcode",
- "ratex-layout",
- "ratex-parser",
- "ratex-svg",
- "ratex-types",
  "raw-window-handle",
  "regex",
- "ropey",
  "rusqlite",
  "russh",
  "rust-i18n",
@@ -2659,10 +2665,8 @@ dependencies = [
  "sha2 0.10.9",
  "smol",
  "tokio",
- "unicode-linebreak",
  "unicode-segmentation",
  "url",
- "usvg 0.46.0",
  "uuid",
  "windows-sys 0.61.2",
 ]
@@ -2674,56 +2678,25 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "chrono",
- "chrono-tz",
  "crossbeam-channel",
  "dirs 6.0.0",
+ "fintwind-env",
+ "fintwind-http",
+ "fintwind-opencode-config",
  "fintwind-protocol",
  "jsonc-parser",
  "libc",
  "nucleo-matcher",
  "parking_lot",
- "regex",
  "russh",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "smol",
  "tokio",
  "tungstenite",
- "unicode-width",
  "url",
  "uuid",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "fintwind-core"
-version = "0.1.0"
-dependencies = [
- "alacritty_terminal",
- "anyhow",
- "base64 0.22.1",
- "chrono",
- "crossbeam-channel",
- "dirs 6.0.0",
- "fintwind-client",
- "fintwind-diagram",
- "fintwind-protocol",
- "libc",
- "nucleo-matcher",
- "parking_lot",
- "rusqlite",
- "rust-i18n",
- "semver",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "smol",
- "subtle",
- "trash",
- "tungstenite",
- "url",
- "uuid",
 ]
 
 [[package]]
@@ -2731,10 +2704,31 @@ name = "fintwind-daemon"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "fintwind-core",
+ "base64 0.22.1",
+ "chrono",
+ "crossbeam-channel",
+ "fintwind-client",
+ "fintwind-driver",
+ "fintwind-env",
+ "fintwind-git",
+ "fintwind-http",
+ "fintwind-opencode-config",
  "fintwind-protocol",
+ "fintwind-quota",
+ "fintwind-scheduled",
+ "fintwind-storage",
+ "fintwind-workspace",
  "libc",
+ "parking_lot",
+ "rusqlite",
+ "semver",
+ "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "smol",
+ "subtle",
+ "tungstenite",
+ "uuid",
  "windows-sys 0.61.2",
 ]
 
@@ -2746,6 +2740,173 @@ dependencies = [
  "compiler",
  "regex",
  "serde_json",
+]
+
+[[package]]
+name = "fintwind-diff"
+version = "0.1.0"
+dependencies = [
+ "fintwind-client",
+ "fintwind-markdown",
+ "fintwind-protocol",
+ "gpui-pre",
+ "uuid",
+]
+
+[[package]]
+name = "fintwind-driver"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "crossbeam-channel",
+ "dirs 6.0.0",
+ "fintwind-client",
+ "fintwind-diagram",
+ "fintwind-env",
+ "fintwind-git",
+ "fintwind-http",
+ "fintwind-opencode-config",
+ "fintwind-protocol",
+ "fintwind-quota",
+ "fintwind-scheduled",
+ "fintwind-storage",
+ "fintwind-workspace",
+ "libc",
+ "parking_lot",
+ "rusqlite",
+ "semver",
+ "serde",
+ "serde_json",
+ "smol",
+ "tungstenite",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "fintwind-env"
+version = "0.1.0"
+dependencies = [
+ "dirs 6.0.0",
+ "libc",
+]
+
+[[package]]
+name = "fintwind-git"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs 6.0.0",
+ "fintwind-env",
+ "fintwind-protocol",
+ "libc",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "fintwind-http"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+]
+
+[[package]]
+name = "fintwind-input"
+version = "0.1.0"
+dependencies = [
+ "ely-gpui-component",
+ "fintwind-client",
+ "fintwind-markdown",
+ "fintwind-protocol",
+ "fintwind-ui",
+ "gpui-kit",
+ "gpui-pre",
+ "parking_lot",
+ "ropey",
+ "serde_json",
+ "unicode-linebreak",
+ "unicode-segmentation",
+ "uuid",
+]
+
+[[package]]
+name = "fintwind-integrations-ui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ely-gpui-component",
+ "fintwind-client",
+ "fintwind-input",
+ "fintwind-markdown",
+ "fintwind-opencode-config",
+ "fintwind-protocol",
+ "fintwind-ui",
+ "gpui-pre",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "fintwind-markdown"
+version = "0.1.0"
+dependencies = [
+ "aho-corasick",
+ "anyhow",
+ "base64 0.22.1",
+ "dirs 6.0.0",
+ "fancy-regex",
+ "fintwind-diagram",
+ "fintwind-protocol",
+ "fintwind-ui",
+ "gpui-pre",
+ "image",
+ "parking_lot",
+ "pulldown-cmark",
+ "ratex-layout",
+ "ratex-parser",
+ "ratex-svg",
+ "ratex-types",
+ "regex",
+ "serde_json",
+ "unicode-linebreak",
+ "unicode-segmentation",
+ "url",
+ "usvg 0.46.0",
+ "uuid",
+]
+
+[[package]]
+name = "fintwind-opencode-config"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs 6.0.0",
+ "fintwind-env",
+ "fintwind-http",
+ "fintwind-protocol",
+ "jsonc-parser",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "fintwind-preview-ui"
+version = "0.1.0"
+dependencies = [
+ "dirs 6.0.0",
+ "ely-gpui-component",
+ "fintwind-markdown",
+ "fintwind-protocol",
+ "fintwind-ui",
+ "gpui-pre",
+ "image",
 ]
 
 [[package]]
@@ -2763,6 +2924,42 @@ dependencies = [
  "serde_json",
  "similar",
  "uuid",
+]
+
+[[package]]
+name = "fintwind-providers-ui"
+version = "0.1.0"
+dependencies = [
+ "ely-gpui-component",
+ "fintwind-client",
+ "fintwind-input",
+ "fintwind-opencode-config",
+ "fintwind-protocol",
+ "fintwind-ui",
+ "gpui-pre",
+]
+
+[[package]]
+name = "fintwind-quota"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "chrono-tz",
+ "dirs 6.0.0",
+ "fintwind-env",
+ "fintwind-http",
+ "fintwind-protocol",
+ "parking_lot",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "unicode-width",
+ "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2785,6 +2982,52 @@ dependencies = [
 ]
 
 [[package]]
+name = "fintwind-scheduled"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "fintwind-protocol",
+ "fintwind-storage",
+ "parking_lot",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tungstenite",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "fintwind-scheduled-ui"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "crossbeam-channel",
+ "ely-gpui-component",
+ "fintwind-client",
+ "fintwind-protocol",
+ "fintwind-ui",
+ "gpui-pre",
+ "smol",
+ "uuid",
+]
+
+[[package]]
+name = "fintwind-scm-ui"
+version = "0.1.0"
+dependencies = [
+ "fintwind-client",
+ "fintwind-diff",
+ "fintwind-git",
+ "fintwind-markdown",
+ "fintwind-protocol",
+ "fintwind-ui",
+ "gpui-pre",
+ "uuid",
+]
+
+[[package]]
 name = "fintwind-ssh-probe"
 version = "0.1.0"
 dependencies = [
@@ -2796,6 +3039,109 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "fintwind-ssh-ui"
+version = "0.3.4"
+dependencies = [
+ "anyhow",
+ "dirs 6.0.0",
+ "fintwind-client",
+ "fintwind-protocol",
+ "fintwind-ui",
+ "gpui-pre",
+ "russh",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "fintwind-storage"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "dirs 6.0.0",
+ "fintwind-protocol",
+ "parking_lot",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "fintwind-terminal-ui"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "anyhow",
+ "base64 0.22.1",
+ "crossbeam-channel",
+ "dirs 6.0.0",
+ "fintwind-client",
+ "fintwind-env",
+ "fintwind-protocol",
+ "fintwind-ui",
+ "gpui-pre",
+ "parking_lot",
+ "regex",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "fintwind-ui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dirs 6.0.0",
+ "ely-gpui-component",
+ "fintwind-client",
+ "fintwind-protocol",
+ "gpui-kit",
+ "gpui-pre",
+ "parking_lot",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "fintwind-usage-ui"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "ely-gpui-component",
+ "fintwind-client",
+ "fintwind-opencode-config",
+ "fintwind-protocol",
+ "fintwind-ui",
+ "gpui-pre",
+]
+
+[[package]]
+name = "fintwind-workspace"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "anyhow",
+ "base64 0.22.1",
+ "dirs 6.0.0",
+ "fintwind-env",
+ "fintwind-git",
+ "fintwind-protocol",
+ "libc",
+ "nucleo-matcher",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "trash",
  "uuid",
 ]
 

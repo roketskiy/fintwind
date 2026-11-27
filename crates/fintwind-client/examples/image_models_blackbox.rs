@@ -1,6 +1,7 @@
 //! Run once with scripts/provider-credentials-check.py and isolated binaries.
 use anyhow::{Result, ensure};
-use fintwind_client::{DaemonSupervisor, opencode_config as config, persistence::StateStore};
+use fintwind_client::{DaemonSupervisor, persistence::StateStore};
+use fintwind_opencode_config::opencode_config as config;
 use serde_json::{Value, json};
 use std::{
     path::PathBuf,

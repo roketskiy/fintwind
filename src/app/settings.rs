@@ -373,8 +373,7 @@ impl Fintwind {
             }
         }
         if page == SettingsPage::McpMarket {
-            self.mcp_list_scroll.set_offset(gpui::Point::default());
-            self.mcp_detail_scroll.set_offset(gpui::Point::default());
+            self.mcp_market_page.update(cx, |page, _| page.open());
             self.load_mcp_servers_from_config(cx);
         }
         cx.notify();
@@ -409,9 +408,9 @@ impl Fintwind {
     /// while it stays open.
     pub(super) fn open_usage_page(&mut self, cx: &mut Context<Self>) {
         self.mode = WorkspaceMode::Usage;
-        self.ensure_usage_stats(false, cx);
+        let page = self.usage_page.clone();
+        cx.defer(move |cx| page.update(cx, |page, cx| page.open(cx)));
         self.load_subscriptions(false, cx);
-        self.start_usage_auto_refresh(cx);
         cx.notify();
     }
 
@@ -569,14 +568,14 @@ impl Fintwind {
                 .bg(theme.surface)
                 .child(div().flex_1().min_h_0().child(match page {
                     SettingsPage::RemoteControl => self.render_remote_control(window, cx),
-                    SettingsPage::Skills => self.render_skills_settings(window, cx),
+                    SettingsPage::Skills => self.skills_page.clone().into_any_element(),
                     SettingsPage::McpServers | SettingsPage::McpMarket | SettingsPage::Providers
                         if self.settings_daemon().is_none() => div().p(px(24.0)).child(tr!("ssh.offline")).into_any_element(),
                     SettingsPage::McpMarket if self.settings_machine_selected() && !self.ssh.mcp_loaded =>
                         self.render_mcp_load_placeholder(&theme, cx),
                     SettingsPage::Providers if self.settings_machine_selected() && !self.ssh.providers_loaded => div().into_any_element(),
                     SettingsPage::McpServers => self.render_mcp_page(window, cx),
-                    SettingsPage::McpMarket => self.render_mcp_market_page(cx),
+                    SettingsPage::McpMarket => self.mcp_market_page.clone().into_any_element(),
                     _ => self.render_providers_page(cx),
                 }));
         }
@@ -608,9 +607,9 @@ impl Fintwind {
                 SettingsPage::Ssh => self.render_ssh_page(cx),
                 SettingsPage::RemoteControl => self.render_remote_control(window, cx),
                 SettingsPage::Providers => self.render_providers_page(cx),
-                SettingsPage::Skills => self.render_skills_settings(window, cx),
+                SettingsPage::Skills => self.skills_page.clone().into_any_element(),
                 SettingsPage::McpServers => self.render_mcp_page(window, cx),
-                SettingsPage::McpMarket => self.render_mcp_market_page(cx),
+                SettingsPage::McpMarket => self.mcp_market_page.clone().into_any_element(),
                 SettingsPage::Appearance => self.render_appearance_settings(cx),
             });
 
@@ -2106,7 +2105,7 @@ impl Fintwind {
             let (options, result) = cx
                 .background_executor()
                 .spawn(async {
-                    use fintwind_client::opencode_shell;
+                    use fintwind_opencode_config::opencode_shell;
                     (opencode_shell::detect(), opencode_shell::load())
                 })
                 .await;
@@ -2147,7 +2146,7 @@ impl Fintwind {
             let value = selected.clone();
             let result = cx
                 .background_executor()
-                .spawn(async move { fintwind_client::opencode_shell::save(value.as_deref()) })
+                .spawn(async move { fintwind_opencode_config::opencode_shell::save(value.as_deref()) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.opencode_shell_generation != generation {
@@ -2180,7 +2179,7 @@ impl Fintwind {
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async { fintwind_client::opencode_image_generate::load() })
+                .spawn(async { fintwind_opencode_config::opencode_image_generate::load() })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.image_generate_generation != generation {
@@ -2243,8 +2242,8 @@ impl Fintwind {
                 .spawn(async move {
                     let (binary, directory) =
                         workspace.ok_or_else(|| std::io::Error::other("No OpenCode workspace"))?;
-                    if fintwind_client::opencode_config::migrate_image_models_at(
-                        &fintwind_client::opencode_config::config_path(),
+                    if fintwind_opencode_config::opencode_config::migrate_image_models_at(
+                        &fintwind_opencode_config::opencode_config::config_path(),
                     )? {
                         store.reload_opencode_server(binary.clone(), directory.clone())?;
                     }
@@ -2342,7 +2341,7 @@ impl Fintwind {
     /// the previous value so the control never claims a change it lost.
     fn commit_image_generate(
         &mut self,
-        config: fintwind_client::opencode_image_generate::ImageGenerateConfig,
+        config: fintwind_opencode_config::opencode_image_generate::ImageGenerateConfig,
         cx: &mut Context<Self>,
     ) {
         self.image_generate_generation += 1;
@@ -2353,7 +2352,7 @@ impl Fintwind {
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { fintwind_client::opencode_image_generate::save(&config) })
+                .spawn(async move { fintwind_opencode_config::opencode_image_generate::save(&config) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.image_generate_busy = false;
@@ -2385,7 +2384,7 @@ impl Fintwind {
         if self.state.todo_enabled == enabled {
             return;
         }
-        if let Err(error) = fintwind_client::opencode_todo::save(enabled) {
+        if let Err(error) = fintwind_opencode_config::opencode_todo::save(enabled) {
             self.show_toast(tr!("settings.todo_list_failed", error = error.to_string()));
             cx.notify();
             return;
@@ -2533,7 +2532,7 @@ impl Fintwind {
         }
         let cleared = stored.is_empty();
         self.state.network_proxy_url = stored;
-        fintwind_protocol::http::set_active_proxy(self.state.network_proxy_url());
+        fintwind_http::set_active_proxy(self.state.network_proxy_url());
         self.sync_network_proxy_input(cx);
         if self.save() {
             self.show_success_toast(if cleared {
@@ -2554,7 +2553,7 @@ impl Fintwind {
             return;
         }
         let text = self.network_proxy_input.read(cx).content().to_owned();
-        match fintwind_protocol::http::normalize_proxy_url(&text) {
+        match fintwind_http::normalize_proxy_url(&text) {
             Some(url) => self.set_network_proxy_url(Some(url), cx),
             None if text.trim().is_empty() => self.set_network_proxy_url(None, cx),
             None => {
@@ -2724,9 +2723,10 @@ impl Fintwind {
             input.set_placeholder(tr!("settings.search"), cx)
         });
         self.refresh_ssh_search_localized_text(cx);
-        self.skills_search.update(cx, |input, cx| {
-            input.set_placeholder(tr!("skills.search"), cx)
-        });
+        self.skills_page
+            .update(cx, |page, cx| page.refresh_localized_text(cx));
+        self.mcp_market_page
+            .update(cx, |page, cx| page.refresh_localized_text(cx));
         self.refresh_command_palette_localized_text(cx);
         self.refresh_file_search_localized_text(cx);
         self.scheduled_tasks_view

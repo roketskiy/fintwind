@@ -1,6 +1,6 @@
 """Run the watchdog daemon E2E with an isolated environment and owned job.
 
-Build first with: mbx test --locked -p fintwind-core --test opencode_recovery --no-run
+Build first with: mbx test --locked -p fintwind-daemon --test opencode_recovery --no-run
 """
 import importlib.util
 import os

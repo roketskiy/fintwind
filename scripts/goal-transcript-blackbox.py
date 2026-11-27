@@ -81,18 +81,20 @@ use uuid::Uuid;
 mod fintwind_client { pub mod goal { pub use fintwind_protocol::goal::GoalStatus; } }
 
 '''
-    native_source = (ROOT / "crates/fintwind-core/src/driver/native.rs").read_text(encoding="utf-8")
+    native_source = (ROOT / "crates/fintwind-driver/src/driver/native.rs").read_text(encoding="utf-8")
+    usage_scan_source = (ROOT / "crates/fintwind-quota/src/usage_scan.rs").read_text(encoding="utf-8")
     native_functions = [extract_item(native_source, signature) for signature in (
-        "fn translate_native_rows(", "fn native_goal_objective(", "pub(crate) fn is_native_goal_kickoff(",
-        "fn ms_to_seconds(", "fn native_image_attachment(",
+        "fn translate_native_rows(", "fn native_goal_objective(", "pub fn is_native_goal_kickoff(",
+        "fn native_image_attachment(",
         "fn turn_stats_step(", "fn assistant_parts_visible(", "fn append_assistant_parts(",
         "fn flush_assistant_text(", "fn flush_assistant_activities(", "fn parts_text(",
         "fn reasoning_item(", "fn tool_item(",
     )]
+    native_functions.insert(3, extract_item(usage_scan_source, "pub fn ms_to_seconds("))
     native_functions[0] = native_functions[0].replace("fn translate_native_rows(", "pub fn translate_native_rows(", 1)
     rust += "\nmacro_rules! tr { ($key:expr) => { fintwind_protocol::i18n::translate($key) }; }\nmod model { pub use fintwind_protocol::model::*; }\n"
-    for module, path in (("blob_store", "crates/fintwind-core/src/blob_store.rs"),
-                         ("activity", "crates/fintwind-core/src/driver/activity.rs")):
+    for module, path in (("blob_store", "crates/fintwind-storage/src/blob_store.rs"),
+                         ("activity", "crates/fintwind-driver/src/driver/activity.rs")):
         rust += '#[path = ' + json.dumps((ROOT / path).as_posix()) + '] mod ' + module + ';\n'
     rust += "\nmod native {\nuse std::collections::HashSet;\nuse base64::Engine as _;\nuse serde_json::Value;\n"
     rust += "use crate::blob_store::BlobStore;\nuse crate::model::{ActivityItem, AgentTurn, Message, MessageAttachment, MessageRole, ReasoningBlock, TranscriptBlock, TurnStats, TurnStatus};\n"

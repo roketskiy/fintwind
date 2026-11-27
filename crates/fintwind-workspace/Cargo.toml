@@ -1,0 +1,24 @@
+[package]
+name = "fintwind-workspace"
+version = "0.1.0"
+edition = "2024"
+description = "Workspace filesystem operations, skills, composer completion, projectless paths, and daemon PTYs"
+license = "GPL-3.0-only"
+
+[dependencies]
+anyhow = "1.0"
+dirs = "6.0"
+nucleo-matcher = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+trash = "5.2.6"
+uuid = { version = "1.18", features = ["v4", "serde"] }
+fintwind-env = { path = "../fintwind-env" }
+fintwind-git = { path = "../fintwind-git" }
+fintwind-protocol = { path = "../fintwind-protocol" }
+
+[target.'cfg(unix)'.dependencies]
+alacritty_terminal = { version = "0.26", default-features = false }
+base64 = "0.22"
+libc = "0.2"
+parking_lot = "0.12"

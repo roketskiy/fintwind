@@ -86,17 +86,7 @@ fn sidebar_session_timestamp(session: &AgentSession) -> u64 {
     session.last_reply_at.unwrap_or(session.created_at)
 }
 
-/// Compact "how long ago" for the sidebar: "just now", then one coarse unit —
-/// "5m", "3h", "420d". Days are the largest unit so a glance still reads as a
-/// count rather than a date.
-pub(super) fn format_time_ago(seconds: u64) -> String {
-    match seconds {
-        0..=59 => tr!("sidebar.just_now"),
-        60..=3_599 => tr!("sidebar.minutes_ago", count = seconds / 60),
-        3_600..=86_399 => tr!("sidebar.hours_ago", count = seconds / 3_600),
-        _ => tr!("sidebar.days_ago", count = seconds / 86_400),
-    }
-}
+pub(super) use crate::ui::format_time_ago;
 
 /// The visible count that puts session `index` on screen, rounded up to a
 /// show-more step and clamped to `total`. Reveal and session-switch round to

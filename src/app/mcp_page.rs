@@ -21,8 +21,8 @@ use crate::ui::ActivationExt;
 
 use gpui::KeyDownEvent;
 
-use fintwind_client::custom_providers::unique_provider_slug;
-use fintwind_client::opencode_config::{McpOAuthMode, McpServer, McpServerKind};
+use fintwind_opencode_config::custom_providers::unique_provider_slug;
+use fintwind_opencode_config::opencode_config::{McpOAuthMode, McpServer, McpServerKind};
 
 use super::providers_page::{
     enabled_badge, form_hint, info_note, labeled_field, outline_button, provider_tile,
@@ -310,7 +310,7 @@ impl Fintwind {
                     if daemon.is_remote() {
                         Self::settings_json(&daemon, fintwind_client::Command::LoadOpenCodeMcp)
                     } else {
-                        fintwind_client::opencode_config::load_mcp_servers()
+                        fintwind_opencode_config::opencode_config::load_mcp_servers()
                     }
                 })
                 .await;
@@ -384,7 +384,7 @@ impl Fintwind {
                     _ => Err(std::io::Error::other("invalid MCP save response")),
                 })
         } else {
-            fintwind_client::opencode_config::save_mcp_servers(&self.mcp_servers)
+            fintwind_opencode_config::opencode_config::save_mcp_servers(&self.mcp_servers)
         };
         let saved =
             match result {

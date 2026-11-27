@@ -1,0 +1,10 @@
+[package]
+name = "fintwind-http"
+version = "0.1.0"
+edition = "2024"
+description = "Blocking HTTPS and proxy helper backed by the system curl binary"
+license = "GPL-3.0-only"
+
+[dependencies]
+anyhow = "1.0"
+chrono = "0.4"

@@ -1,0 +1,19 @@
+[package]
+name = "fintwind-scheduled"
+version = "0.1.0"
+edition = "2024"
+description = "Scheduled task persistence, runner loop, and OpenCode client-hosted MCP"
+license = "GPL-3.0-only"
+
+[dependencies]
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+parking_lot = "0.12"
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+url = "2"
+uuid = { version = "1.18", features = ["v4", "serde"] }
+fintwind-protocol = { path = "../fintwind-protocol" }
+fintwind-storage = { path = "../fintwind-storage" }

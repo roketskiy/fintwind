@@ -30,33 +30,27 @@ macro_rules! tr_cow {
 
 mod activity;
 mod app;
-mod assets;
 pub mod daemon;
 mod driver;
-mod ely;
+#[cfg(test)]
+mod e2e;
 #[cfg(test)]
 mod file_link_e2e;
-mod file_target;
-mod input;
-#[cfg(test)]
-mod input_hit_test_e2e;
-mod md;
-mod mentions;
 mod perf_monitor;
 mod perf_sampler;
-mod platform;
-mod prompt_privacy;
 mod query;
-mod review_diff;
-mod terminal;
-mod theme;
-mod ui;
 mod update;
 
 pub use fintwind_client::{
-    checkpoint, command_env, composer_complete, git_branch, git_commit, git_history, i18n,
-    identity, model, model_catalog, persistence, projectless, skills, usage, worktree,
+    checkpoint, command_env, composer_complete, git_branch, git_commit, i18n, identity, model,
+    model_catalog, persistence, projectless, skills, usage, worktree,
 };
+pub use fintwind_diff as review_diff;
+pub use fintwind_git::git_history;
+pub use fintwind_input::{self as input, text_field};
+pub use fintwind_markdown::{file_target, md, mentions, prompt_privacy};
+pub use fintwind_terminal_ui as terminal;
+pub use fintwind_ui::{assets, ely, platform, theme, ui};
 
 use gpui::{
     App, Application, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions,

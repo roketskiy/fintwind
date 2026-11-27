@@ -1,0 +1,15 @@
+[package]
+name = "fintwind-preview-ui"
+version = "0.1.0"
+edition = "2024"
+description = "Window-modal preview UI for images and rendered diagrams"
+license = "GPL-3.0-only"
+
+[dependencies]
+dirs = "6.0"
+ely-gpui-component = { git = "https://git.zacharyzhang.com/ZacharyZhang-NY/Ely-GPUI-Components", rev = "bd014707fd47cd9d0651a9af8c1db6033718a6ea", default-features = false }
+fintwind-markdown = { path = "../fintwind-markdown" }
+fintwind-protocol = { path = "../fintwind-protocol" }
+fintwind-ui = { path = "../fintwind-ui" }
+gpui = { package = "gpui-pre", version = "=0.3.8" }
+image = { version = "0.25", default-features = false, features = ["png"] }

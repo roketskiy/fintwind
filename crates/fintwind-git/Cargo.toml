@@ -1,0 +1,18 @@
+[package]
+name = "fintwind-git"
+version = "0.1.0"
+edition = "2024"
+description = "Daemon-owned Git processes, worktrees, checkpoints, PR lookups, and commit graph layout"
+license = "GPL-3.0-only"
+
+[dependencies]
+anyhow = "1.0"
+dirs = "6.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.18", features = ["v4", "serde"] }
+fintwind-env = { path = "../fintwind-env" }
+fintwind-protocol = { path = "../fintwind-protocol" }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

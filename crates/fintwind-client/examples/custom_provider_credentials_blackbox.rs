@@ -2,7 +2,8 @@
 use std::{io, path::PathBuf};
 
 use anyhow::{Result, ensure};
-use fintwind_client::{DaemonSupervisor, opencode_config as config, persistence::StateStore};
+use fintwind_client::{DaemonSupervisor, persistence::StateStore};
+use fintwind_opencode_config::opencode_config as config;
 use serde_json::{Value, json};
 
 fn check(args: &[String]) -> Result<Value> {
@@ -86,13 +87,16 @@ fn check(args: &[String]) -> Result<Value> {
         );
         // Await integration activation before probing, just like the settings page.
         store.fetch_integrations(binary.clone(), workspace.clone())?;
-        let probe = provider.for_probe(&store, Some((binary.clone(), workspace.clone())))?;
+        let probe = provider.for_probe(
+            |binary, directory, id| store.resolve_custom_provider_key(binary, directory, id),
+            Some((binary.clone(), workspace.clone())),
+        )?;
         ensure!(
             probe.api_key == "fixture-old",
             "Selected credential did not resolve"
         );
         ensure!(
-            !fintwind_client::custom_providers::fetch_api_model_list(&probe)
+            !fintwind_opencode_config::custom_providers::fetch_api_model_list(&probe)
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?
                 .is_empty(),
             "Authenticated model discovery failed"

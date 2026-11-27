@@ -1,0 +1,1819 @@
+//! The Skills settings page: one library across every ecosystem's skill
+//! trees, presented as a mail-style master–detail split — the list of skills
+//! on the left, the selected skill's full detail on the right — with enable
+//! and delete management.
+//!
+//! Discovery is filesystem work and lives on the background executor
+//! ([`Fintwind::ensure_skills_catalog`]); frames read only the cached catalog.
+//! Mutations are one-shot user actions — each a single rename, write, or
+//! trash call — so they run synchronously in their click handlers and then
+//! invalidate the catalog.
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+
+use fintwind_client::skills::{
+    DISABLED_SKILL_FILE, SKILL_FILE, SkillEntry, SkillSource, SkillsCatalog,
+};
+use fintwind_input::input::{ComposerEvent, ComposerInput};
+use fintwind_input::text_field::TextField;
+use fintwind_markdown::md::render::{
+    self as md_render, Ctx as MarkdownCtx, MarkdownView, Metrics as MarkdownMetrics,
+    Palette as MarkdownPalette, TranscriptSelection, mono_family,
+};
+use fintwind_protocol::model::{compact_path, unix_time};
+use fintwind_ui::theme::{Theme, ui_px};
+use fintwind_ui::ui::loading::{LoadingDelay, LoadingPhase};
+use fintwind_ui::ui::menu::{
+    ContextMenuHandle, MenuAlign, MenuItem, SelectNextEntry, SelectPreviousEntry, dropdown_menu,
+};
+use fintwind_ui::ui::motion;
+use fintwind_ui::ui::scrollbar::{self, ScrollbarState};
+use fintwind_ui::ui::{ActivationExt, MenuChip, icon, next_picker_highlight, toggle_switch};
+use gpui::{
+    AnyElement, App, ClipboardItem, Context, Div, Entity, FontWeight, InteractiveElement,
+    IntoElement, KeyBinding, ListAlignment, ListState, ParentElement, Render, ScrollHandle,
+    SharedString, StatefulInteractiveElement, Styled, Window, actions, canvas, div, list,
+    prelude::*, px,
+};
+use uuid::Uuid;
+
+type SkillsRemoteLoading = RefCell<Option<LoadingDelay<(Uuid, PathBuf, Option<bool>)>>>;
+
+/// Host bridge connecting [`SkillsPage`] back to workspace targets and host actions.
+pub trait SkillsHost: 'static {
+    fn is_active(&self, cx: &App) -> bool;
+    fn ssh_host(&self, cx: &App) -> Option<Uuid>;
+    fn ssh_host_ready(&self, cx: &App) -> bool;
+    fn daemon_client(&self, host: Option<Uuid>, cx: &App) -> Option<fintwind_client::DaemonClient>;
+    fn scan_projects(&self, cx: &App) -> Vec<(String, PathBuf)>;
+    fn open_host_path(&self, path: &Path, cx: &mut App);
+    fn reveal_host_path(&self, path: &Path, cx: &mut App);
+    fn show_toast(&self, message: String, success: bool, cx: &mut App);
+    fn update_card_visible(&self, cx: &App) -> bool;
+}
+
+/// Self-contained Skills library settings page entity.
+pub struct SkillsPage {
+    host: Rc<dyn SkillsHost>,
+    catalog: Option<Rc<SkillsCatalog>>,
+    scan_generation: u64,
+    scan_pending: bool,
+    remote_pending: HashMap<(Uuid, PathBuf), Option<bool>>,
+    remote_errors: HashMap<(Uuid, PathBuf), (Option<bool>, String)>,
+    remote_loading: SkillsRemoteLoading,
+    scan_error: Option<String>,
+    loading: RefCell<Option<LoadingDelay<Option<Uuid>>>>,
+    scanned_at: Option<Instant>,
+    search: Entity<ComposerInput>,
+    list_state: ListState,
+    scrollbar: Rc<ScrollbarState>,
+    rows: RefCell<Vec<SkillsRow>>,
+    selected: Option<PathBuf>,
+    detail_markdown: RefCell<Option<(PathBuf, MarkdownView)>>,
+    selection: TranscriptSelection,
+    detail_scroll: ScrollHandle,
+    detail_scrollbar: Rc<ScrollbarState>,
+    source_filter: Option<SkillSource>,
+    delete_arming: Option<PathBuf>,
+    source_filter_menu: ContextMenuHandle,
+    copied_feedback: RefCell<Option<(String, u64)>>,
+    copied_generation: u64,
+}
+
+impl SkillsPage {
+    pub fn new(host: Rc<dyn SkillsHost>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let search = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder(tr!("skills.search"))
+        });
+        cx.subscribe(&search, |_: &mut Self, _, event: &ComposerEvent, cx| {
+            if matches!(event, ComposerEvent::Edited) {
+                cx.notify();
+            }
+        })
+        .detach();
+        Self {
+            host,
+            catalog: None,
+            scan_generation: 0,
+            scan_pending: false,
+            remote_pending: HashMap::new(),
+            remote_errors: HashMap::new(),
+            remote_loading: RefCell::new(None),
+            scan_error: None,
+            loading: RefCell::new(None),
+            scanned_at: None,
+            search,
+            list_state: ListState::new(0, ListAlignment::Top, px(512.0)),
+            scrollbar: ScrollbarState::new(),
+            rows: RefCell::new(Vec::new()),
+            selected: None,
+            detail_markdown: RefCell::new(None),
+            selection: TranscriptSelection::default(),
+            detail_scroll: ScrollHandle::new(),
+            detail_scrollbar: ScrollbarState::new(),
+            source_filter: None,
+            delete_arming: None,
+            source_filter_menu: ContextMenuHandle::new(cx),
+            copied_feedback: RefCell::new(None),
+            copied_generation: 0,
+        }
+    }
+
+    pub fn selection(&self) -> &TranscriptSelection {
+        &self.selection
+    }
+
+    pub fn clear_selection(&self) {
+        self.selection.selection.borrow_mut().clear();
+        self.selection.registry.borrow_mut().clear();
+    }
+
+    pub fn refresh_localized_text(&self, cx: &mut Context<Self>) {
+        self.search.update(cx, |input, cx| {
+            input.set_placeholder(tr!("skills.search"), cx);
+        });
+    }
+
+    fn show_control_copied(&mut self, control_id: String, cx: &mut Context<Self>) {
+        self.copied_generation = self.copied_generation.wrapping_add(1);
+        let generation = self.copied_generation;
+        *self.copied_feedback.borrow_mut() = Some((control_id.clone(), generation));
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_secs(2)).await;
+            let _ = this.update(cx, |this, cx| {
+                let clear = this
+                    .copied_feedback
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|(id, gen_)| id == &control_id && *gen_ == generation);
+                if clear {
+                    *this.copied_feedback.borrow_mut() = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn control_was_copied(&self, control_id: &str) -> bool {
+        self.copied_feedback
+            .borrow()
+            .as_ref()
+            .is_some_and(|(id, _)| id == control_id)
+    }
+
+    fn wait_phase<K: PartialEq>(
+        state: &RefCell<Option<LoadingDelay<K>>>,
+        key: K,
+        active: bool,
+        cx: &mut Context<Self>,
+    ) -> LoadingPhase {
+        let (phase, wake) = LoadingDelay::observe(&mut state.borrow_mut(), key, active);
+        if let Some(wake) = wake {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(wake.delay()).await;
+                wake.fired();
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+        }
+        phase
+    }
+}
+
+impl Render for SkillsPage {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.render_skills_settings(window, cx)
+    }
+}
+
+actions!(fintwind_skills, [ClearSkillsSearch]);
+
+/// Key context the left pane declares around its search field.
+const SKILLS_PANE_CONTEXT: &str = "SkillsPane";
+
+/// The search field while focused inside the pane. The field holds real focus
+/// while `up`/`down` walk the list selection, the same claim-from-under-it
+/// arrangement the settings sidebar uses.
+const SKILLS_SEARCH_CONTEXT: &str = "SkillsPane > ComposerInput";
+
+const SKILLS_LIST_WIDTH: f32 = 264.0;
+
+fn skill_source_icon(source: SkillSource) -> &'static str {
+    match source {
+        SkillSource::Shared => "icons/package.svg",
+        SkillSource::OpenCode => "icons/provider-opencode.svg",
+    }
+}
+
+fn skill_icon(skill: &SkillEntry) -> &'static str {
+    if skill.installs.len() > 1 {
+        "icons/package.svg"
+    } else {
+        skill_source_icon(skill.primary().source)
+    }
+}
+
+/// A landed catalog older than this is rescanned when the page opens.
+const SKILLS_RESCAN_AFTER: Duration = Duration::from_secs(60);
+
+pub fn init(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("down", SelectNextEntry, Some(SKILLS_SEARCH_CONTEXT)),
+        KeyBinding::new("up", SelectPreviousEntry, Some(SKILLS_SEARCH_CONTEXT)),
+        // Two-stage escape: clear the query first, then fall through to
+        // `CancelTurn`, which closes settings.
+        KeyBinding::new("escape", ClearSkillsSearch, Some(SKILLS_SEARCH_CONTEXT)),
+    ]);
+}
+
+/// One row of the virtualized skills list. Equality drives the prefix splice
+/// in [`Fintwind::sync_skills_rows`]: a changed row — catalog identity, enabled
+/// state, or selection — re-measures from that point on.
+#[derive(Clone, Debug, PartialEq)]
+enum SkillsRow {
+    Section {
+        label: SharedString,
+        count: usize,
+    },
+    Skill {
+        index: usize,
+        row_key: u64,
+        selected: bool,
+    },
+}
+
+impl SkillsPage {
+    /// Start a background library scan unless a current-enough catalog (or an
+    /// in-flight scan) already covers it. Results from superseded scans are
+    /// discarded by generation.
+    pub fn ensure_catalog(&mut self, force: bool, cx: &mut Context<Self>) {
+        if self.scan_pending {
+            return;
+        }
+        let fresh = self.catalog.is_some()
+            && self
+                .scanned_at
+                .is_some_and(|scanned| scanned.elapsed() < SKILLS_RESCAN_AFTER);
+        if !force && fresh {
+            return;
+        }
+        let host = self.host.ssh_host(cx);
+        let Some(daemon) = self.host.daemon_client(host, cx) else {
+            return;
+        };
+        self.scan_pending = true;
+        self.scan_error = None;
+        self.scan_generation += 1;
+        let generation = self.scan_generation;
+        let projects = self.host.scan_projects(cx);
+        cx.spawn(async move |this, cx| {
+            let catalog = cx
+                .background_executor()
+                .spawn(async move {
+                    if host.is_some() {
+                        return fintwind_client::ssh::load_skills(&daemon);
+                    }
+                    match daemon.request(
+                        Uuid::nil(),
+                        Uuid::nil(),
+                        fintwind_client::Command::LoadSkills { projects },
+                    )? {
+                        fintwind_client::ResponsePayload::SkillsCatalog { catalog } => Ok(catalog),
+                        _ => anyhow::bail!("the daemon returned an invalid skills response"),
+                    }
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.scan_generation != generation {
+                    // A mutation invalidated this scan; the flag and the
+                    // result now belong to the newer one.
+                    return;
+                }
+                this.scan_pending = false;
+                match catalog {
+                    Ok(catalog) => {
+                        this.catalog = Some(Rc::new(catalog));
+                        this.scanned_at = Some(Instant::now());
+                    }
+                    Err(error) => this.scan_error = Some(error.to_string()),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Drop any in-flight scan's claim and rescan now. Called after every
+    /// mutation, so the library on screen always re-reads the disk it just
+    /// changed.
+    fn invalidate_skills_catalog(&mut self, cx: &mut Context<Self>) {
+        self.scan_generation += 1;
+        self.scan_pending = false;
+        self.ensure_catalog(true, cx);
+    }
+
+    pub fn reset_machine(&mut self, cx: &mut Context<Self>) {
+        self.catalog = None;
+        self.scanned_at = None;
+        self.selected = None;
+        self.delete_arming = None;
+        self.scan_generation += 1;
+        self.scan_pending = false;
+        self.scan_error = None;
+        if self.host.is_active(cx) {
+            self.ensure_catalog(true, cx);
+        }
+    }
+
+    fn change_remote_skill(
+        &mut self,
+        id: Uuid,
+        path: &Path,
+        enabled: Option<bool>,
+        cx: &mut Context<Self>,
+    ) {
+        let key = (id, path.to_path_buf());
+        if self.remote_pending.contains_key(&key) {
+            return;
+        }
+        let Some(client) = self.host.daemon_client(Some(id), cx) else {
+            return;
+        };
+        let Some(skill) = self.catalog.as_ref().and_then(|catalog| {
+            catalog
+                .skills
+                .iter()
+                .find(|entry| entry.primary().dir == path)
+        }) else {
+            return;
+        };
+        let dirs = skill
+            .installs
+            .iter()
+            .map(|install| install.dir.clone())
+            .collect();
+        self.remote_pending.insert(key.clone(), enabled);
+        self.remote_errors.remove(&key);
+        self.delete_arming = None;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(
+                    async move { fintwind_client::ssh::change_skill(Some(&client), dirs, enabled) },
+                )
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                app.remote_pending.remove(&key);
+                if let Err(error) = result {
+                    app.remote_errors.insert(key, (enabled, error.to_string()));
+                }
+                if app.host.ssh_host(cx) == Some(id) {
+                    app.invalidate_skills_catalog(cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Flip every copy of the skill keyed by `primary_dir`. A skill installed
+    /// into several roots is one skill; the switch converges all of them.
+    fn toggle_skill_enabled(
+        &mut self,
+        primary_dir: PathBuf,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(id) = self.host.ssh_host(cx) {
+            self.change_remote_skill(id, &primary_dir, Some(enabled), cx);
+            return;
+        }
+        let skill = self.catalog.as_ref().and_then(|catalog| {
+            catalog
+                .skills
+                .iter()
+                .find(|skill| skill.primary().dir == primary_dir)
+        });
+        let dirs = skill
+            .map(|skill| {
+                skill
+                    .installs
+                    .iter()
+                    .map(|install| install.dir.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| vec![primary_dir.clone()]);
+        // A delete mid-flight can void the catalog entry; the folder name
+        // still names the skill the switch acted on.
+        let name = skill
+            .map(|skill| skill.name.clone())
+            .or_else(|| {
+                primary_dir
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .unwrap_or_default();
+        // The switch answers immediately; the rescan confirms from disk.
+        if let Some(catalog) = self.catalog.as_ref() {
+            let mut updated = catalog.as_ref().clone();
+            for skill in &mut updated.skills {
+                if skill.primary().dir == primary_dir {
+                    skill.enabled = enabled;
+                    skill.row_key = skill.row_key.wrapping_add(1);
+                    for install in &mut skill.installs {
+                        install.enabled = enabled;
+                        install.skill_file = install.dir.join(if enabled {
+                            SKILL_FILE
+                        } else {
+                            DISABLED_SKILL_FILE
+                        });
+                    }
+                }
+            }
+            self.catalog = Some(Rc::new(updated));
+        }
+        self.scan_generation += 1;
+        self.scan_pending = false;
+        let Some(daemon) = self.host.daemon_client(None, cx) else { return; };
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    daemon.request(
+                        Uuid::nil(),
+                        Uuid::nil(),
+                        fintwind_client::Command::SetSkillsEnabled { dirs, enabled },
+                    )
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(_) if !name.is_empty() => {
+                        this.host.show_toast(
+                            if enabled {
+                                tr!("skills.enabled_toast", name = name)
+                            } else {
+                                tr!("skills.disabled_toast", name = name)
+                            },
+                            true,
+                            cx,
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        this.host.show_toast(tr!("skills.toggle_failed", error = error), false, cx);
+                    }
+                }
+                this.invalidate_skills_catalog(cx);
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Trash every copy of the skill keyed by `primary_dir`.
+    fn delete_skill(&mut self, primary_dir: PathBuf, cx: &mut Context<Self>) {
+        if let Some(id) = self.host.ssh_host(cx) {
+            self.change_remote_skill(id, &primary_dir, None, cx);
+            return;
+        }
+        let entry = self.catalog.as_ref().and_then(|catalog| {
+            catalog
+                .skills
+                .iter()
+                .find(|skill| skill.primary().dir == primary_dir)
+                .cloned()
+        });
+        let name = entry
+            .as_ref()
+            .map(|skill| skill.name.clone())
+            .unwrap_or_else(|| {
+                primary_dir
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            });
+        let dirs = entry
+            .map(|skill| {
+                skill
+                    .installs
+                    .iter()
+                    .map(|install| install.dir.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| vec![primary_dir.clone()]);
+        if self.selected.as_ref() == Some(&primary_dir) {
+            self.selected = None;
+        }
+        if let Some(catalog) = self.catalog.as_ref() {
+            let mut updated = catalog.as_ref().clone();
+            updated
+                .skills
+                .retain(|skill| skill.primary().dir != primary_dir);
+            self.catalog = Some(Rc::new(updated));
+        }
+        self.delete_arming = None;
+        self.scan_generation += 1;
+        self.scan_pending = false;
+        let Some(daemon) = self.host.daemon_client(None, cx) else { return; };
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    daemon.request(
+                        Uuid::nil(),
+                        Uuid::nil(),
+                        fintwind_client::Command::TrashSkills { dirs },
+                    )
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(_) => this.host.show_toast(tr!("skills.deleted_toast", name = name), true, cx),
+                    Err(error) => {
+                        this.host.show_toast(tr!("skills.delete_failed", error = error), false, cx);
+                    }
+                }
+                this.invalidate_skills_catalog(cx);
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn select_skill(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
+        self.selected = Some(dir);
+        self.delete_arming = None;
+        // Each skill's detail starts at its own top; a scroll position
+        // carried over would land mid-document.
+        self.detail_scroll.set_offset(gpui::Point::default());
+        cx.notify();
+    }
+
+    /// Walk the selection through the visible rows, the way a mailbox walks
+    /// its message list. The search field keeps focus so typing keeps
+    /// narrowing.
+    fn step_skill_selection(&mut self, key: &str, cx: &mut Context<Self>) {
+        let rows = self.rows.borrow();
+        let entries: Vec<(usize, usize)> = rows
+            .iter()
+            .enumerate()
+            .filter_map(|(row_index, row)| match row {
+                SkillsRow::Skill { index, .. } => Some((row_index, *index)),
+                _ => None,
+            })
+            .collect();
+        drop(rows);
+        if entries.is_empty() {
+            return;
+        }
+        let Some(catalog) = self.catalog.clone() else {
+            return;
+        };
+        let current = self.selected.as_ref().and_then(|selected| {
+            entries.iter().position(|(_, index)| {
+                catalog
+                    .skills
+                    .get(*index)
+                    .is_some_and(|skill| &skill.primary().dir == selected)
+            })
+        });
+        let Some(next) = next_picker_highlight(current, entries.len(), key) else {
+            return;
+        };
+        let (row_index, catalog_index) = entries[next];
+        let Some(skill) = catalog.skills.get(catalog_index) else {
+            return;
+        };
+        self.selected = Some(skill.primary().dir.clone());
+        self.delete_arming = None;
+        self.detail_scroll.set_offset(gpui::Point::default());
+        self.list_state.scroll_to_reveal_item(row_index);
+        cx.notify();
+    }
+    pub fn render_skills_settings(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = Theme::current(cx);
+        let catalog = self.catalog.clone();
+        let query = self.search.read(cx).content().trim().to_lowercase();
+
+        let phase = if self.scan_error.is_none() && self.host.ssh_host_ready(cx) {
+            let (phase, wake) = LoadingDelay::observe(
+                &mut self.loading.borrow_mut(),
+                self.host.ssh_host(cx),
+                catalog.is_none() && self.scan_pending,
+            );
+            if let Some(wake) = wake {
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(wake.delay()).await;
+                    wake.fired();
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                })
+                .detach();
+            }
+            phase
+        } else {
+            *self.loading.borrow_mut() = None;
+            LoadingPhase::Done
+        };
+        if phase != LoadingPhase::Done {
+            return div()
+                .size_full()
+                .pt(px(12.0))
+                .when(phase == LoadingPhase::Visible, |body| {
+                    body.px(px(12.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(12.0))
+                        .children((0..5).map(|index| {
+                            div()
+                                .h(px(38.0))
+                                .w(px(if index % 2 == 0 { 210.0 } else { 170.0 }))
+                                .rounded(px(5.0))
+                                .bg(theme.overlay_strong)
+                        }))
+                })
+                .into_any_element();
+        }
+        let Some(catalog) = catalog else {
+            return div()
+                .size_full()
+                .pt(px(12.0))
+                .child(if let Some(error) = &self.scan_error {
+                    skills_scan_error(error, &theme, cx)
+                } else if !self.host.ssh_host_ready(cx) {
+                    skills_status_row(&theme, tr!("ssh.offline"))
+                } else {
+                    div()
+                })
+                .into_any_element();
+        };
+        if catalog.skills.is_empty() {
+            return div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .children(
+                    self.scan_error
+                        .as_ref()
+                        .map(|error| skills_scan_error(error, &theme, cx)),
+                )
+                .child(skills_empty_state(&theme))
+                .into_any_element();
+        }
+
+        let indices = self.visible_skill_indices(&catalog, &query);
+        // The detail pane never sits empty while skills exist: the stored
+        // selection wins when visible, the first visible row otherwise.
+        let effective = self
+            .selected
+            .as_ref()
+            .filter(|selected| {
+                indices.iter().any(|index| {
+                    catalog
+                        .skills
+                        .get(*index)
+                        .is_some_and(|skill| &&skill.primary().dir == selected)
+                })
+            })
+            .cloned()
+            .or_else(|| {
+                indices
+                    .first()
+                    .and_then(|index| catalog.skills.get(*index))
+                    .map(|skill| skill.primary().dir.clone())
+            });
+        let rows = self.skills_rows_from(&catalog, &indices, effective.as_deref());
+        self.sync_skills_rows(&rows);
+
+        let detail: AnyElement = if let Some(skill) = effective.as_ref().and_then(|dir| {
+            catalog
+                .skills
+                .iter()
+                .find(|skill| &skill.primary().dir == dir)
+        }) {
+            self.render_skill_detail_pane(skill, &theme, window, cx)
+                .into_any_element()
+        } else {
+            skills_detail_placeholder(&theme).into_any_element()
+        };
+
+        div()
+            .size_full()
+            .min_h_0()
+            .flex()
+            .child(self.render_skills_list_column(&catalog, &query, &rows, &theme, cx))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .when(!self.host.ssh_host_ready(cx), |el| {
+                        el.child(skills_status_row(&theme, tr!("ssh.settings_cached")))
+                    })
+                    .children(
+                        self.scan_error
+                            .as_ref()
+                            .map(|error| skills_scan_error(error, &theme, cx)),
+                    )
+                    .child(detail),
+            )
+            .into_any_element()
+    }
+
+    fn render_skills_list_column(
+        &self,
+        catalog: &SkillsCatalog,
+        query: &str,
+        rows: &[SkillsRow],
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let shown = rows
+            .iter()
+            .filter(|row| matches!(row, SkillsRow::Skill { .. }))
+            .count();
+        let total = catalog.skills.len();
+        let footer = if !query.is_empty() || self.source_filter.is_some() {
+            tr!("skills.filter_caption", shown = shown, total = total)
+        } else {
+            let disabled = catalog.disabled_count();
+            let mut caption = if total == 1 {
+                tr!("skills.count_one")
+            } else {
+                tr!("skills.count_many", count = total)
+            };
+            if disabled > 0 {
+                caption.push_str(" · ");
+                caption.push_str(&tr!("skills.count_disabled", count = disabled));
+            }
+            caption
+        };
+
+        let body: AnyElement = if rows.is_empty() {
+            skills_status_row(
+                theme,
+                if total == 0 {
+                    tr!("skills.empty_title")
+                } else {
+                    tr!("skills.no_match")
+                },
+            )
+            .into_any_element()
+        } else {
+            let entity = cx.entity().downgrade();
+            div()
+                .flex_1()
+                .min_h_0()
+                .relative()
+                .child(
+                    div().px(px(8.0)).size_full().child(
+                        list(self.list_state.clone(), move |index, _window, cx| {
+                            entity
+                                .upgrade()
+                                .map(|entity| {
+                                    entity.update(cx, |this, cx| this.skills_row(index, cx))
+                                })
+                                .unwrap_or_else(|| div().into_any_element())
+                        })
+                        .size_full(),
+                    ),
+                )
+                .child(scrollbar::vertical(
+                    &self.list_state,
+                    &self.scrollbar,
+                ))
+                .into_any_element()
+        };
+
+        div()
+            .key_context(SKILLS_PANE_CONTEXT)
+            .on_action(cx.listener(|this, _: &SelectNextEntry, _, cx| {
+                this.step_skill_selection("down", cx);
+            }))
+            .on_action(cx.listener(|this, _: &SelectPreviousEntry, _, cx| {
+                this.step_skill_selection("up", cx);
+            }))
+            .on_action(cx.listener(|this, _: &ClearSkillsSearch, _, cx| {
+                if this.search.read(cx).content().is_empty() {
+                    cx.propagate();
+                    return;
+                }
+                this.search.update(cx, |input, cx| input.clear(cx));
+            }))
+            .w(px(SKILLS_LIST_WIDTH))
+            .flex_none()
+            .flex()
+            .flex_col()
+            .border_r_1()
+            .border_color(theme.border)
+            .child(
+                div()
+                    .flex_none()
+                    .px(px(10.0))
+                    // Level with the detail pane's header: its icon tile spans
+                    // 18–56, so the 28px search row centers on the same axis.
+                    .pt(px(22.0))
+                    .pb(px(8.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(7.0))
+                    .child(
+                        TextField::new("skills-search-field", self.search.clone())
+                            .icon("icons/search.svg", 13.0)
+                            .w_full(),
+                    )
+                    .child(self.render_skills_source_filter(catalog, theme, cx)),
+            )
+            .child(body)
+            .child(
+                div()
+                    .flex_none()
+                    .h(px(26.0))
+                    .px(px(12.0))
+                    .border_t_1()
+                    .border_color(theme.border)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(ui_px(9.5))
+                    .text_color(theme.text_muted)
+                    .child(SharedString::from(footer)),
+            )
+    }
+
+    /// The provider filter over the list. `None` — every source — is the
+    /// default; the menu shows per-source counts so an empty pick is never a
+    /// surprise.
+    fn render_skills_source_filter(
+        &self,
+        catalog: &SkillsCatalog,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let current = self.source_filter;
+        let chip_label = match current {
+            None => tr!("skills.filter_all"),
+            Some(source) => source.label(),
+        };
+        let mut counts: HashMap<SkillSource, usize> = HashMap::new();
+        for skill in &catalog.skills {
+            let mut seen = Vec::new();
+            for install in &skill.installs {
+                if !seen.contains(&install.source) {
+                    seen.push(install.source);
+                    *counts.entry(install.source).or_default() += 1;
+                }
+            }
+        }
+        let weak = cx.entity().downgrade();
+        let handle = self.source_filter_menu.clone();
+        let sources = [SkillSource::Shared, SkillSource::OpenCode];
+        dropdown_menu(
+            MenuChip::new("skills-source-filter")
+                .icon(
+                    match current {
+                        None => "icons/package.svg",
+                        Some(source) => skill_source_icon(source),
+                    },
+                    theme.text_tertiary,
+                )
+                .label(chip_label)
+                .outlined()
+                .background(theme.raised)
+                .height(px(28.0))
+                .selected(handle.is_open())
+                .w_full()
+                .justify_between(),
+            "skills-source-filter-menu",
+            &handle,
+            MenuAlign::BelowLeft,
+            move |_| {
+                let mut items = Vec::new();
+                {
+                    let weak = weak.clone();
+                    items.push(
+                        MenuItem::new(tr!("skills.filter_all"), move |_, cx| {
+                            let _ = weak.update(cx, |this, cx| {
+                                this.source_filter = None;
+                                cx.notify();
+                            });
+                        })
+                        .selected(current.is_none()),
+                    );
+                }
+                items.push(MenuItem::Separator);
+                for source in sources {
+                    let weak = weak.clone();
+                    let count = counts.get(&source).copied().unwrap_or(0);
+                    let label = if count > 0 {
+                        format!("{} · {count}", source.label())
+                    } else {
+                        source.label()
+                    };
+                    items.push(
+                        MenuItem::new(label, move |_, cx| {
+                            let _ = weak.update(cx, |this, cx| {
+                                this.source_filter = Some(source);
+                                cx.notify();
+                            });
+                        })
+                        .icon(skill_source_icon(source))
+                        .selected(current == Some(source)),
+                    );
+                }
+                items
+            },
+        )
+    }
+    /// Catalog indices the query and source filter leave visible, in catalog
+    /// order. A grouped skill passes a source filter when any of its copies
+    /// lives in that source's tree.
+    fn visible_skill_indices(&self, catalog: &SkillsCatalog, query: &str) -> Vec<usize> {
+        catalog
+            .skills
+            .iter()
+            .enumerate()
+            .filter(|(_, skill)| {
+                self.source_filter.is_none_or(|filter| {
+                    skill
+                        .installs
+                        .iter()
+                        .any(|install| install.source == filter)
+                }) && (query.is_empty() || skill_matches(skill, query))
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// The visible rows: a section per scope group, each holding its skills.
+    fn skills_rows_from(
+        &self,
+        catalog: &SkillsCatalog,
+        indices: &[usize],
+        selected: Option<&Path>,
+    ) -> Vec<SkillsRow> {
+        let mut rows = Vec::new();
+        let mut section_start: Option<usize> = None;
+        let mut current: Option<&Option<String>> = None;
+        for &index in indices {
+            let Some(skill) = catalog.skills.get(index) else {
+                continue;
+            };
+            if current != Some(&skill.project) {
+                current = Some(&skill.project);
+                if let Some(start) = section_start {
+                    backfill_section_count(&mut rows, start);
+                }
+                section_start = Some(rows.len());
+                let label = SharedString::from(match &skill.project {
+                    Some(project) => project.clone(),
+                    None => tr!("skills.section_user"),
+                });
+                rows.push(SkillsRow::Section { label, count: 0 });
+            }
+            rows.push(SkillsRow::Skill {
+                index,
+                row_key: skill.row_key,
+                selected: selected == Some(skill.primary().dir.as_path()),
+            });
+        }
+        if let Some(start) = section_start {
+            backfill_section_count(&mut rows, start);
+        }
+        rows
+    }
+
+    /// Keep the virtualized list in sync with the freshly computed rows.
+    /// Sharing a prefix keeps scroll position across filter keystrokes and
+    /// selection moves; everything after the first change re-measures.
+    fn sync_skills_rows(&self, rows: &[SkillsRow]) {
+        let mut cached = self.rows.borrow_mut();
+        if cached.as_slice() == rows {
+            return;
+        }
+        let prefix = cached
+            .iter()
+            .zip(rows.iter())
+            .take_while(|(cached, fresh)| cached == fresh)
+            .count();
+        let old_count = cached.len();
+        *cached = rows.to_vec();
+        if old_count == 0 {
+            self.list_state.reset(rows.len());
+        } else {
+            self.list_state
+                .splice(prefix..old_count, rows.len() - prefix);
+        }
+    }
+
+    /// One list row, built only while visible. Reads the per-frame row cache;
+    /// a stale index from a frame racing a rescan renders empty rather than
+    /// panicking.
+    fn skills_row(&self, row: usize, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::current(cx);
+        let rows = self.rows.borrow();
+        let Some(entry) = rows.get(row) else {
+            return div().into_any_element();
+        };
+        match entry {
+            SkillsRow::Section { label, count } => {
+                let first = row == 0;
+                div()
+                    .w_full()
+                    .pt(px(if first { 10.0 } else { 18.0 }))
+                    .pb(px(4.0))
+                    .px(px(9.0))
+                    .flex()
+                    .items_baseline()
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .text_size(ui_px(9.5))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.text_tertiary)
+                            .child(SharedString::from(label.to_uppercase())),
+                    )
+                    .child(
+                        div()
+                            .text_size(ui_px(9.5))
+                            .text_color(theme.text_muted)
+                            .child(SharedString::from(count.to_string())),
+                    )
+                    .into_any_element()
+            }
+            SkillsRow::Skill {
+                index, selected, ..
+            } => {
+                let index = *index;
+                let selected = *selected;
+                drop(rows);
+                let catalog = self.catalog.clone();
+                let Some(skill) = catalog
+                    .as_deref()
+                    .and_then(|catalog| catalog.skills.get(index))
+                else {
+                    return div().into_any_element();
+                };
+                self.render_skills_list_row(skill, selected, &theme, cx)
+            }
+        }
+    }
+
+    fn render_skills_list_row(
+        &self,
+        skill: &SkillEntry,
+        selected: bool,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let dir = skill.primary().dir.clone();
+        let enabled = skill.enabled;
+        div()
+            .w_full()
+            .pb(px(1.0))
+            .child(
+                div()
+                    .id(SharedString::from(format!("skill-item-{}", skill.row_key)))
+                    .tab_index(0)
+                    .focus_visible(|style| style.border_1().border_color(theme.accent))
+                    .w_full()
+                    .px(px(9.0))
+                    .py(px(7.0))
+                    .rounded(px(8.0))
+                    .cursor_default()
+                    .when(selected, |element| {
+                        element.bg(theme.sidebar_item_background)
+                    })
+                    .when(!selected, |element| {
+                        element
+                            .hover(|element| element.bg(theme.overlay))
+                            .active(|element| element.bg(theme.overlay_strong))
+                    })
+                    .flex()
+                    .items_center()
+                    .gap(px(9.0))
+                    .child(
+                        div()
+                            .w(px(28.0))
+                            .h(px(28.0))
+                            .flex_none()
+                            // Concentric with the row: 8px row radius minus
+                            // the 7-9px row padding leaves almost no arc.
+                            .rounded(px(2.0))
+                            .bg(theme.overlay)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(icon(
+                                skill_icon(skill),
+                                14.0,
+                                theme
+                                    .text_secondary
+                                    .opacity(if enabled { 1.0 } else { 0.45 }),
+                            )),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.0))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_size(ui_px(12.5))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(if enabled {
+                                                theme.text
+                                            } else {
+                                                theme.text_secondary
+                                            })
+                                            .child(SharedString::from(skill.name.clone())),
+                                    )
+                                    .when(!enabled, |element| {
+                                        element.child(
+                                            div()
+                                                .flex_none()
+                                                .text_size(ui_px(9.5))
+                                                .text_color(theme.warning_text)
+                                                .child(tr!("skills.disabled_badge")),
+                                        )
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(1.0))
+                                    .text_size(ui_px(11.0))
+                                    .text_color(theme.text_tertiary)
+                                    .truncate()
+                                    .child(SharedString::from(if skill.description.is_empty() {
+                                        skill.sources_label()
+                                    } else {
+                                        skill.description.clone()
+                                    })),
+                            ),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.select_skill(dir.clone(), cx);
+                    })),
+            )
+            .into_any_element()
+    }
+    fn render_skill_detail_pane(
+        &self,
+        skill: &SkillEntry,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let dir = skill.primary().dir.clone();
+        let skill_file = skill.primary().skill_file.clone();
+        let enabled = skill.enabled;
+        let armed = self.delete_arming.as_ref() == Some(&dir);
+        let remote_key = self.host.ssh_host(cx).map(|id| (id, dir.clone()));
+        let pending_action = remote_key.as_ref().and_then(|key| self.remote_pending.get(key));
+        let pending = pending_action.is_some();
+        let indicator_action = pending_action.copied().or_else(|| {
+            let loading = self.remote_loading.borrow();
+            loading.as_ref().and_then(|loading| {
+                let (host, path, action) = loading.key();
+                (remote_key.as_ref() == Some(&(*host, path.clone()))).then_some(*action)
+            })
+        });
+        let pending_phase = if let Some(key) = remote_key.as_ref() {
+            Self::wait_phase(
+                &self.remote_loading,
+                (key.0, key.1.clone(), indicator_action.flatten()),
+                pending,
+                cx,
+            )
+        } else {
+            *self.remote_loading.borrow_mut() = None;
+            LoadingPhase::Done
+        };
+        let operation_busy = pending || pending_phase == LoadingPhase::Visible;
+        let remote_error = remote_key.as_ref().and_then(|key| self.remote_errors.get(key));
+
+        let scope_caption = match &skill.project {
+            Some(project) => tr!("skills.scope_in_project", project = project),
+            None => tr!("skills.scope_user_detail"),
+        };
+        let caption = format!("{} · {}", skill.sources_label(), scope_caption);
+
+        let toggle = toggle_switch(
+            SharedString::from(format!("skill-enabled-{}", skill.row_key)),
+            enabled,
+            !self.host.ssh_host_ready(cx) || operation_busy,
+            *theme,
+            window,
+            cx,
+            {
+                let dir = dir.clone();
+                move |this: &mut Self, _, cx| {
+                    this.toggle_skill_enabled(dir.clone(), !enabled, cx);
+                }
+            },
+        );
+
+        let mut contents = Vec::new();
+        if skill.supporting_files == 1 {
+            contents.push(tr!("skills.file_count_one"));
+        } else if skill.supporting_files > 1 {
+            contents.push(tr!(
+                "skills.file_count_many",
+                count = skill.supporting_files
+            ));
+        }
+        contents.push(format_bytes(skill.total_bytes));
+
+        let mono_value = |value: String, size: f32| {
+            div()
+                .min_w_0()
+                .truncate()
+                .font_family(mono_family())
+                .text_size(ui_px(size))
+                .text_color(theme.text_secondary)
+                .child(SharedString::from(value))
+                .into_any_element()
+        };
+        let mut info_rows: Vec<(String, AnyElement)> = vec![(
+            tr!("skills.detail_invoke"),
+            mono_value(format!("/{}", skill.name), 10.5),
+        )];
+        // One location line per copy; a grouped skill labels each line with
+        // the ecosystem that reads it.
+        let grouped = skill.installs.len() > 1;
+        for install in &skill.installs {
+            info_rows.push((
+                if grouped {
+                    install.source.label()
+                } else {
+                    tr!("skills.detail_location")
+                },
+                mono_value(compact_path(&install.dir), 10.0),
+            ));
+        }
+        info_rows.push((
+            tr!("skills.detail_contents"),
+            plain_info_value(theme, contents.join(" · ")),
+        ));
+        if let Some(modified_at) = skill.modified_at {
+            info_rows.push((
+                tr!("skills.detail_updated"),
+                plain_info_value(
+                    theme,
+                    updated_label(unix_time().saturating_sub(modified_at)),
+                ),
+            ));
+        }
+        if let Some(tools) = &skill.allowed_tools {
+            info_rows.push((tr!("skills.allowed_tools"), mono_value(tools.clone(), 10.0)));
+        }
+        let info_count = info_rows.len();
+        let mut info = div().mt(px(16.0)).flex().flex_col();
+        for (index, (label, value)) in info_rows.into_iter().enumerate() {
+            info = info.child(skill_info_row(theme, label, value, index + 1 == info_count));
+        }
+
+        let action_button = |id: SharedString, icon_path: &'static str, label: String| {
+            div()
+                .id(id)
+                .tab_index(0)
+                .focus_visible(|style| style.border_color(theme.accent))
+                .h(px(30.0))
+                // Leading-icon button: icon side 2px tighter than the text side.
+                .pl(px(9.0))
+                .pr(px(11.0))
+                .rounded(px(7.0))
+                .border_1()
+                .border_color(theme.border_strong)
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(px(6.0))
+                .cursor_default()
+                .text_size(ui_px(12.0))
+                .text_color(theme.text_secondary)
+                .hover(|element| element.bg(theme.overlay))
+                .active(|element| element.bg(theme.overlay_strong))
+                .child(icon(icon_path, 12.5, theme.text_tertiary))
+                .child(SharedString::from(label))
+        };
+
+        let open_button = action_button(
+            SharedString::from(format!("skill-open-{}", skill.row_key)),
+            "icons/pencil.svg",
+            tr!("skills.open_file"),
+        )
+        .on_click(cx.listener({
+            let skill_file = skill_file.clone();
+            move |this, _, _, cx| {
+                this.host.open_host_path(&skill_file, cx);
+            }
+        }));
+
+        let reveal_button = action_button(
+            SharedString::from(format!("skill-reveal-{}", skill.row_key)),
+            "icons/folder.svg",
+            tr!("skills.reveal"),
+        )
+        .on_click(cx.listener({
+            let skill_file = skill_file.clone();
+            move |this, _, _, cx| {
+                this.host.reveal_host_path(&skill_file, cx);
+            }
+        }));
+
+        let copy_feedback_id = format!("skill-copy-{}", skill.row_key);
+        let copied = self.control_was_copied(&copy_feedback_id);
+        let copy_button = action_button(
+            SharedString::from(copy_feedback_id.clone()),
+            if copied {
+                "icons/check.svg"
+            } else {
+                "icons/copy.svg"
+            },
+            if copied {
+                tr!("common.copied")
+            } else {
+                tr!("skills.copy_path")
+            },
+        )
+        .on_click(cx.listener({
+            let dir = dir.clone();
+            let copy_feedback_id = copy_feedback_id.clone();
+            move |this, _, _, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(dir.display().to_string()));
+                this.show_control_copied(copy_feedback_id.clone(), cx);
+            }
+        }));
+
+        let delete_button = div()
+            .id(SharedString::from(format!(
+                "skill-delete-{}",
+                skill.row_key
+            )))
+            .tab_index(0)
+            .focus_visible(|style| style.border_color(theme.accent))
+            .h(px(30.0))
+            .px(px(10.0))
+            .rounded(px(7.0))
+            .border_1()
+            .border_color(if armed {
+                theme.danger
+            } else {
+                theme.border_strong
+            })
+            .when(armed, |element| element.bg(theme.danger.opacity(0.12)))
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(6.0))
+            .cursor_default()
+            .text_size(ui_px(12.0))
+            .text_color(if armed {
+                theme.danger
+            } else {
+                theme.text_secondary
+            })
+            .hover(|element| element.bg(theme.overlay).text_color(theme.danger_text))
+            .active(|element| {
+                element
+                    .bg(theme.danger.opacity(0.18))
+                    .text_color(theme.danger_text)
+            })
+            .child(if indicator_action == Some(None) && pending_phase == LoadingPhase::Visible {
+                motion::spin_slow(icon("icons/loader-circle.svg", 12.5, theme.text_tertiary))
+            } else {
+                icon("icons/trash.svg", 12.5, if armed { theme.danger } else { theme.text_tertiary }).into_any_element()
+            })
+            .child(if armed {
+                tr!("skills.confirm_delete")
+            } else {
+                tr!("skills.delete")
+            })
+            .on_click(cx.listener({
+                let dir = dir.clone();
+                move |this, _, _, cx| {
+                    if operation_busy || this.host.ssh_host(cx).is_some_and(|id| this.remote_pending.contains_key(&(id, dir.clone()))) {
+                        return;
+                    }
+                    if this.delete_arming.as_ref() == Some(&dir) {
+                        this.delete_skill(dir.clone(), cx);
+                    } else {
+                        this.delete_arming = Some(dir.clone());
+                        cx.notify();
+                    }
+                }
+            }))
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                if this.delete_arming.take().is_some() {
+                    cx.notify();
+                }
+            }));
+
+        // The skill's document, rendered with the transcript's own markdown
+        // engine. The parse is cached per selected skill; re-rendering an
+        // unchanged document costs `Rc` clones, not a re-parse.
+        let palette = MarkdownPalette::from_theme(theme);
+        let document: Option<AnyElement> = (!skill.body.is_empty()).then(|| {
+            let mut cache = self.detail_markdown.borrow_mut();
+            let primary_dir = skill.primary().dir.clone();
+            if !matches!(cache.as_ref(), Some((cached, _)) if cached == &primary_dir) {
+                *cache = Some((primary_dir.clone(), MarkdownView::new()));
+            }
+            let (_, view) = cache.as_mut().expect("entry ensured above");
+            view.set_text(&skill.body, false);
+            let ctx = MarkdownCtx::new(
+                format!("skill-md-{}", skill.row_key),
+                &palette,
+                MarkdownMetrics::compact(),
+                self.selection.clone(),
+            )
+            .with_workspace_path(Some(primary_dir.as_path()));
+            div()
+                .mt(px(18.0))
+                .pt(px(14.0))
+                .border_t_1()
+                .border_color(theme.border)
+                .child(
+                    div()
+                        .font_family(mono_family())
+                        .text_size(ui_px(9.5))
+                        .text_color(theme.text_muted)
+                        .child("SKILL.md"),
+                )
+                .child(
+                    div()
+                        .mt(px(10.0))
+                        .text_color(theme.text_secondary)
+                        .children(md_render::markdown(view, &ctx)),
+                )
+                .into_any_element()
+        });
+        // Same reasoning as the transcript's selection input: while the update
+        // card is open, its own registry owns the drag gesture.
+        let selection_input = (!self.host.update_card_visible(cx)).then(|| {
+            let selection = self.selection.clone();
+            canvas(
+                |_, _, _| (),
+                move |_, _, window, _| md_render::install_selection_input(window, &selection),
+            )
+            .absolute()
+            .w(px(0.0))
+            .h(px(0.0))
+        });
+
+        let content = div()
+            .id("skill-detail-scroll")
+            .size_full()
+            .overflow_y_scroll()
+            .track_scroll(&self.detail_scroll)
+            .px(px(24.0))
+            .pt(px(18.0))
+            .pb(px(20.0))
+            // Painted before the document, so the frame's selection registry
+            // holds exactly the text elements this frame put on screen.
+            .child(md_render::frame_reset(self.selection.clone()))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(12.0))
+                    .child(
+                        div()
+                            .w(px(38.0))
+                            .h(px(38.0))
+                            .flex_none()
+                            .rounded(px(9.0))
+                            .bg(theme.overlay)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(icon(
+                                skill_icon(skill),
+                                18.0,
+                                theme
+                                    .text_secondary
+                                    .opacity(if enabled { 1.0 } else { 0.45 }),
+                            )),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(7.0))
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_size(ui_px(15.0))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(if enabled {
+                                                theme.text
+                                            } else {
+                                                theme.text_secondary
+                                            })
+                                            .child(SharedString::from(skill.name.clone())),
+                                    )
+                                    .when(!enabled, |element| {
+                                        element.child(
+                                            div()
+                                                .flex_none()
+                                                .text_size(ui_px(9.5))
+                                                .text_color(theme.warning_text)
+                                                .child(tr!("skills.disabled_badge")),
+                                        )
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(2.0))
+                                    .text_size(ui_px(10.5))
+                                    .text_color(theme.text_tertiary)
+                                    .truncate()
+                                    .child(SharedString::from(caption)),
+                            ),
+                    )
+                    .child(toggle)
+                    .when(indicator_action.is_some_and(|action| action.is_some()) && pending_phase == LoadingPhase::Visible, |row| {
+                        row.child(motion::spin_slow(icon("icons/loader-circle.svg", 12.0, theme.text_tertiary)))
+                    }),
+            )
+            .children(remote_error.map(|(retry, error)| {
+                let retry = *retry;
+                let dir = dir.clone();
+                let host = remote_key.as_ref().map(|key| key.0);
+                div().mt(px(10.0)).flex().items_center().gap(px(8.0))
+                    .text_size(ui_px(11.0)).text_color(theme.danger_text)
+                    .child(div().flex_1().min_w_0().child(error.clone()))
+                    .children(retry.map(|enabled| {
+                        div().id("remote-skill-retry").role(gpui::Role::Button).tab_index(0)
+                            .text_color(theme.text_secondary)
+                            .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
+                            .child(tr!("common.retry"))
+                            .on_activation(cx, move |this, _, cx| {
+                                if !operation_busy && let Some(id) = host.filter(|id| this.host.ssh_host(cx) == Some(*id)) {
+                                    this.change_remote_skill(id, &dir, Some(enabled), cx);
+                                }
+                            })
+                    }))
+            }))
+            .child(
+                div()
+                    .mt(px(14.0))
+                    .text_size(ui_px(11.5))
+                    .line_height(ui_px(17.0))
+                    .text_color(theme.text_secondary)
+                    .child(SharedString::from(if skill.description.is_empty() {
+                        tr!("skills.no_description")
+                    } else {
+                        skill.description.clone()
+                    })),
+            )
+            .child(info)
+            .when(skill.duplicates > 0, |element| {
+                element.child(
+                    div()
+                        .mt(px(12.0))
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .child(icon("icons/alert.svg", 11.0, theme.warning))
+                        .child(
+                            div()
+                                .text_size(ui_px(10.0))
+                                .text_color(theme.warning_text)
+                                .child(SharedString::from(if skill.duplicates == 1 {
+                                    tr!("skills.duplicate_one")
+                                } else {
+                                    tr!("skills.duplicate_many", count = skill.duplicates)
+                                })),
+                        ),
+                )
+            })
+            .child(
+                div()
+                    .mt(px(16.0))
+                    .flex()
+                    .items_center()
+                    .flex_wrap()
+                    .gap(px(7.0))
+                    .when(!self.host.ssh_host(cx).is_some(), |el| {
+                        el.child(open_button).child(reveal_button)
+                    })
+                    .child(copy_button)
+                    .child(div().flex_1())
+                    .when(self.host.ssh_host_ready(cx), |el| el.child(delete_button)),
+            )
+            .children(document)
+            .children(selection_input);
+
+        div()
+            .flex_1()
+            .min_h_0()
+            .relative()
+            .child(content)
+            .child(scrollbar::vertical(
+                &self.detail_scroll,
+                &self.detail_scrollbar,
+            ))
+    }
+}
+
+fn skills_scan_error(error: &str, theme: &Theme, cx: &mut Context<SkillsPage>) -> Div {
+    let theme = *theme;
+    div()
+        .px(px(12.0))
+        .py(px(8.0))
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .text_size(ui_px(12.0))
+        .text_color(theme.danger_text)
+        .child(div().flex_1().min_w_0().child(error.to_owned()))
+        .child(
+            div()
+                .id("skills-scan-retry")
+                .tab_index(0)
+                .text_color(theme.text_secondary)
+                .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
+                .child(tr!("common.retry"))
+                .on_activation(cx, |app, _, cx| app.ensure_catalog(true, cx)),
+        )
+}
+
+fn skills_empty_state(theme: &Theme) -> Div {
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(10.0))
+        .px(px(40.0))
+        .py(px(40.0))
+        .child(
+            div()
+                .w(px(44.0))
+                .h(px(44.0))
+                .rounded(px(11.0))
+                .bg(theme.overlay)
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(icon("icons/package.svg", 21.0, theme.text_tertiary)),
+        )
+        .child(
+            div()
+                .text_size(ui_px(13.0))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.text)
+                .child(tr!("skills.empty_title")),
+        )
+        .child(
+            div()
+                .max_w(px(420.0))
+                .text_size(ui_px(11.5))
+                .line_height(ui_px(17.0))
+                .text_color(theme.text_secondary)
+                .text_center()
+                .child(tr!("skills.empty_description")),
+        )
+}
+
+fn skills_detail_placeholder(theme: &Theme) -> Div {
+    div()
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(8.0))
+        .child(icon("icons/package.svg", 22.0, theme.text_ghost))
+        .child(
+            div()
+                .text_size(ui_px(11.0))
+                .text_color(theme.text_muted)
+                .child(tr!("skills.select_placeholder")),
+        )
+}
+
+/// One label/value line of the detail pane's info table.
+fn skill_info_row(theme: &Theme, label: String, value: AnyElement, last: bool) -> Div {
+    div()
+        .py(px(8.0))
+        .when(!last, |element| {
+            element.border_b_1().border_color(theme.border)
+        })
+        .flex()
+        .items_baseline()
+        .gap(px(12.0))
+        .child(
+            div()
+                .w(px(84.0))
+                .flex_none()
+                .text_size(ui_px(10.5))
+                .text_color(theme.text_tertiary)
+                .child(SharedString::from(label)),
+        )
+        .child(div().flex_1().min_w_0().flex().child(value))
+}
+
+fn plain_info_value(theme: &Theme, value: String) -> AnyElement {
+    div()
+        .text_size(ui_px(10.5))
+        .text_color(theme.text_secondary)
+        .child(SharedString::from(value))
+        .into_any_element()
+}
+
+/// Fill in a section header's count now that its span is known.
+fn backfill_section_count(rows: &mut [SkillsRow], start: usize) {
+    let count = rows.len() - start - 1;
+    if let Some(SkillsRow::Section { count: slot, .. }) = rows.get_mut(start) {
+        *slot = count;
+    }
+}
+
+fn skill_matches(skill: &SkillEntry, query: &str) -> bool {
+    skill.name.to_lowercase().contains(query)
+        || skill.description.to_lowercase().contains(query)
+        || skill
+            .installs
+            .iter()
+            .any(|install| install.source.label().to_lowercase().contains(query))
+        || skill
+            .project
+            .as_ref()
+            .is_some_and(|project| project.to_lowercase().contains(query))
+}
+
+fn skills_status_row(theme: &Theme, message: String) -> Div {
+    div()
+        .px(px(18.0))
+        .py(px(16.0))
+        .text_size(ui_px(11.0))
+        .text_color(theme.text_tertiary)
+        .child(SharedString::from(message))
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+/// Bare relative time for the Updated row. Precision beyond the day is noise.
+fn updated_label(elapsed_seconds: u64) -> String {
+    if elapsed_seconds < 90 {
+        tr!("skills.updated_just_now")
+    } else if elapsed_seconds < 3600 {
+        tr!("skills.updated_minutes", count = elapsed_seconds / 60)
+    } else if elapsed_seconds < 86_400 {
+        tr!("skills.updated_hours", count = elapsed_seconds / 3600)
+    } else {
+        tr!("skills.updated_days", count = elapsed_seconds / 86_400)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bytes_format_compactly() {
+        assert_eq!(format_bytes(412), "412 B");
+        assert_eq!(format_bytes(3_300), "3.2 KB");
+        assert_eq!(format_bytes(1_200_000), "1.1 MB");
+    }
+}

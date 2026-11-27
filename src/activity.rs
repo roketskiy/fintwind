@@ -48,7 +48,7 @@ pub(crate) fn report_startup(database: &Path) -> anyhow::Result<()> {
 pub(crate) fn report_to(database: &Path, endpoint: &str) -> anyhow::Result<()> {
     let identity = installation_id(database)?;
     let body = serde_json::json!({ "installation_id": identity }).to_string();
-    let (status, _, _) = fintwind_protocol::http::http_json(
+    let (status, _, _) = fintwind_http::http_json(
         "POST",
         endpoint,
         &["Content-Type: application/json".to_owned()],

@@ -785,7 +785,7 @@ fn context_composition(
     cx: &mut App,
     theme: &Theme,
 ) -> AnyElement {
-    use super::usage_treemap::{TreemapTile, usage_treemap};
+    use fintwind_usage_ui::treemap::{TreemapTile, usage_treemap};
     let heading = div()
         .text_color(theme.text_secondary)
         .child(tr!("usage.composition_estimated"));

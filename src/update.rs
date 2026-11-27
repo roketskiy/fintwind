@@ -194,7 +194,7 @@ pub(crate) fn fetch_gateway_release_from(gateway: &str, current_version: &str) -
         "Accept: application/json".to_string(),
     ];
     let (status, body) =
-        fintwind_protocol::http::http_get(&endpoint, &headers, GATEWAY_MAX_TIME_SECS).ok()?;
+        fintwind_http::http_get(&endpoint, &headers, GATEWAY_MAX_TIME_SECS).ok()?;
     // The gateway answers 204 when the installed version is already current.
     if status == 204 {
         return None;
@@ -252,7 +252,7 @@ pub(crate) fn fetch_newer_release_from(api: &str, current_version: &str) -> Opti
         let remaining = budget.checked_sub(started.elapsed())?;
         let endpoint = format!("{api}?per_page={RELEASES_PAGE_SIZE}&page={page}");
         let (status, body) =
-            fintwind_protocol::http::http_get(&endpoint, &headers, remaining.as_secs().max(1))
+            fintwind_http::http_get(&endpoint, &headers, remaining.as_secs().max(1))
                 .ok()?;
         if status != 200 {
             return None;
@@ -370,7 +370,7 @@ pub fn download_installer(
             .with_context(|| format!("could not create {}", parent.display()))?;
     }
     let headers = asset_headers();
-    let written = fintwind_protocol::http::http_download(
+    let written = fintwind_http::http_download(
         &source.url,
         &headers,
         destination,
@@ -432,7 +432,7 @@ pub fn pick_source(asset: &ReleaseAsset, destination: &Path) -> DownloadSource {
                 let url = candidate.url.clone();
                 let probe = probe_path(destination, index);
                 scope.spawn(move || {
-                    fintwind_protocol::http::http_probe(
+                    fintwind_http::http_probe(
                         &url,
                         headers,
                         PROBE_RANGE,

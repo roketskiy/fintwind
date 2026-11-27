@@ -1,0 +1,15 @@
+[package]
+name = "fintwind-usage-ui"
+version = "0.1.0"
+edition = "2024"
+description = "GPUI usage statistics, quota cards, trend chart, activity heatmap, and treemap UI"
+license = "GPL-3.0-only"
+
+[dependencies]
+chrono = "0.4"
+ely-gpui-component = { git = "https://git.zacharyzhang.com/ZacharyZhang-NY/Ely-GPUI-Components", rev = "bd014707fd47cd9d0651a9af8c1db6033718a6ea", default-features = false }
+fintwind-client = { path = "../fintwind-client" }
+fintwind-opencode-config = { path = "../fintwind-opencode-config" }
+fintwind-protocol = { path = "../fintwind-protocol" }
+fintwind-ui = { path = "../fintwind-ui" }
+gpui = { package = "gpui-pre", version = "=0.3.8" }

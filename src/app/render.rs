@@ -465,58 +465,12 @@ impl Render for Fintwind {
                     ))
                 })
                 .into_any_element(),
-            WorkspaceMode::Usage => {
-                let measure_width = cx.listener(|this, bounds: &Bounds<Pixels>, _, cx| {
-                    if this.usage_content_width != bounds.size.width {
-                        this.usage_content_width = bounds.size.width;
-                        cx.notify();
-                    }
-                });
-                div()
-                    .flex_1()
-                    .h_full()
-                    .min_w_0()
-                    .relative()
-                    .flex()
-                    .flex_col()
-                    .bg(theme.canvas)
-                    .child(
-                        div()
-                            .flex_none()
-                            .w_full()
-                            .px_4()
-                            .pt_3()
-                            .pb_3()
-                            .bg(theme.surface)
-                            .border_b_1()
-                            .border_color(theme.border)
-                            .flex()
-                            .flex_col()
-                            .child(self.render_usage_toolbar(&theme, cx)),
-                    )
-                    .child(
-                        div()
-                            .id("usage-page-scroll")
-                            .flex_1()
-                            .min_h_0()
-                            .w_full()
-                            .overflow_y_scroll()
-                            .track_scroll(&self.settings_scroll)
-                            .child(
-                                div().p_4().child(
-                                    ely_gpui_component::primitives::Measure::new(
-                                        "usage-content-width",
-                                        move |bounds, window, cx| {
-                                            measure_width(&bounds, window, cx)
-                                        },
-                                    )
-                                    .w_full()
-                                    .child(self.render_usage_page(window, cx)),
-                                ),
-                            ),
-                    )
-                    .into_any_element()
-            }
+            WorkspaceMode::Usage => div()
+                .flex_1()
+                .h_full()
+                .min_w_0()
+                .child(self.usage_page.clone())
+                .into_any_element(),
         };
 
         let content = div()

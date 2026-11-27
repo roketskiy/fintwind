@@ -2,63 +2,13 @@
 //! snapshots only; every query runs on the background executor with its own
 //! generation guard, so a slow vendor never blocks the others.
 
-use std::collections::BTreeMap;
-
 use fintwind_protocol::provider_quota::{
     ProviderQuota, QuotaStatus, is_local_quota_source, supports_provider_quota,
 };
 
 use super::*;
 
-/// Board display order: local agents first, then coding plans, then
-/// pay-as-you-go balances.
-const SUBSCRIPTION_ORDER: &[&str] = &[
-    "anthropic",
-    "openai",
-    "github-copilot",
-    "google",
-    "opencode",
-    "zhipuai-coding-plan",
-    "zai-coding-plan",
-    "kimi-code-plan-cn",
-    "kimi-code-plan-global",
-    "minimax-coding-plan",
-    "minimax-cn-coding-plan",
-    "commandcode",
-    "ollama-cloud",
-    "zhipuai",
-    "zai",
-    "minimax",
-    "minimax-cn",
-    "openrouter",
-    "siliconflow",
-    "siliconflow-cn",
-    "moonshotai",
-    "moonshotai-cn",
-    "deepseek",
-    "stepfun",
-    "stepfun-ai",
-    "stepfun-ai-step-plan",
-    "stepfun-step-plan",
-];
-
-#[derive(Default)]
-pub(super) struct SubscriptionEntry {
-    generation: u64,
-    loading: bool,
-    reading: Option<ProviderQuota>,
-}
-
-#[derive(Default)]
-pub(super) struct SubscriptionBoard {
-    generation: u64,
-    refresh: Option<bool>,
-    connection_error: bool,
-    connections_loaded: bool,
-    workspace: Option<(std::path::PathBuf, std::path::PathBuf)>,
-    entries: BTreeMap<String, SubscriptionEntry>,
-    refresh_spins: RefCell<BTreeMap<String, motion::ActionSpin>>,
-}
+pub(super) use fintwind_providers_ui::{SUBSCRIPTION_ORDER, SubscriptionBoard};
 
 impl Fintwind {
     /// Drop in-flight subscription reads; the next load repopulates.
@@ -66,9 +16,12 @@ impl Fintwind {
         self.provider_quota.generation = self.provider_quota.generation.wrapping_add(1);
         self.provider_quota.entries.clear();
         self.provider_quota.connections_loaded = false;
-        *self.usage_quota_loading.borrow_mut() = None;
         self.provider_quota.refresh_spins.get_mut().clear();
         self.provider_quota.workspace = None;
+    }
+
+    pub(super) fn subscriptions_generation(&self) -> u64 {
+        self.provider_quota.generation
     }
 
     fn sync_subscription_workspace(&mut self) {
@@ -118,6 +71,7 @@ impl Fintwind {
         for provider in visible {
             self.load_one_subscription(provider, force, cx);
         }
+        self.notify_usage_page(cx);
         cx.notify();
     }
 
@@ -237,6 +191,7 @@ impl Fintwind {
                     reading = cached;
                 }
                 entry.reading = Some(reading);
+                this.notify_usage_page(cx);
                 cx.notify();
             });
         })

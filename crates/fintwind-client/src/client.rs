@@ -314,8 +314,13 @@ fn run_client(
     // break records what happened before the flag goes terminal.
     let mut graceful = false;
     let mut reason = "the daemon closed the connection".to_owned();
+    let mut shutdown_deadline = None;
     'connection: loop {
-        while let Ok(message) = outgoing.try_recv() {
+        if shutdown_deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+            reason = "the daemon did not acknowledge shutdown".to_owned();
+            break;
+        }
+        while shutdown_deadline.is_none() && let Ok(message) = outgoing.try_recv() {
             match message {
                 Outgoing::Message(message) => {
                     if let Err(error) = write_json(&mut socket, &message) {
@@ -324,10 +329,15 @@ fn run_client(
                     }
                 }
                 Outgoing::Shutdown => {
-                    let _ = write_json(&mut socket, &ClientMessage::Shutdown);
-                    let _ = socket.flush();
-                    graceful = true;
-                    break 'connection;
+                    if let Err(error) = write_json(&mut socket, &ClientMessage::Shutdown) {
+                        reason = format!("shutdown could not be sent: {error:#}");
+                        break 'connection;
+                    }
+                    // Closing immediately can reset a socket with unread
+                    // events, discarding the shutdown frame on Windows.
+                    // Keep it alive until the daemon acknowledges the request.
+                    shutdown_deadline = Some(std::time::Instant::now() + Duration::from_secs(5));
+                    break;
                 }
                 Outgoing::Disconnect => {
                     let _ = socket.close(None);

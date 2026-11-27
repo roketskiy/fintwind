@@ -172,7 +172,7 @@ def main():
     if not cargo:
         raise RuntimeError("cargo is required on PATH")
     before = set((ROOT / "temp/recovery-e2e").glob("*/result-explicit-skills.json"))
-    child = helper.OwnedProcess(cargo, ["test", "--locked", "-p", "fintwind-core", "--test",
+    child = helper.OwnedProcess(cargo, ["test", "--locked", "-p", "fintwind-daemon", "--test",
         "opencode_recovery", "opencode_explicit_skills", "--", "--ignored", "--exact", "--nocapture"], ROOT, env)
     try:
         deadline = time.monotonic() + 600

@@ -127,16 +127,16 @@ impl Fintwind {
     /// and any selection it still shows is dropped here — otherwise one drag
     /// would select the card's release notes and the underlying text at once,
     /// and the stale background highlight would outlive the card.
-    pub(super) fn drop_covered_selections(&mut self) {
+    pub(super) fn drop_covered_selections(&mut self, cx: &App) {
         for selection in [
             &self.transcript_selection,
             &self.toast_selection,
-            &self.skills_selection,
             &self.right_panel_diff_selection,
         ] {
             selection.selection.borrow_mut().clear();
             selection.registry.borrow_mut().clear();
         }
+        self.skills_page.read(cx).clear_selection();
         for registry in self.background_work.values_mut() {
             registry.clear_selection();
         }
@@ -149,7 +149,7 @@ impl Fintwind {
         if self.latest_available.is_none() {
             return;
         }
-        self.drop_covered_selections();
+        self.drop_covered_selections(cx);
         let Some(card) = self.latest_available.as_mut() else {
             return;
         };

@@ -89,7 +89,7 @@ Run the focused checks relevant to your change, then run the full baseline
 before opening a pull request:
 
 ```sh
-cargo fmt --package fintwind --package fintwind-protocol --package fintwind-client --package fintwind-core --package fintwind-daemon -- --check
+cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets
 cargo test
 ```

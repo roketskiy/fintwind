@@ -1,6 +1,6 @@
 """Run the update download black box in an isolated, owned Windows Job Object.
 
-Build first: cargo build --locked -p fintwind-core --example update_download_blackbox
+Build first: cargo build --locked -p fintwind-daemon --example update_download_blackbox
 Then run: python scripts/update-download-e2e.py
 """
 

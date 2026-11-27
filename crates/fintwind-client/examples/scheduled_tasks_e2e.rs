@@ -1303,10 +1303,13 @@ fn expect_error(
     needle: &str,
     what: &str,
 ) -> anyhow::Result<()> {
-    match client.request(Uuid::nil(), Uuid::nil(), command) {
+    match client.request_with_timeout(Uuid::nil(), Uuid::nil(), command, Duration::from_secs(10)) {
         Ok(_) => bail!("{what} was accepted"),
         Err(error) => {
             let text = format!("{error:#}");
+            if text.contains("timed out") {
+                bail!("{what} did not receive an error response: {text}");
+            }
             if !needle.is_empty() && !text.contains(needle) {
                 bail!("{what} failed with an unexpected message: {text}");
             }

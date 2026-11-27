@@ -5,7 +5,7 @@ $taskRoot = Split-Path $PSScriptRoot -Parent
 if (-not $SkipBuild) {
     Push-Location $taskRoot
     try {
-        cargo build --locked -p fintwind-core --example general_workspace_blackbox
+        cargo build --locked -p fintwind-daemon --example general_workspace_blackbox
         if ($LASTEXITCODE -ne 0) { throw 'Black-box build failed.' }
     } finally { Pop-Location }
 }

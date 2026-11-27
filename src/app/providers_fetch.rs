@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use gpui::KeyDownEvent;
 
-use fintwind_client::custom_providers::{
-    self, ApiListError, CustomProvider, CustomProviderModel, FirstTokenError,
+use fintwind_opencode_config::custom_providers::{
+    self, CustomProvider, CustomProviderModel, FirstTokenError,
 };
 
 use super::providers_page::{
@@ -70,13 +70,18 @@ impl Fintwind {
                 .background_executor()
                 .spawn(async move {
                     let api_models = provider
-                        .for_probe(&credentials, workspace)
+                        .for_probe(
+                            |binary, directory, id| {
+                                credentials.resolve_custom_provider_key(binary, directory, id)
+                            },
+                            workspace,
+                        )
                         .map_err(|error| {
                             custom_providers::ApiListError::Unreachable(error.to_string())
                         })
                         .and_then(|provider| custom_providers::fetch_api_model_list(&provider));
                     let table = Some(std::sync::Arc::new(
-                        fintwind_client::models_dev::bundled_catalog(),
+                        fintwind_opencode_config::models_dev::bundled_catalog(),
                     ));
                     (api_models, table)
                 })
@@ -123,8 +128,8 @@ impl Fintwind {
     fn apply_fetched_models(
         &mut self,
         provider_id: &str,
-        api_models: &[fintwind_client::custom_providers::ProviderApiModel],
-        table: Option<&fintwind_client::models_dev::ModelsDevTable>,
+        api_models: &[fintwind_opencode_config::custom_providers::ProviderApiModel],
+        table: Option<&fintwind_opencode_config::models_dev::ModelsDevTable>,
         cx: &mut Context<Self>,
     ) {
         let outcome = {
@@ -135,7 +140,7 @@ impl Fintwind {
             else {
                 return;
             };
-            fintwind_client::models_dev::merge_api_models(provider, api_models, table)
+            fintwind_opencode_config::models_dev::merge_api_models(provider, api_models, table)
         };
         if outcome.added == 0 && outcome.filled == 0 {
             self.show_success_toast(tr!("providers.fetch_up_to_date"));
@@ -276,7 +281,7 @@ impl Fintwind {
         cx.spawn(async move |this, cx| {
             let loaded = cx
                 .background_executor()
-                .spawn(async move { fintwind_client::models_dev::bundled_catalog() })
+                .spawn(async move { fintwind_opencode_config::models_dev::bundled_catalog() })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.models_dev_loading = false;
@@ -310,7 +315,12 @@ impl Fintwind {
             let outcome = cx
                 .background_executor()
                 .spawn(async move {
-                    match provider.for_probe(&credentials, workspace) {
+                    match provider.for_probe(
+                        |binary, directory, id| {
+                            credentials.resolve_custom_provider_key(binary, directory, id)
+                        },
+                        workspace,
+                    ) {
                         Ok(provider) => custom_providers::probe_connectivity(&provider),
                         Err(error) => custom_providers::ConnectivityOutcome::Failed {
                             error: custom_providers::ApiListError::Unreachable(error.to_string()),
@@ -434,13 +444,18 @@ impl Fintwind {
                 .background_executor()
                 .spawn(async move {
                     let api_models = provider
-                        .for_probe(&credentials, workspace)
+                        .for_probe(
+                            |binary, directory, id| {
+                                credentials.resolve_custom_provider_key(binary, directory, id)
+                            },
+                            workspace,
+                        )
                         .map_err(|error| {
                             custom_providers::ApiListError::Unreachable(error.to_string())
                         })
                         .and_then(|provider| custom_providers::fetch_api_model_list(&provider));
                     let table = Some(std::sync::Arc::new(
-                        fintwind_client::models_dev::bundled_catalog(),
+                        fintwind_opencode_config::models_dev::bundled_catalog(),
                     ));
                     (api_models, table)
                 })
@@ -480,13 +495,13 @@ impl Fintwind {
     /// fetch click, with the window needed to mint draft fields.
     fn apply_fetched_form_models(
         &mut self,
-        api_models: &[fintwind_client::custom_providers::ProviderApiModel],
-        table: Option<&fintwind_client::models_dev::ModelsDevTable>,
+        api_models: &[fintwind_opencode_config::custom_providers::ProviderApiModel],
+        table: Option<&fintwind_opencode_config::models_dev::ModelsDevTable>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let mut merged = self.form_transient_provider(cx);
-        let outcome = fintwind_client::models_dev::merge_api_models(&mut merged, api_models, table);
+        let outcome = fintwind_opencode_config::models_dev::merge_api_models(&mut merged, api_models, table);
         if outcome.added == 0 && outcome.filled == 0 {
             self.show_success_toast(tr!("providers.fetch_up_to_date"));
             return;
@@ -573,7 +588,12 @@ impl Fintwind {
             let outcome = cx
                 .background_executor()
                 .spawn(async move {
-                    match provider.for_probe(&credentials, workspace) {
+                    match provider.for_probe(
+                        |binary, directory, id| {
+                            credentials.resolve_custom_provider_key(binary, directory, id)
+                        },
+                        workspace,
+                    ) {
                         Ok(provider) => custom_providers::probe_connectivity(&provider),
                         Err(error) => custom_providers::ConnectivityOutcome::Failed {
                             error: custom_providers::ApiListError::Unreachable(error.to_string()),
@@ -649,7 +669,12 @@ impl Fintwind {
                 .background_executor()
                 .spawn(async move {
                     provider
-                        .for_probe(&credentials, workspace)
+                        .for_probe(
+                            |binary, directory, id| {
+                                credentials.resolve_custom_provider_key(binary, directory, id)
+                            },
+                            workspace,
+                        )
                         .map_err(|error| {
                             custom_providers::FirstTokenError::Unreachable(error.to_string())
                         })
@@ -697,7 +722,7 @@ impl Fintwind {
             cx.spawn(async move |this, cx| {
                 let loaded = cx
                     .background_executor()
-                    .spawn(async move { fintwind_client::models_dev::bundled_providers() })
+                    .spawn(async move { fintwind_opencode_config::models_dev::bundled_providers() })
                     .await;
                 let _ = this.update(cx, |this, cx| {
                     this.providers_builtin_loading = false;
@@ -918,7 +943,7 @@ impl Fintwind {
     pub(super) fn builtin_provider(
         &self,
         id: &str,
-    ) -> Option<&fintwind_client::models_dev::ModelsDevProvider> {
+    ) -> Option<&fintwind_opencode_config::models_dev::ModelsDevProvider> {
         self.providers_builtin
             .as_deref()
             .and_then(|roster| roster.get(id))
@@ -1576,7 +1601,7 @@ impl Fintwind {
     /// without a key method (OAuth-gated) show a note instead of a button.
     pub(super) fn render_builtin_catalog_check(
         &self,
-        provider: &fintwind_client::models_dev::ModelsDevProvider,
+        provider: &fintwind_opencode_config::models_dev::ModelsDevProvider,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -1678,70 +1703,9 @@ fn models_header_with_button(theme: &Theme, label: String, button: Stateful<Div>
         .child(button)
 }
 
-/// Localized wording for a model-list failure, shared by the fetch action's
-/// toast and the connectivity probe's verdict.
-pub(super) fn api_list_error_text(error: &ApiListError) -> String {
-    match error {
-        ApiListError::InvalidBaseUrl => tr!("providers.error_invalid_url"),
-        ApiListError::AuthRejected(status) => {
-            tr!("providers.error_auth", status = status.to_string())
-        }
-        ApiListError::ListMissing => tr!("providers.error_list_missing"),
-        ApiListError::HttpStatus(status) => {
-            tr!("providers.error_status", status = status.to_string())
-        }
-        ApiListError::Unreachable(error) => {
-            tr!("providers.error_unreachable", error = error.clone())
-        }
-        ApiListError::NoModelList(error) => {
-            tr!("providers.error_no_list", error = error.clone())
-        }
-    }
-}
-
-/// Localized wording for a first-token probe failure; the provider's own
-/// error sentence, when it sent one, is appended for the tooltip.
-pub(super) fn first_token_error_text(error: &FirstTokenError) -> String {
-    match error {
-        FirstTokenError::InvalidBaseUrl => tr!("providers.error_invalid_url"),
-        FirstTokenError::HttpStatus { status, message } => {
-            let wording = match status {
-                401 | 403 => tr!("providers.ttft_error_auth", status = status.to_string()),
-                404 => tr!("providers.ttft_error_model"),
-                status => tr!("providers.error_status", status = status.to_string()),
-            };
-            append_detail(&wording, message.as_deref())
-        }
-        FirstTokenError::Unreachable(error) => {
-            tr!("providers.error_unreachable", error = error.clone())
-        }
-        FirstTokenError::NoStreamData { message } => {
-            append_detail(&tr!("providers.ttft_error_no_stream"), message.as_deref())
-        }
-        FirstTokenError::Timeout => tr!(
-            "providers.ttft_error_timeout",
-            seconds = custom_providers::FIRST_TOKEN_TIMEOUT_SECS.to_string()
-        ),
-    }
-}
-
-fn append_detail(wording: &str, detail: Option<&str>) -> String {
-    match detail {
-        Some(detail) if !detail.is_empty() => format!("{wording} · {detail}"),
-        _ => wording.to_owned(),
-    }
-}
-
-/// Probe latencies read as `812 ms` under a second and `2.41 s` above —
-/// milliseconds stop being readable in the thousands.
-pub(super) fn format_probe_latency(latency: Duration) -> String {
-    let millis = latency.as_millis();
-    if millis < 1_000 {
-        format!("{millis} ms")
-    } else {
-        format!("{:.2} s", latency.as_secs_f64())
-    }
-}
+pub(super) use fintwind_providers_ui::{
+    api_list_error_text, first_token_error_text, format_probe_latency,
+};
 
 impl Fintwind {
     fn connectivity_indicator(
@@ -1780,7 +1744,7 @@ impl Fintwind {
     /// while probing; the verdict lands as a toast.
     pub(super) fn render_connectivity_field(
         &self,
-        provider: &fintwind_client::custom_providers::CustomProvider,
+        provider: &fintwind_opencode_config::custom_providers::CustomProvider,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -1888,7 +1852,7 @@ impl Fintwind {
                 model
                     .api_package
                     .as_deref()
-                    .is_some_and(fintwind_client::model_protocol::is_image)
+                    .is_some_and(fintwind_opencode_config::model_protocol::is_image)
             })
         {
             return div().into_any_element();

@@ -610,7 +610,7 @@ impl PersistedState {
     /// The stored proxy address, re-validated on read so a hand-edited
     /// unusable value degrades to "no proxy" instead of failing every fetch.
     pub fn network_proxy_url(&self) -> Option<String> {
-        fintwind_protocol::http::normalize_proxy_url(&self.network_proxy_url)
+        fintwind_http::normalize_proxy_url(&self.network_proxy_url)
     }
 
     pub fn daemon_settings(&self) -> DaemonSettings {
@@ -1479,7 +1479,7 @@ impl StateStore {
         &self,
         binary: PathBuf,
         directory: PathBuf,
-    ) -> io::Result<Vec<crate::models_dev::ImageModelChoice>> {
+    ) -> io::Result<Vec<fintwind_protocol::model_catalog::ImageModelChoice>> {
         match self
             .daemon
             .client()

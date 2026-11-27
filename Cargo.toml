@@ -18,27 +18,66 @@ beta = []
 [workspace]
 members = [
     "crates/fintwind-client",
-    "crates/fintwind-core",
     "crates/fintwind-daemon",
     "crates/fintwind-diagram",
+    "crates/fintwind-diff",
+    "crates/fintwind-driver",
+    "crates/fintwind-env",
+    "crates/fintwind-git",
+    "crates/fintwind-http",
+    "crates/fintwind-input",
+    "crates/fintwind-integrations-ui",
+    "crates/fintwind-markdown",
+    "crates/fintwind-opencode-config",
+    "crates/fintwind-preview-ui",
     "crates/fintwind-protocol",
+    "crates/fintwind-providers-ui",
+    "crates/fintwind-quota",
     "crates/fintwind-remote",
+    "crates/fintwind-scheduled",
+    "crates/fintwind-scheduled-ui",
+    "crates/fintwind-scm-ui",
     "crates/fintwind-ssh-probe",
+    "crates/fintwind-ssh-ui",
+    "crates/fintwind-storage",
+    "crates/fintwind-terminal-ui",
+    "crates/fintwind-ui",
+    "crates/fintwind-usage-ui",
+    "crates/fintwind-workspace",
 ]
 default-members = [
     ".",
     "crates/fintwind-client",
-    "crates/fintwind-core",
     "crates/fintwind-daemon",
     "crates/fintwind-diagram",
+    "crates/fintwind-diff",
+    "crates/fintwind-driver",
+    "crates/fintwind-env",
+    "crates/fintwind-git",
+    "crates/fintwind-http",
+    "crates/fintwind-input",
+    "crates/fintwind-integrations-ui",
+    "crates/fintwind-markdown",
+    "crates/fintwind-opencode-config",
+    "crates/fintwind-preview-ui",
     "crates/fintwind-protocol",
+    "crates/fintwind-providers-ui",
+    "crates/fintwind-quota",
     "crates/fintwind-remote",
+    "crates/fintwind-scheduled",
+    "crates/fintwind-scheduled-ui",
+    "crates/fintwind-scm-ui",
+    "crates/fintwind-ssh-ui",
+    "crates/fintwind-storage",
+    "crates/fintwind-terminal-ui",
+    "crates/fintwind-ui",
+    "crates/fintwind-usage-ui",
+    "crates/fintwind-workspace",
 ]
 resolver = "2"
 
 [dependencies]
 ab_glyph = "0.2"
-alacritty_terminal = { version = "0.26", default-features = false }
 anyhow = "1.0"
 base64 = "0.22"
 chrono = "0.4"
@@ -62,39 +101,42 @@ gpui_platform = { package = "gpui-pre-platform", version = "=0.3.8", features = 
     "font-kit",
 ] }
 image = { version = "0.25", default-features = false, features = ["png"] }
-parking_lot = "0.12"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 unicode-segmentation = "1.12"
-unicode-linebreak = "0.1.5"
 url = "2"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 fintwind-client = { path = "crates/fintwind-client", features = ["ssh"] }
 fintwind-diagram = { path = "crates/fintwind-diagram" }
+fintwind-diff = { path = "crates/fintwind-diff" }
+fintwind-env = { path = "crates/fintwind-env" }
+fintwind-git = { path = "crates/fintwind-git" }
+fintwind-http = { path = "crates/fintwind-http" }
+fintwind-input = { path = "crates/fintwind-input" }
+fintwind-integrations-ui = { path = "crates/fintwind-integrations-ui" }
+fintwind-markdown = { path = "crates/fintwind-markdown" }
+fintwind-opencode-config = { path = "crates/fintwind-opencode-config" }
+fintwind-preview-ui = { path = "crates/fintwind-preview-ui" }
 fintwind-protocol = { path = "crates/fintwind-protocol" }
+fintwind-providers-ui = { path = "crates/fintwind-providers-ui" }
+fintwind-quota = { path = "crates/fintwind-quota" }
 fintwind-remote = { path = "crates/fintwind-remote" }
-pulldown-cmark = "0.13"
-# Native, offline math typesetting; all layout and raster work runs on workers.
-ratex-parser = "=0.1.14"
-ratex-layout = "=0.1.14"
-ratex-types = "=0.1.14"
-ratex-svg = { version = "=0.1.14", features = ["embed-fonts"] }
-# Share GPUI's SVG parser to measure outlined math ink on background workers.
-usvg = "=0.46.0"
+fintwind-scheduled-ui = { path = "crates/fintwind-scheduled-ui" }
+fintwind-scm-ui = { path = "crates/fintwind-scm-ui" }
+fintwind-ssh-ui = { path = "crates/fintwind-ssh-ui" }
+fintwind-terminal-ui = { path = "crates/fintwind-terminal-ui" }
+fintwind-ui = { path = "crates/fintwind-ui" }
+fintwind-usage-ui = { path = "crates/fintwind-usage-ui" }
 regex = "1"
-fancy-regex = "0.14"
-aho-corasick = "1"
 qrcode = "0.14"
 rusqlite = { version = "0.37", features = ["bundled"] }
 rust-i18n = "4"
 # Verifies a downloaded update installer against the digest GitHub publishes
 # with the release asset, so an update never runs something the API did not
-# attest to. Already in the graph through fintwind-core.
+# attest to. Already in the graph through fintwind-http / fintwind-protocol.
 sha2 = "0.10"
 smol = "2"
-ropey = "=2.0.0-beta.1"
 futures-lite = "2"
-futures = "0.3"
 nucleo-matcher = "0.3.1"
 
 # `test-support` has to stay test-only. It compiles a loop into gpui's
@@ -103,6 +145,7 @@ nucleo-matcher = "0.3.1"
 # happens instead of coalescing into the display link's next one — a panel
 # resize drew once per mouse-move event rather than once per displayed frame.
 [dev-dependencies]
+fintwind-ssh-ui = { path = "crates/fintwind-ssh-ui", features = ["e2e-deploy"] }
 gpui = { package = "gpui-pre", version = "=0.3.8", features = [
     "test-support",
 ] }

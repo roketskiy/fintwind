@@ -10,7 +10,7 @@
 //! OpenCode hot-reloads the file, and a commit re-probes so the composer's
 //! picker picks up the new catalog. The built-in OpenCode provider stays
 //! read-only: its endpoint, key, and catalog belong to the CLI (see
-//! `fintwind_client::opencode_config`).
+//! `fintwind_opencode_config::opencode_config`).
 //!
 //! Field edits debounce their commit; discrete actions (add, delete, toggle,
 //! rename) commit immediately, the same one-shot-action allowance the Skills
@@ -20,149 +20,19 @@ use crate::theme::ui_px;
 
 use gpui::{ElementId, KeyDownEvent};
 
-use fintwind_client::custom_providers::{
+use fintwind_opencode_config::custom_providers::{
     self, CustomProvider, CustomProviderModel, ProviderApiFormat,
 };
 
 use super::*;
-
-/// Accent used by this page's selection, fills, dots, and badges.
-fn providers_accent(theme: &Theme) -> Hsla {
-    theme.accent_text
-}
-
-fn on_providers_accent(theme: &Theme) -> Hsla {
-    theme.on_accent
-}
+pub(super) use fintwind_providers_ui::{
+    BUILTIN_SELECTION_PREFIX, ProviderField, ProviderFormModelDraft, ProviderFormStage,
+    ProviderOAuthFlow, ProviderOAuthFormDraft, ProvidersModelEditor, api_format_label,
+    builtin_selection_id, modality_chip, on_providers_accent, providers_accent, toggle_modality,
+    toggle_output_modality,
+};
 
 const PROVIDERS_LIST_WIDTH: f32 = 264.0;
-
-/// The selection namespace that separates a catalog provider's id from a
-/// custom roster id or the CLI's own `opencode` key. The models.dev catalog
-/// ships an `opencode` entry, so a bare id cannot tell the two apart.
-pub(super) const BUILTIN_SELECTION_PREFIX: &str = "builtin:";
-
-/// The selection id for a catalog provider.
-pub(super) fn builtin_selection_id(catalog_id: &str) -> String {
-    format!("{BUILTIN_SELECTION_PREFIX}{catalog_id}")
-}
-
-/// Which detail field a keystroke edit landed in.
-#[derive(Clone, Copy)]
-pub(super) enum ProviderField {
-    BaseUrl,
-    ApiKey,
-}
-
-/// Which model row the inline model editor is working on.
-#[derive(Clone, Debug, PartialEq)]
-pub(super) enum ProvidersModelEditor {
-    Add,
-    Edit(usize),
-}
-
-/// Which stage the add-provider form is in: picking a provider (the list
-/// with Custom pinned first), the custom free-endpoint form, or the key
-/// field of a chosen built-in provider.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) enum ProviderFormStage {
-    #[default]
-    Picking,
-    Custom,
-    Builtin(String),
-}
-
-/// One in-flight OAuth sign-in: from the start RPC until the server stores
-/// the credential, the flow fails, or the user cancels. `attempt` is `None`
-/// while the start RPC is running — the form then shows a plain waiting
-/// state with no URL yet.
-#[derive(Clone, Debug)]
-pub(super) struct ProviderOAuthFlow {
-    pub(super) provider_id: String,
-    pub(super) attempt: Option<fintwind_protocol::provider_session::IntegrationOAuthAttempt>,
-}
-
-/// One method's pre-start form: the visible string fields to answer before
-/// the attempt starts. `inputs` maps each visible field's key to its editor,
-/// so lookup never depends on the fields' order.
-pub(super) struct ProviderOAuthFormDraft {
-    pub(super) provider_id: String,
-    pub(super) method_id: String,
-    pub(super) fields: Vec<fintwind_protocol::provider_session::IntegrationFormField>,
-    pub(super) inputs: Vec<(String, Entity<ComposerInput>)>,
-    pub(super) selections: std::collections::HashMap<String, String>,
-}
-
-impl ProviderOAuthFormDraft {
-    /// The field's answer so far: the picked option, else the field's text.
-    pub(super) fn answer_of(&self, key: &str, cx: &App) -> Option<String> {
-        if let Some(selected) = self.selections.get(key) {
-            return Some(selected.clone());
-        }
-        let input = self
-            .inputs
-            .iter()
-            .find(|(field_key, _)| field_key == key)
-            .map(|(_, input)| input)?;
-        let content = input.read(cx).content().trim().to_owned();
-        if content.is_empty() {
-            None
-        } else {
-            Some(content)
-        }
-    }
-
-    /// Whether the field is answerable: every visibility condition holds
-    /// against the answers gathered so far (unanswered references fail).
-    pub(super) fn field_is_active(
-        &self,
-        field: &fintwind_protocol::provider_session::IntegrationFormField,
-        cx: &App,
-    ) -> bool {
-        field.when.iter().all(|condition| {
-            let Some(actual) = self.answer_of(&condition.key, cx) else {
-                return false;
-            };
-            let matches = condition.value.as_str() == Some(actual.as_str());
-            if condition.op == "neq" {
-                !matches
-            } else {
-                matches
-            }
-        })
-    }
-
-    /// Whether the form can start: every active required field has an
-    /// answer.
-    pub(super) fn ready(&self, cx: &App) -> bool {
-        self.fields
-            .iter()
-            .filter(|field| !field.hidden && field.required)
-            .filter(|field| self.field_is_active(field, cx))
-            .all(|field| self.answer_of(&field.key, cx).is_some())
-    }
-}
-
-/// One model draft row of the add-provider form: the id and context-window
-/// fields plus the modalities picked for the model. A draft exists
-/// before its model does, so the selection lives here rather than on a
-/// [`CustomProviderModel`].
-pub(super) struct ProviderFormModelDraft {
-    pub(super) id: Entity<ComposerInput>,
-    pub(super) context: Entity<ComposerInput>,
-    pub(super) input_modalities: Vec<String>,
-    pub(super) output_modalities: Vec<String>,
-    pub(super) reasoning_efforts: Vec<String>,
-}
-
-pub(super) fn api_format_label(format: ProviderApiFormat) -> String {
-    match format {
-        ProviderApiFormat::OpenAi => tr!("providers.api_format_openai"),
-        ProviderApiFormat::OpenAiResponses => tr!("providers.api_format_openai_responses"),
-        ProviderApiFormat::Anthropic => tr!("providers.api_format_anthropic"),
-        ProviderApiFormat::Google => tr!("providers.api_format_google"),
-    }
-}
 
 impl Fintwind {
     /// The provider id the detail pane shows: the stored selection while it
@@ -337,14 +207,14 @@ impl Fintwind {
                 .background_executor()
                 .spawn(async move {
                     if daemon.is_remote() {
-                        return (Self::settings_json::<Vec<fintwind_client::opencode_config::ProviderConfigEntry>>(&daemon, fintwind_client::Command::LoadOpenCodeProviders)
+                        return (Self::settings_json::<Vec<fintwind_opencode_config::opencode_config::ProviderConfigEntry>>(&daemon, fintwind_client::Command::LoadOpenCodeProviders)
                             .map(|entries| entries.into_iter().map(Into::into).collect()), None);
                     }
-                    fintwind_client::opencode_config::migrate_legacy_override_file();
+                    fintwind_opencode_config::opencode_config::migrate_legacy_override_file();
                     let migration_error = workspace.and_then(|(binary, directory)| {
                         let store = fintwind_client::persistence::StateStore::remote(daemon);
-                        fintwind_client::opencode_config::migrate_provider_credentials_at(
-                            &fintwind_client::opencode_config::config_path(),
+                        fintwind_opencode_config::opencode_config::migrate_provider_credentials_at(
+                            &fintwind_opencode_config::opencode_config::config_path(),
                             |id, key| {
                                 store.store_custom_provider_key(
                                     binary.clone(),
@@ -357,7 +227,7 @@ impl Fintwind {
                         .err()
                     });
                     (
-                        fintwind_client::opencode_config::load_providers(),
+                        fintwind_opencode_config::opencode_config::load_providers(),
                         migration_error,
                     )
                 })
@@ -434,15 +304,15 @@ impl Fintwind {
                 .background_executor()
                 .spawn(async move {
                     if daemon.is_remote() {
-                        return Self::settings_json::<Vec<fintwind_client::opencode_config::ProviderConfigEntry>>(&daemon, fintwind_client::Command::SaveOpenCodeProviders {
-                            providers: serde_json::to_value(providers.into_iter().map(fintwind_client::opencode_config::ProviderConfigEntry::from).collect::<Vec<_>>())?,
+                        return Self::settings_json::<Vec<fintwind_opencode_config::opencode_config::ProviderConfigEntry>>(&daemon, fintwind_client::Command::SaveOpenCodeProviders {
+                            providers: serde_json::to_value(providers.into_iter().map(fintwind_opencode_config::opencode_config::ProviderConfigEntry::from).collect::<Vec<_>>())?,
                             catalog: catalog.as_deref().map(serde_json::to_value).transpose()?,
                             workspace,
                         }).map(|entries| entries.into_iter().map(Into::into).collect());
                     }
                     let store = fintwind_client::persistence::StateStore::remote(daemon);
-                    fintwind_client::opencode_config::save_providers_with_credentials_at(
-                        &fintwind_client::opencode_config::config_path(),
+                    fintwind_opencode_config::opencode_config::save_providers_with_credentials_at(
+                        &fintwind_opencode_config::opencode_config::config_path(),
                         &providers,
                         catalog.as_deref(),
                         |id, key| {
@@ -1651,7 +1521,7 @@ impl Fintwind {
     /// a delete.
     fn render_builtin_provider_page(
         &self,
-        provider: &fintwind_client::models_dev::ModelsDevProvider,
+        provider: &fintwind_opencode_config::models_dev::ModelsDevProvider,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -2651,8 +2521,8 @@ impl Fintwind {
 
         let selected_package = self.providers_model_editor_package.clone();
         let protocol_label = |package: &str| match package {
-            fintwind_client::model_protocol::OPENAI_IMAGES => "OpenAI Images".to_owned(),
-            fintwind_client::model_protocol::GOOGLE_IMAGES => "Google Images".to_owned(),
+            fintwind_opencode_config::model_protocol::OPENAI_IMAGES => "OpenAI Images".to_owned(),
+            fintwind_opencode_config::model_protocol::GOOGLE_IMAGES => "Google Images".to_owned(),
             _ => ProviderApiFormat::from_package(package)
                 .map(api_format_label)
                 .unwrap_or_else(|| package.to_owned()),
@@ -2682,13 +2552,13 @@ impl Fintwind {
                     })
                     .selected(selected_package.is_none()),
                 ];
-                for package in fintwind_client::model_protocol::PACKAGES {
+                for package in fintwind_opencode_config::model_protocol::PACKAGES {
                     let weak = weak.clone();
                     items.push(
                         MenuItem::new(protocol_label(package), move |_, cx| {
                             let _ = weak.update(cx, |this, cx| {
                                 this.providers_model_editor_package = Some(package.to_owned());
-                                if fintwind_client::model_protocol::is_image(package) {
+                                if fintwind_opencode_config::model_protocol::is_image(package) {
                                     this.providers_model_editor_output_modalities =
                                         vec!["image".into()];
                                 } else {
@@ -4082,183 +3952,11 @@ fn models_header_with_label(theme: &Theme, label: String) -> Div {
     )
 }
 
-pub(super) fn section_label(theme: &Theme, label: String, first: bool) -> Div {
-    div()
-        .w_full()
-        .pt(px(if first { 2.0 } else { 16.0 }))
-        .pb(px(4.0))
-        .px(px(9.0))
-        .flex()
-        .items_baseline()
-        .text_size(ui_px(9.5))
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(theme.text_tertiary)
-        .child(SharedString::from(label.to_uppercase()))
-}
-
-pub(super) fn provider_tile(theme: &Theme, mark: ModelMark, active: bool) -> Div {
-    div()
-        .w(px(38.0))
-        .h(px(38.0))
-        .flex_none()
-        .rounded(px(9.0))
-        .bg(theme.overlay)
-        .flex()
-        .items_center()
-        .justify_center()
-        .child(
-            div()
-                .opacity(if active { 1.0 } else { 0.45 })
-                .child(model_mark_element(mark, 17.0, theme.text_secondary)),
-        )
-}
-
-pub(super) fn enabled_badge(theme: &Theme, accent: Hsla, enabled: bool) -> Div {
-    div()
-        .px(px(7.0))
-        .py(px(2.0))
-        .rounded_full()
-        .text_size(ui_px(9.5))
-        .when(enabled, |element| {
-            element.text_color(accent).bg(accent.opacity(0.14))
-        })
-        .when(!enabled, |element| {
-            element.text_color(theme.text_tertiary).bg(theme.overlay)
-        })
-        .child(if enabled {
-            tr!("providers.enabled_badge")
-        } else {
-            tr!("providers.disabled_badge")
-        })
-}
-
-pub(super) fn small_pill(theme: &Theme, label: String, color: Option<Hsla>) -> Div {
-    div()
-        .px(px(6.0))
-        .py(px(1.5))
-        .rounded_full()
-        .text_size(ui_px(9.0))
-        .font_family(crate::md::render::mono_family())
-        .text_color(color.unwrap_or(theme.text_tertiary))
-        .bg(theme.overlay)
-        .child(SharedString::from(label))
-}
-/// The stroke icon for a catalog modality; `None` for anything the catalog
-/// may add later — unknown modalities still appear in the pill's tooltip.
-fn modality_icon_path(modality: &str) -> Option<&'static str> {
-    match modality {
-        "text" => Some("icons/modality-text.svg"),
-        "image" => Some("icons/modality-image.svg"),
-        "audio" => Some("icons/modality-audio.svg"),
-        "video" => Some("icons/modality-video.svg"),
-        "pdf" => Some("icons/modality-pdf.svg"),
-        _ => None,
-    }
-}
-
-/// The modality's word for the badge's tooltip.
-fn modality_label(modality: &str) -> String {
-    match modality {
-        "text" => tr!("modality.text"),
-        "image" => tr!("modality.image"),
-        "audio" => tr!("modality.audio"),
-        "video" => tr!("modality.video"),
-        "pdf" => tr!("modality.pdf"),
-        other => other.to_owned(),
-    }
-}
-
-fn modality_labels(modalities: &[String]) -> String {
-    modalities
-        .iter()
-        .map(|modality| modality_label(modality))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// Flip one modality in a selection, keeping the canonical order the config
-/// schema documents so saved lists do not shuffle between edits.
-fn toggle_modality(selected: &mut Vec<String>, modality: &str) {
-    if let Some(index) = selected.iter().position(|entry| entry == modality) {
-        selected.remove(index);
-        return;
-    }
-    selected.push(modality.to_owned());
-    selected.sort_by_key(|entry| {
-        custom_providers::INPUT_MODALITIES
-            .iter()
-            .position(|candidate| candidate == entry)
-            .unwrap_or(usize::MAX)
-    });
-}
-
-/// Flip one output modality in a selection, keeping the output canonical
-/// order so saved lists do not shuffle between edits.
-fn toggle_output_modality(selected: &mut Vec<String>, modality: &str) {
-    if let Some(index) = selected.iter().position(|entry| entry == modality) {
-        selected.remove(index);
-        return;
-    }
-    selected.push(modality.to_owned());
-    selected.sort_by_key(|entry| {
-        custom_providers::OUTPUT_MODALITIES
-            .iter()
-            .position(|candidate| candidate == entry)
-            .unwrap_or(usize::MAX)
-    });
-}
-
-/// One toggle chip in a modality picker: the modality's stroke icon and word,
-/// accent-filled while selected. The caller attaches the toggle handlers, so
-/// the same chip serves the model editor and the add form's drafts.
-fn modality_chip(
-    id: impl Into<ElementId>,
-    theme: &Theme,
-    accent: Hsla,
-    modality: &str,
-    selected: bool,
-) -> Stateful<Div> {
-    let color = if selected {
-        accent
-    } else {
-        theme.text_secondary
-    };
-    div()
-        .id(id)
-        .tab_index(0)
-        .focus_visible(|style| style.border_color(accent))
-        .h(px(26.0))
-        .px(px(8.0))
-        .rounded(px(6.0))
-        .border_1()
-        .border_color(if selected {
-            accent.opacity(0.55)
-        } else {
-            theme.border_strong
-        })
-        .when(selected, |element| element.bg(accent.opacity(0.14)))
-        .when(!selected, |element| {
-            element
-                .hover(|element| element.bg(theme.overlay))
-                .active(|element| element.bg(theme.overlay_strong))
-        })
-        .flex()
-        .flex_none()
-        .items_center()
-        .gap(px(5.0))
-        .cursor_default()
-        .text_size(ui_px(11.0))
-        .text_color(color)
-        .children(modality_icon_path(modality).map(|path| icon(path, 11.0, color)))
-        .child(SharedString::from(modality_label(modality)))
-}
-
+pub(super) use crate::ui::settings::{
+    enabled_badge, form_hint, info_note, labeled_field, outline_button, provider_tile,
+    section_label, small_action_button, small_pill,
+};
 impl Fintwind {
-    /// The modality badge for one model id: a quiet pill holding one small
-    /// stroke icon per input modality the model accepts, with the spelled-out
-    /// modalities in its tooltip. `recorded` is the user's own list, which
-    /// wins when present; without one the metadata table answers, and `None`
-    /// means the badge waits for a table rather than guessing.
     pub(super) fn model_modality_pill(
         &self,
         theme: &Theme,
@@ -4266,47 +3964,15 @@ impl Fintwind {
         recorded: &[String],
         id: impl Into<ElementId>,
     ) -> Option<AnyElement> {
-        let input = if recorded.is_empty() {
-            self.models_dev_table
-                .as_deref()?
-                .resolve_input_modalities(model_id)
-        } else {
-            recorded.to_vec()
-        };
-        if input.is_empty() {
-            return None;
-        }
-        let mut glyphs = div().flex().items_center().gap(px(3.0));
-        for modality in &input {
-            if let Some(path) = modality_icon_path(modality) {
-                glyphs = glyphs.child(icon(path, 11.0, theme.text_tertiary));
-            }
-        }
-        Some(
-            div()
-                .id(id.into())
-                .flex_none()
-                .tooltip(Tooltip::text(tr!(
-                    "providers.modality_tooltip",
-                    modalities = modality_labels(&input)
-                )))
-                .child(
-                    div()
-                        .px(px(5.0))
-                        .py(px(3.0))
-                        .rounded_full()
-                        .bg(theme.overlay)
-                        .flex()
-                        .items_center()
-                        .child(glyphs),
-                )
-                .into_any_element(),
+        fintwind_providers_ui::render_model_modality_pill(
+            self.models_dev_table.as_deref(),
+            theme,
+            model_id,
+            recorded,
+            id,
         )
     }
 
-    /// The image-output badge for one custom model: a compact pill shown only
-    /// when the model's effective output modalities emit images. Recorded
-    /// output wins; without it the metadata table answers.
     pub(super) fn model_image_badge(
         &self,
         theme: &Theme,
@@ -4314,149 +3980,14 @@ impl Fintwind {
         model: &CustomProviderModel,
         id: impl Into<ElementId>,
     ) -> Option<AnyElement> {
-        if !fintwind_client::models_dev::custom_model_emits_image(
-            model,
-            provider_slug,
+        fintwind_providers_ui::render_model_image_badge(
             self.models_dev_table.as_deref(),
-        ) {
-            return None;
-        }
-        let accent = providers_accent(theme);
-        Some(
-            div()
-                .id(id.into())
-                .flex_none()
-                .tooltip(Tooltip::text(tr!("providers.output_modalities_label")))
-                .child(small_pill(
-                    theme,
-                    tr!("providers.image_badge"),
-                    Some(accent),
-                ))
-                .into_any_element(),
+            theme,
+            provider_slug,
+            model,
+            id,
         )
     }
 }
 
-pub(super) fn info_note(theme: &Theme, icon_path: &'static str, text: String) -> Div {
-    div()
-        .mt(px(12.0))
-        .px(px(10.0))
-        .py(px(8.0))
-        .rounded(px(8.0))
-        .bg(theme.inset)
-        .w_full()
-        .min_w_0()
-        .flex()
-        .gap(px(8.0))
-        .child(icon(icon_path, 12.0, theme.text_tertiary))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .whitespace_normal()
-                .text_size(ui_px(10.5))
-                .line_height(ui_px(15.0))
-                .text_color(theme.text_secondary)
-                .child(SharedString::from(text)),
-        )
-}
 
-pub(super) fn form_hint(theme: &Theme, accent: Hsla, text: impl Into<SharedString>) -> AnyElement {
-    div()
-        .flex()
-        .items_center()
-        .gap(px(6.0))
-        .child(icon("icons/alert.svg", 12.0, accent))
-        .child(
-            div()
-                .text_size(ui_px(10.5))
-                .text_color(theme.text_secondary)
-                .child(text.into()),
-        )
-        .into_any_element()
-}
-
-/// The standard outlined text button, ready for click and key handlers.
-pub(super) fn outline_button(
-    id: impl Into<ElementId>,
-    label: impl Into<SharedString>,
-    icon_path: Option<&'static str>,
-    theme: &Theme,
-) -> Stateful<Div> {
-    let mut button = div()
-        .id(id)
-        .tab_index(0)
-        .focus_visible(|style| style.border_color(providers_accent(theme)))
-        .h(px(30.0))
-        // Trailing-icon button: the icon side carries the glyph's whitespace,
-        // so it takes the smaller share.
-        .pl(px(12.0))
-        .pr(px(10.0))
-        .rounded(px(7.0))
-        .border_1()
-        .border_color(theme.border_strong)
-        .flex()
-        .flex_none()
-        .items_center()
-        .gap(px(6.0))
-        .cursor_default()
-        .text_size(ui_px(12.0))
-        .text_color(theme.text_secondary)
-        .hover(|element| element.bg(theme.overlay))
-        .active(|element| element.bg(theme.overlay_strong))
-        .child(label.into());
-    if let Some(icon_path) = icon_path {
-        button = button.child(icon(icon_path, 12.5, theme.text_tertiary));
-    }
-    button
-}
-
-/// A compact icon-plus-label button for confirm/cancel affordances.
-pub(super) fn small_action_button(
-    id: impl Into<ElementId>,
-    icon_path: &'static str,
-    label: impl Into<SharedString>,
-    color: Hsla,
-    theme: &Theme,
-) -> Stateful<Div> {
-    div()
-        .id(id)
-        .tab_index(0)
-        .focus_visible(|style| style.border_color(providers_accent(theme)))
-        .h(px(30.0))
-        // Leading-icon button: icon side 2px tighter than the text side.
-        .pl(px(8.0))
-        .pr(px(10.0))
-        .rounded(px(7.0))
-        .flex()
-        .flex_none()
-        .items_center()
-        .gap(px(5.0))
-        .cursor_default()
-        .text_size(ui_px(12.0))
-        .text_color(color)
-        .hover(|element| element.bg(theme.overlay))
-        .active(|element| element.bg(theme.overlay_strong))
-        .child(icon(icon_path, 12.5, color))
-        .child(label.into())
-}
-
-pub(super) fn labeled_field(
-    theme: &Theme,
-    label: impl Into<SharedString>,
-    field: impl IntoElement,
-) -> Div {
-    div()
-        .w_full()
-        .flex()
-        .flex_col()
-        .gap(px(6.0))
-        .child(
-            div()
-                .text_size(ui_px(11.0))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text)
-                .child(label.into()),
-        )
-        .child(field)
-}

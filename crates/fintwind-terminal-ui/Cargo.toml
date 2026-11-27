@@ -1,0 +1,22 @@
+[package]
+name = "fintwind-terminal-ui"
+version = "0.1.0"
+edition = "2024"
+description = "GPUI terminal surface backed by alacritty_terminal and daemon/local PTYs"
+license = "GPL-3.0-only"
+
+[dependencies]
+alacritty_terminal = { version = "0.26", default-features = false }
+anyhow = "1.0"
+base64 = "0.22"
+crossbeam-channel = "0.5"
+dirs = "6.0"
+gpui = { package = "gpui-pre", version = "=0.3.8" }
+parking_lot = "0.12"
+regex = "1"
+url = "2"
+uuid = { version = "1.18", features = ["v4", "serde"] }
+fintwind-client = { path = "../fintwind-client" }
+fintwind-env = { path = "../fintwind-env" }
+fintwind-protocol = { path = "../fintwind-protocol" }
+fintwind-ui = { path = "../fintwind-ui" }

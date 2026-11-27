@@ -9,7 +9,7 @@
  *   2. cargo update --offline -p compiler
  *   3. cargo run --locked --offline --package fintwind-diagram --example diagram_blackbox -- C:/Users/Public/Temp/opencode/diagram-report.json
  *      (run it twice; the two reports must stay byte-identical)
- *   4. cargo run --locked --offline --package fintwind-core --example mermaid_check_e2e -- C:/Users/Public/Temp/opencode/mermaid-check-report.json
+ *   4. cargo run --locked --offline --package fintwind-daemon --example mermaid_check_e2e -- C:/Users/Public/Temp/opencode/mermaid-check-report.json
  *   5. Render a few real diagrams in the app: a flowchart, a sequence, a
  *      pie, and a Gantt (the reference day must stay authoritative).
  *

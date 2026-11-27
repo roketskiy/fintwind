@@ -592,7 +592,14 @@ impl Fintwind {
                 .flatten()
             })
             .or_else(|| self.toast_selection.selection.borrow().selected_text())
-            .or_else(|| self.skills_selection.selection.borrow().selected_text())
+            .or_else(|| {
+                self.skills_page
+                    .read(cx)
+                    .selection()
+                    .selection
+                    .borrow()
+                    .selected_text()
+            })
             .or_else(|| self.transcript_selection.selection.borrow().selected_text());
         match selected {
             Some(text) => cx.write_to_clipboard(ClipboardItem::new_string(text)),

@@ -35,7 +35,7 @@ use crate::model::{
     Message, MessageAttachment, MessageRole, OPENCODE_PROVIDER, PendingPermission, Project,
     ProviderModel, ProviderProbe, ProviderResumeCursor, ProviderRetryAction, QueuedMessage,
     ReasoningBlock, RuntimeMode, SessionStatus, SessionWorkspace, TranscriptBlock, TurnStatus,
-    UserInputAnswer, UserInputQuestion, compact_path, unix_time, unix_time_millis,
+    UserInputAnswer, UserInputQuestion, unix_time, unix_time_millis,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -58,7 +58,7 @@ use crate::query::{Query, QueryCache};
 use crate::review_diff::{Snapshot as ReviewDiffSnapshot, Source as ReviewDiffSource};
 use crate::terminal::TerminalView;
 use crate::theme::{TextSizePreset, Theme, ThemePreference, TranscriptWidthPreset};
-use crate::ui::text_field::TextField;
+use crate::text_field::TextField;
 use crate::ui::{
     MenuChip, ModelMark, ProjectNameSelector, chip_width, contain_scroll, file_icon, icon,
     icon_button, model_mark, model_mark_element, motion, provider_color, provider_icon,
@@ -1428,8 +1428,6 @@ impl SessionTabState {
 
 type ModelPickerLoading =
     RefCell<Option<crate::ui::loading::LoadingDelay<(Option<PathBuf>, ModelPickerTab)>>>;
-type SkillsRemoteLoading =
-    RefCell<Option<crate::ui::loading::LoadingDelay<(Uuid, PathBuf, Option<bool>)>>>;
 type AssistantFooterCache = RefCell<HashMap<usize, (Option<SharedString>, Option<u64>)>>;
 
 pub struct Fintwind {
@@ -1923,46 +1921,7 @@ pub struct Fintwind {
     settings_page: SettingsPage,
     session_cleanup: HashMap<Option<Uuid>, session_cleanup::CleanupState>,
     scheduled_tasks_view: Entity<scheduled::ScheduledTasksView>,
-    /// The Skills page's library snapshot, scanned off-thread. Frames read
-    /// only this; `None` means the first scan has not landed yet.
-    skills_catalog: Option<Rc<crate::skills::SkillsCatalog>>,
-    /// Bumped per scan; a result from a superseded scan is discarded.
-    skills_scan_generation: u64,
-    skills_scan_pending: bool,
-    skills_remote_pending: HashMap<(Uuid, PathBuf), Option<bool>>,
-    skills_remote_errors: HashMap<(Uuid, PathBuf), (Option<bool>, String)>,
-    skills_remote_loading: SkillsRemoteLoading,
-    skills_scan_error: Option<String>,
-    skills_loading: RefCell<Option<crate::ui::loading::LoadingDelay<Option<Uuid>>>>,
-    /// When the current catalog landed, for the reopen-staleness check.
-    skills_scanned_at: Option<Instant>,
-    /// Filter query over the Skills page's rows.
-    skills_search: Entity<ComposerInput>,
-    /// Virtualized list over the filtered skill rows.
-    skills_list_state: ListState,
-    skills_scrollbar: Rc<ScrollbarState>,
-    /// The rows the list currently draws — sections and catalog indices —
-    /// refreshed once per frame rather than per row.
-    skills_rows: RefCell<Vec<skills_page::SkillsRow>>,
-    /// The skill directory the detail pane shows. `None` falls back to the
-    /// first visible row, so the pane never opens empty.
-    skills_selected: Option<PathBuf>,
-    /// Parsed markdown for the selected skill's document, keyed by the skill
-    /// directory it was built from. One entry: only one detail shows at once.
-    skills_detail_markdown: RefCell<Option<(PathBuf, MarkdownView)>>,
-    /// Text selection over the detail pane's rendered document. Its own
-    /// registry, like the toast's, so it can never join a drag to another
-    /// surface's text.
-    skills_selection: TranscriptSelection,
-    /// Scroll position of the detail pane, tracked so it can draw a
-    /// scrollbar and land at the top when the selection moves.
-    skills_detail_scroll: ScrollHandle,
-    skills_detail_scrollbar: Rc<ScrollbarState>,
-    /// Source the list is narrowed to; `None` shows every ecosystem.
-    skills_source_filter: Option<crate::skills::SkillSource>,
-    /// The skill directory whose delete button is armed for its confirming
-    /// second click.
-    skills_delete_arming: Option<PathBuf>,
+    skills_page: Entity<fintwind_integrations_ui::SkillsPage>,
     /// The Providers page's roster selection — a custom provider id, or the
     /// built-in provider key. `None` means the built-in provider.
     providers_selected: Option<String>,
@@ -1998,14 +1957,14 @@ pub struct Fintwind {
     /// configuration file. The app keeps no separate store — this is a
     /// working copy that only lives between a config load and the next
     /// commit.
-    providers_store: Vec<fintwind_client::custom_providers::CustomProvider>,
+    providers_store: Vec<fintwind_opencode_config::custom_providers::CustomProvider>,
     /// Generation token for the background config load; a newer load
     /// supersedes an older one's result.
     providers_load_generation: usize,
     /// The models.dev provider roster: the built-in providers the add form's
     /// picker offers and the built-in pages' model lists. Loaded on page
     /// open, cached beside the model table.
-    providers_builtin: Option<std::sync::Arc<fintwind_client::models_dev::ModelsDevProviders>>,
+    providers_builtin: Option<std::sync::Arc<fintwind_opencode_config::models_dev::ModelsDevProviders>>,
     /// The built-in provider roster's load is in flight.
     providers_builtin_loading: bool,
     /// The provider ids with a connected credential on the workspace's
@@ -2060,7 +2019,7 @@ pub struct Fintwind {
     /// Desktop-local subscription cache (Claude/Codex sign-in): account
     /// isolation, single-flight de-duplication and failure backoff, so
     /// repeated board opens share one CLI run per account and cooldown.
-    local_quota_cache: std::sync::Arc<fintwind_client::local_quota::LocalQuotaCache>,
+    local_quota_cache: std::sync::Arc<fintwind_quota::local_quota::LocalQuotaCache>,
     /// Which provider the add form has picked — the picker page, the custom
     /// free-endpoint form, or a chosen built-in provider's key form.
     providers_form_stage: providers_page::ProviderFormStage,
@@ -2068,21 +2027,21 @@ pub struct Fintwind {
     /// answers the Providers page's fetch-models action while fresh and
     /// serves as the offline fallback; render reads it only for the in-memory
     /// lookups behind the model rows' modality badges.
-    models_dev_table: Option<std::sync::Arc<fintwind_client::models_dev::ModelsDevTable>>,
+    models_dev_table: Option<std::sync::Arc<fintwind_opencode_config::models_dev::ModelsDevTable>>,
     /// The Providers page's fetch-models download is in flight.
     models_dev_fetching: bool,
     /// The Providers page's page-open catalog load is in flight.
     models_dev_loading: bool,
     /// OpenCode's default image generation model, read from its config.
     /// `None` until the first load lands; the control stays inert until then.
-    image_generate: Option<fintwind_client::opencode_image_generate::ImageGenerateConfig>,
+    image_generate: Option<fintwind_opencode_config::opencode_image_generate::ImageGenerateConfig>,
     /// A config write is in flight.
     image_generate_busy: bool,
     /// Generation token for the config read; a newer read wins.
     image_generate_generation: u64,
     /// Catalog image models narrowed to providers this install can use.
     /// Rebuilt only when the catalog or the authorized set changes.
-    image_models: Vec<fintwind_client::models_dev::ImageModelChoice>,
+    image_models: Vec<fintwind_opencode_config::models_dev::ImageModelChoice>,
     image_models_workspace: Option<(PathBuf, PathBuf)>,
     image_models_generation: u64,
     image_models_loading: bool,
@@ -2129,7 +2088,7 @@ pub struct Fintwind {
     /// the last attempt succeeded (or none ran yet).
     native_reconcile_error: Option<String>,
     /// The API format picked in the add-provider form.
-    providers_form_format: fintwind_client::custom_providers::ProviderApiFormat,
+    providers_form_format: fintwind_opencode_config::custom_providers::ProviderApiFormat,
     /// Model draft rows of the add-provider form: id and context-window
     /// fields plus the input modalities picked for each.
     providers_form_models: Vec<providers_page::ProviderFormModelDraft>,
@@ -2137,7 +2096,7 @@ pub struct Fintwind {
     /// output limits a fetch's merge filled in — keyed by model id, so a
     /// submitted draft keeps what the fetch learned.
     providers_form_model_catalog:
-        HashMap<String, fintwind_client::custom_providers::CustomProviderModel>,
+        HashMap<String, fintwind_opencode_config::custom_providers::CustomProviderModel>,
     /// The add-provider form's connectivity probe is in flight; the verdict
     /// lands as a toast.
     providers_form_connectivity_testing: bool,
@@ -2193,7 +2152,7 @@ pub struct Fintwind {
     /// The MCP server roster, loaded from and committed back to OpenCode's
     /// own configuration file. A working copy, exactly like the provider
     /// roster.
-    mcp_servers: Vec<fintwind_client::opencode_config::McpServer>,
+    mcp_servers: Vec<fintwind_opencode_config::opencode_config::McpServer>,
     /// Generation token for the background config load; a newer load
     /// supersedes an older one's result.
     mcp_load_generation: usize,
@@ -2229,62 +2188,21 @@ pub struct Fintwind {
     mcp_form_command: Entity<ComposerInput>,
     mcp_form_url: Entity<ComposerInput>,
     /// The kind picked in the add-server form.
-    mcp_form_kind: fintwind_client::opencode_config::McpServerKind,
+    mcp_form_kind: fintwind_opencode_config::opencode_config::McpServerKind,
     /// Scroll positions of the MCP page's panes, tracked so they can draw
     /// scrollbars and reset per selection.
     mcp_list_scroll: ScrollHandle,
     mcp_list_scrollbar: Rc<ScrollbarState>,
     mcp_detail_scroll: ScrollHandle,
     mcp_detail_scrollbar: Rc<ScrollbarState>,
-    mcp_market_search: Entity<ComposerInput>,
-    mcp_market_category: mcp_market_page::McpMarketCategory,
-    mcp_market_selected: Option<String>,
-    /// The Usage page's scan snapshot, fetched off the UI thread. `None`
-    /// until the first scan lands; frames never touch the entries inside.
-    usage_stats: Option<std::sync::Arc<fintwind_client::provider_session::UsageStats>>,
-    usage_stats_source: Option<PathBuf>,
-    usage_views_generation: u64,
-    /// The models.dev price table the last scan priced against, shared with
-    /// the pricing pass so a scan inside the table's reuse window answers
-    /// without touching the disk. `None` until one catalog lands; a page
-    /// scanning without one marks its costs unavailable instead of free.
-    usage_price_table: Option<std::sync::Arc<fintwind_client::models_dev::ModelsDevTable>>,
-    /// The last scan's failure, when the page has nothing cached to show.
-    usage_stats_error: Option<String>,
-    /// Bumped per scan; a result from a superseded scan is discarded.
-    usage_stats_generation: u64,
-    usage_stats_pending: bool,
-    usage_stats_complete: bool,
-    usage_loading: Option<crate::ui::loading::LoadingDelay<(PathBuf, Uuid)>>,
-    usage_quota_loading: RefCell<Option<crate::ui::loading::LoadingDelay<()>>>,
-    usage_refresh_spin: RefCell<Option<crate::ui::motion::ActionSpin>>,
-    usage_price_pending: bool,
-    usage_price_checked_at: Option<Instant>,
-    usage_stats_loaded_at: Option<Instant>,
-    /// Guards the page's auto-refresh loop: one at a time, so leaving and
-    /// reopening the page quickly cannot stack several.
-    usage_refresh_running: bool,
-    /// What the Usage page's KPIs, daily bars, and model ranking aggregate
-    /// over. The heatmap keeps its own fixed week window.
-    usage_range: usage_page::UsageRange,
-    usage_flow_selection: Option<usage_page::UsageFlowSelection>,
-    usage_chart_metric: usage_page::UsageChartMetric,
-    usage_compare_previous: bool,
-    usage_channel_dimension: usage_page::UsageChannelDimension,
-    usage_activity_view: usage_page::UsageActivityView,
-    usage_quota_page: usize,
-    usage_quota_focus: Option<String>,
-    /// Measured content width, shared by every usage-page grid.
-    usage_content_width: Pixels,
-    /// Aggregated view models for the current range, rebuilt when a scan
-    /// lands or the range changes. Frames read only this.
-    usage_views: usage_page::UsageViews,
+    mcp_market_page: Entity<fintwind_integrations_ui::McpMarketPage>,
+    usage_page: Entity<fintwind_usage_ui::UsagePage>,
     /// Scroll position of the settings content column, tracked so the pane
     /// can draw a scrollbar and mark the titlebar boundary once content
     /// slides under it.
     settings_scroll: ScrollHandle,
     settings_scrollbar: Rc<ScrollbarState>,
-    opencode_shell_options: Vec<fintwind_client::opencode_shell::ShellOption>,
+    opencode_shell_options: Vec<fintwind_opencode_config::opencode_shell::ShellOption>,
     opencode_shell_selected: Option<String>,
     opencode_shell_generation: u64,
     opencode_binary_busy: bool,
@@ -2305,8 +2223,6 @@ pub struct Fintwind {
     exiting_toast: Option<ToastState>,
     toast_dismiss_focus: FocusHandle,
     toast_generation: u64,
-    copied_control_feedback: HashMap<String, u64>,
-    copied_control_generation: u64,
     copied_message_feedback: HashMap<Uuid, u64>,
     copied_message_generation: u64,
     copied_activity_feedback: HashMap<(Uuid, ActivityDisclosureSectionKind), u64>,
@@ -2520,7 +2436,6 @@ pub(crate) use transcript_view::TranscriptScrollTarget;
 mod update_card;
 mod usage_meter;
 mod usage_page;
-mod usage_treemap;
 mod window_chrome;
 
 pub use autocomplete::init as init_composer_autocomplete;
@@ -2991,7 +2906,7 @@ impl Fintwind {
         }
         if !embedded {
             crate::i18n::set_language(state.language);
-            fintwind_protocol::http::set_active_proxy(state.network_proxy_url());
+            fintwind_http::set_active_proxy(state.network_proxy_url());
             crate::theme::set_ui_text_scale(state.ui_text_scale);
             crate::theme::set_code_text_scale(state.code_text_scale);
             crate::theme::set_transcript_width(state.transcript_width);
@@ -3049,11 +2964,6 @@ impl Fintwind {
             ComposerInput::new(window, cx)
                 .search_field()
                 .placeholder(tr!("ssh.search"))
-        });
-        let skills_search = cx.new(|cx| {
-            ComposerInput::new(window, cx)
-                .search_field()
-                .placeholder(tr!("skills.search"))
         });
         let provider_base_url_input = cx.new(|cx| {
             ComposerInput::new(window, cx)
@@ -3113,11 +3023,6 @@ impl Fintwind {
             ComposerInput::new(window, cx)
                 .search_field()
                 .placeholder(tr!("mcp.search_placeholder"))
-        });
-        let mcp_market_search = cx.new(|cx| {
-            ComposerInput::new(window, cx)
-                .search_field()
-                .placeholder(tr!("mcp_market.search_placeholder"))
         });
         let mcp_command_input = cx.new(|cx| {
             ComposerInput::new(window, cx)
@@ -3666,15 +3571,6 @@ impl Fintwind {
             )
             .detach();
             cx.subscribe(
-                &skills_search,
-                |_: &mut Self, _, event: &ComposerEvent, cx| {
-                    if matches!(event, ComposerEvent::Edited) {
-                        cx.notify();
-                    }
-                },
-            )
-            .detach();
-            cx.subscribe(
                 &session_rename_input,
                 |this: &mut Self, _, event: &ComposerEvent, cx| match event {
                     ComposerEvent::Submit(_) => this.commit_session_rename(cx),
@@ -3797,15 +3693,6 @@ impl Fintwind {
                     cx.notify();
                 }
             })
-            .detach();
-            cx.subscribe(
-                &mcp_market_search,
-                |_: &mut Self, _, event: &ComposerEvent, cx| {
-                    if matches!(event, ComposerEvent::Edited) {
-                        cx.notify();
-                    }
-                },
-            )
             .detach();
             for (input, field) in [
                 (&mcp_command_input, mcp_page::McpField::Command),
@@ -4262,26 +4149,10 @@ impl Fintwind {
                 settings_page: SettingsPage::General,
                 session_cleanup: HashMap::new(),
                 scheduled_tasks_view,
-                skills_catalog: None,
-                skills_scan_generation: 0,
-                skills_scan_pending: false,
-                skills_remote_pending: HashMap::new(),
-                skills_remote_errors: HashMap::new(),
-                skills_remote_loading: RefCell::new(None),
-                skills_scan_error: None,
-                skills_loading: RefCell::new(None),
-                skills_scanned_at: None,
-                skills_search,
-                skills_list_state: ListState::new(0, ListAlignment::Top, px(512.0)),
-                skills_scrollbar: ScrollbarState::new(),
-                skills_rows: RefCell::new(Vec::new()),
-                skills_selected: None,
-                skills_detail_markdown: RefCell::new(None),
-                skills_selection: TranscriptSelection::default(),
-                skills_detail_scroll: ScrollHandle::new(),
-                skills_detail_scrollbar: ScrollbarState::new(),
-                skills_source_filter: None,
-                skills_delete_arming: None,
+                skills_page: {
+                    let host = skills_page::host(cx.entity().downgrade());
+                    cx.new(|cx| fintwind_integrations_ui::SkillsPage::new(host, window, cx))
+                },
                 providers_selected: None,
                 providers_adding: false,
                 providers_renaming: false,
@@ -4318,7 +4189,7 @@ impl Fintwind {
                 provider_quota: Default::default(),
                 builtin_refresh_spin: RefCell::new(None),
                 local_quota_cache: std::sync::Arc::new(
-                    fintwind_client::local_quota::LocalQuotaCache::default(),
+                    fintwind_quota::local_quota::LocalQuotaCache::default(),
                 ),
                 providers_form_stage: Default::default(),
                 models_dev_table: None,
@@ -4408,34 +4279,14 @@ impl Fintwind {
                 mcp_list_scrollbar: ScrollbarState::new(),
                 mcp_detail_scroll: ScrollHandle::new(),
                 mcp_detail_scrollbar: ScrollbarState::new(),
-                mcp_market_search,
-                mcp_market_category: Default::default(),
-                mcp_market_selected: None,
-                usage_stats: None,
-                usage_stats_source: None,
-                usage_views_generation: 0,
-                usage_price_table: None,
-                usage_stats_error: None,
-                usage_stats_generation: 0,
-                usage_stats_pending: false,
-                usage_stats_complete: false,
-                usage_loading: None,
-                usage_quota_loading: RefCell::new(None),
-                usage_refresh_spin: RefCell::new(None),
-                usage_price_pending: false,
-                usage_price_checked_at: None,
-                usage_stats_loaded_at: None,
-                usage_refresh_running: false,
-                usage_range: Default::default(),
-                usage_flow_selection: None,
-                usage_chart_metric: Default::default(),
-                usage_compare_previous: true,
-                usage_channel_dimension: Default::default(),
-                usage_activity_view: Default::default(),
-                usage_quota_page: 0,
-                usage_quota_focus: None,
-                usage_content_width: px(0.0),
-                usage_views: Default::default(),
+                mcp_market_page: {
+                    let host = mcp_market_page::host(cx.entity().downgrade());
+                    cx.new(|cx| fintwind_integrations_ui::McpMarketPage::new(host, window, cx))
+                },
+                usage_page: {
+                    let host = usage_page::host(cx.entity().downgrade());
+                    cx.new(|_| fintwind_usage_ui::UsagePage::new(host))
+                },
                 settings_scroll: ScrollHandle::new(),
                 settings_scrollbar: ScrollbarState::new(),
                 opencode_shell_options: Vec::new(),
@@ -4468,8 +4319,6 @@ impl Fintwind {
                 exiting_toast: None,
                 toast_dismiss_focus,
                 toast_generation: 0,
-                copied_control_feedback: HashMap::new(),
-                copied_control_generation: 0,
                 copied_message_feedback: HashMap::new(),
                 copied_message_generation: 0,
                 copied_activity_feedback: HashMap::new(),

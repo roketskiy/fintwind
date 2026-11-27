@@ -17,7 +17,7 @@ use crate::input::{ComposerEvent, ComposerInput};
 use crate::model::Project;
 use crate::theme::{Theme, ui_px};
 use crate::ui::loading::{LoadingDelay, LoadingPhase};
-use crate::ui::text_field::TextField;
+use crate::text_field::TextField;
 use crate::ui::{ActivationExt, icon, icon_button};
 
 use super::Fintwind;

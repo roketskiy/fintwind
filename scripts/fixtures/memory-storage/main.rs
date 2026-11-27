@@ -2,11 +2,11 @@
 //! side effects. This fixture avoids unrelated provider compilation.
 #![allow(dead_code)]
 
-#[path = "../../../crates/fintwind-core/src/attachments.rs"]
+#[path = "../../../crates/fintwind-storage/src/attachments.rs"]
 mod attachments;
-#[path = "../../../crates/fintwind-core/src/blob_store.rs"]
+#[path = "../../../crates/fintwind-storage/src/blob_store.rs"]
 mod blob_store;
-#[path = "../../../crates/fintwind-core/src/persistence.rs"]
+#[path = "../../../crates/fintwind-storage/src/persistence.rs"]
 mod persistence;
 use anyhow::{Context, ensure};
 pub use fintwind_protocol::DaemonSettings;
@@ -239,7 +239,7 @@ fn main() -> anyhow::Result<()> {
             "messageOnlyUpdatePersisted": true, "rollbackFingerprintRetried": true,
         "skeletonPreserved24Children": true, "deletedDetailRemoved": true,
         "deletedFingerprintDidNotSuppressRestore": true,
-            "productionModule": "crates/fintwind-core/src/persistence.rs"
+            "productionModule": "crates/fintwind-storage/src/persistence.rs"
         }))?,
     )?;
     println!("[OK] {}", root.join("result.json").display());

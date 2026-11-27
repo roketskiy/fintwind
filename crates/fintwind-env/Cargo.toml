@@ -1,0 +1,12 @@
+[package]
+name = "fintwind-env"
+version = "0.1.0"
+edition = "2024"
+description = "Process environment capture, executable lookup, and shell discovery"
+license = "GPL-3.0-only"
+
+[dependencies]
+dirs = "6.0"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

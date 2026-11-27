@@ -3,7 +3,7 @@
     Run the OpenCode private-serve recovery E2E fault suite for Fintwind.
 
 .DESCRIPTION
-    Drives the real fintwind-core daemon + serve WebSocket + fintwind-client
+    Drives the real fintwind-daemon Backend + serve WebSocket + fintwind-client
     against a local fake `opencode serve` (pure loopback, no network, no real
     OpenCode service, no model requests). The fast matrix + projection + P1
     guard are the default `cargo test`. The separate suites are
@@ -27,13 +27,13 @@ $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Set-Location -Path $repo
 
-$test = Join-Path $repo 'crates/fintwind-core/tests/opencode_recovery.rs'
+$test = Join-Path $repo 'crates/fintwind-daemon/tests/opencode_recovery.rs'
 if (-not (Test-Path $test)) {
-    Write-Host '[X] recovery test not found: crates\fintwind-core\tests\opencode_recovery.rs'
+    Write-Host '[X] recovery test not found: crates\fintwind-daemon\tests\opencode_recovery.rs'
     exit 1
 }
 
-$common = @('test', '--locked', '-p', 'fintwind-core', '--test', 'opencode_recovery')
+$common = @('test', '--locked', '-p', 'fintwind-daemon', '--test', 'opencode_recovery')
 
 Write-Host '[..] fast recovery E2E (discovery / fragmented SSE / reconnect / active-veto / prev-turn / R1 steer + projection + P1 guard)'
 & cargo @common '--' '--nocapture'

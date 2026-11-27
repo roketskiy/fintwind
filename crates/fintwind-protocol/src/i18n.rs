@@ -74,6 +74,14 @@ pub fn translate(key: &str) -> String {
     rust_i18n::t!(key).into_owned()
 }
 
+pub fn translate_args(key: &str, args: &[(&str, &str)]) -> String {
+    let mut text = translate(key);
+    for (name, value) in args {
+        text = text.replace(&format!("%{{{name}}}"), value);
+    }
+    text
+}
+
 pub fn uses_east_asian_date_format() -> bool {
     locale_uses_east_asian_date_format(&rust_i18n::locale())
 }

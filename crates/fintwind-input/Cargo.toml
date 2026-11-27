@@ -1,0 +1,24 @@
+[package]
+name = "fintwind-input"
+version = "0.1.0"
+edition = "2024"
+description = "GPUI multi-line composer input, text field, and hit-test helpers"
+license = "GPL-3.0-only"
+
+[dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.8" }
+gpui-kit = "0.7"
+parking_lot = "0.12"
+ropey = "=2.0.0-beta.1"
+unicode-linebreak = "0.1.5"
+unicode-segmentation = "1.12"
+fintwind-markdown = { path = "../fintwind-markdown" }
+fintwind-protocol = { path = "../fintwind-protocol" }
+fintwind-ui = { path = "../fintwind-ui" }
+
+[dev-dependencies]
+ely-gpui-component = { git = "https://git.zacharyzhang.com/ZacharyZhang-NY/Ely-GPUI-Components", rev = "bd014707fd47cd9d0651a9af8c1db6033718a6ea", default-features = false }
+gpui = { package = "gpui-pre", version = "=0.3.8", features = ["test-support"] }
+fintwind-client = { path = "../fintwind-client" }
+serde_json = "1"
+uuid = { version = "1.18", features = ["v4", "serde"] }

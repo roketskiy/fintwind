@@ -1,0 +1,13 @@
+[package]
+name = "fintwind-diff"
+version = "0.1.0"
+edition = "2024"
+description = "Unified diff parsing and syntax-highlighted review diff snapshots"
+license = "GPL-3.0-only"
+
+[dependencies]
+fintwind-client = { path = "../fintwind-client" }
+fintwind-markdown = { path = "../fintwind-markdown" }
+fintwind-protocol = { path = "../fintwind-protocol" }
+gpui = { package = "gpui-pre", version = "=0.3.8" }
+uuid = { version = "1.18", features = ["v4", "serde"] }

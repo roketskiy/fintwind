@@ -2,6 +2,9 @@
 
 English | [简体中文](README.zh-CN.md)
 
+> [!NOTE]
+> **Status — Updates Paused:** [OpenCode](https://opencode.ai/) has released an official Rust client that performs very well in hands-on testing, so updates to fintwind are paused. Existing releases (supporting OpenCode up to 2.4.1) remain available to download and use.
+
 A native Windows desktop client for [OpenCode 2](https://opencode.ai/v2/docs),
 built with Rust and [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui).
 Manage local and SSH remote projects, work across multiple session tabs, and

@@ -2,6 +2,9 @@
 
 [English](README.md) | 简体中文
 
+> [!NOTE]
+> **状态说明 — 暂停更新：** [OpenCode](https://opencode.ai/) 已推出官方 Rust 客户端且实测效果很好，因此本项目暂停更新。现有已发布版本（支持到 OpenCode 2.4.1）仍可继续下载使用。
+
 [OpenCode 2](https://opencode.ai/v2/docs) 的原生 Windows 桌面客户端，使用 Rust 和 [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) 构建。在一个窗口内管理本机与 SSH 远端项目、使用多个会话标签页，并查看回复、思考过程与工具活动。
 
 [下载](https://github.com/roketskiy/fintwind/releases/latest) · [更新日志](CHANGELOG.md)
